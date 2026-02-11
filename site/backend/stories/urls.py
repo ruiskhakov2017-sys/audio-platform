@@ -1,7 +1,12 @@
-from django.urls import path
-from .views import StoryListAPIView, StoryDetailAPIView
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import StoryViewSet, GenreViewSet, AuthorViewSet
+
+router = DefaultRouter()
+router.register(r'stories', StoryViewSet, basename='story')
+router.register(r'genres', GenreViewSet, basename='genre')
+router.register(r'authors', AuthorViewSet, basename='author')
 
 urlpatterns = [
-    path('', StoryListAPIView.as_view(), name='story-list'),
-    path('<slug:slug>/', StoryDetailAPIView.as_view(), name='story-detail'),
+    path('', include(router.urls)),
 ]

@@ -61,8 +61,25 @@ INSTALLED_APPS = [
     'storages',
 
     # Наши приложения
+    'accounts',
     'stories',
 ]
+
+# REST Framework + JWT
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+}
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -198,7 +215,9 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
-# Разрешаем запросы с фронтенда (Next.js)
+# Разрешаем запросы с фронтенда (Next.js + Vercel)
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "https://audio-platform-phi.vercel.app",
+    "https://audio-platform-git-main-ruiskhakov2017-sys-projects.vercel.app",
 ]
