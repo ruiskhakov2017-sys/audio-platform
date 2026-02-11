@@ -1,5 +1,5 @@
 import type { Story } from '@/types/story';
-import StoryCard from '@/components/v1/ui/StoryCard';
+import { StoryCard } from '@/components/v1/ui/StoryCard';
 
 type Props = {
   title: string;
