@@ -1,6 +1,15 @@
 import { create } from 'zustand';
 import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/utils/supabase/client';
+import { loginWithDjango, registerWithDjango, fetchMeWithDjango } from '@/lib/authApi';
+import { usePlayerStore } from '@/store/playerStore';
+
+const AUTH_ACCESS_KEY = 'auth_access_token';
+const API_BASE = typeof window !== 'undefined' ? process.env.NEXT_PUBLIC_API_URL || '' : '';
+
+function useDjangoAuth(): boolean {
+  return Boolean(API_BASE);
+}
 
 export type Profile = {
   full_name?: string;
@@ -9,7 +18,7 @@ export type Profile = {
 };
 
 type AuthState = {
-  user: User | null;
+  user: User | { id: string; email?: string; username?: string } | null;
   loading: boolean;
   profile: Profile | null;
   isAuthenticated: boolean;
@@ -30,12 +39,18 @@ type AuthState = {
 
 function profileFromUser(user: User | null): Profile | null {
   if (!user) return null;
-  const meta = user.user_metadata ?? {};
+  const meta = (user as User & { user_metadata?: Record<string, unknown> }).user_metadata ?? {};
   return {
-    full_name: meta.full_name,
-    is_premium: meta.is_premium ?? false,
-    role: meta.role ?? 'user',
+    full_name: meta.full_name as string | undefined,
+    is_premium: (meta.is_premium as boolean) ?? false,
+    role: (meta.role as 'user' | 'admin') ?? 'user',
   };
+}
+
+function applyPremiumToPlayer(isPremium: boolean) {
+  try {
+    usePlayerStore.getState().setPremiumStatus(isPremium);
+  } catch {}
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -48,9 +63,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (email, password) => {
     set({ error: null });
+    if (useDjangoAuth()) {
+      const result = await loginWithDjango(email, password);
+      if ('error' in result) {
+        set({ error: result.error });
+        return { error: new Error(result.error) };
+      }
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(AUTH_ACCESS_KEY, result.tokens.access);
+        localStorage.setItem('auth_refresh_token', result.tokens.refresh);
+      }
+      const profile: Profile = {
+        full_name: result.user.username,
+        is_premium: result.user.is_premium,
+        role: 'user',
+      };
+      applyPremiumToPlayer(result.user.is_premium);
+      set({
+        user: { id: String(result.user.id), email: result.user.email, username: result.user.username },
+        profile,
+        isAuthenticated: true,
+        error: null,
+        toastMessage: `Добро пожаловать, ${result.user.username}`,
+      });
+      return { error: null };
+    }
     const supabase = createClient();
     if (!supabase) {
-      set({ error: 'Supabase не настроен. Добавьте NEXT_PUBLIC_SUPABASE_URL и NEXT_PUBLIC_SUPABASE_ANON_KEY в .env.local (в папке frontend).' });
+      set({ error: 'Supabase не настроен.' });
       return { error: new Error('Supabase not configured') };
     }
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -61,21 +101,47 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ error: error.message });
       return { error };
     }
+    const prof = profileFromUser(data.user);
+    applyPremiumToPlayer(prof?.is_premium ?? false);
     set({
       user: data.user,
-      profile: profileFromUser(data.user),
+      profile: prof,
       isAuthenticated: true,
       error: null,
-      toastMessage: `Добро пожаловать, ${profileFromUser(data.user)?.full_name || email.split('@')[0]}`,
+      toastMessage: `Добро пожаловать, ${prof?.full_name || email.split('@')[0]}`,
     });
     return { error: null };
   },
 
   register: async (email, password, fullName) => {
     set({ error: null });
+    if (useDjangoAuth()) {
+      const result = await registerWithDjango(email, password);
+      if ('error' in result && result.error && !result.tokens?.access) {
+        set({ error: result.error });
+        return { error: new Error(result.error), needsEmailConfirm: false };
+      }
+      if ('tokens' in result && result.tokens.access) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(AUTH_ACCESS_KEY, result.tokens.access);
+          localStorage.setItem('auth_refresh_token', result.tokens.refresh);
+        }
+        const user = (result as { user: { id: number; email: string; username: string; is_premium: boolean } }).user;
+        const profile: Profile = { full_name: fullName || user.username, is_premium: user.is_premium, role: 'user' };
+        applyPremiumToPlayer(user.is_premium);
+        set({
+          user: { id: String(user.id), email: user.email, username: user.username },
+          profile,
+          isAuthenticated: true,
+          error: null,
+          toastMessage: `Добро пожаловать, ${fullName || user.username}`,
+        });
+      }
+      return { error: null, needsEmailConfirm: false };
+    }
     const supabase = createClient();
     if (!supabase) {
-      set({ error: 'Supabase не настроен. Добавьте NEXT_PUBLIC_SUPABASE_URL и NEXT_PUBLIC_SUPABASE_ANON_KEY в .env.local (в папке frontend).' });
+      set({ error: 'Supabase не настроен.' });
       return { error: new Error('Supabase not configured'), needsEmailConfirm: false };
     }
     const { data, error } = await supabase.auth.signUp({
@@ -90,9 +156,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const needsEmailConfirm =
       data.user && !data.session && data.user.identities?.length;
     if (data.session) {
+      const prof = profileFromUser(data.user);
+      applyPremiumToPlayer(prof?.is_premium ?? false);
       set({
         user: data.user,
-        profile: profileFromUser(data.user),
+        profile: prof,
         isAuthenticated: true,
         error: null,
         toastMessage: `Добро пожаловать, ${fullName}`,
@@ -104,13 +172,38 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    const supabase = createClient();
-    if (supabase) await supabase.auth.signOut();
+    if (useDjangoAuth() && typeof window !== 'undefined') {
+      localStorage.removeItem(AUTH_ACCESS_KEY);
+      localStorage.removeItem('auth_refresh_token');
+    } else {
+      const supabase = createClient();
+      if (supabase) await supabase.auth.signOut();
+    }
+    applyPremiumToPlayer(false);
     set({ user: null, profile: null, isAuthenticated: false, toastMessage: null, error: null });
   },
 
   initialize: async () => {
     set({ loading: true });
+    if (useDjangoAuth() && typeof window !== 'undefined') {
+      const access = localStorage.getItem(AUTH_ACCESS_KEY);
+      if (access) {
+        const me = await fetchMeWithDjango(access);
+        if (me) {
+          applyPremiumToPlayer(me.is_premium);
+          set({
+            user: { id: String(me.id), email: me.email, username: me.username },
+            profile: { full_name: me.username, is_premium: me.is_premium, role: 'user' },
+            isAuthenticated: true,
+            loading: false,
+          });
+          set({ loading: false });
+          return;
+        }
+      }
+      set({ user: null, profile: null, isAuthenticated: false, loading: false });
+      return;
+    }
     const supabase = createClient();
     if (!supabase) {
       set({ loading: false });
@@ -120,9 +213,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       data: { session },
     } = await supabase.auth.getSession();
     if (session?.user) {
+      const prof = profileFromUser(session.user);
+      applyPremiumToPlayer(prof?.is_premium ?? false);
       set({
         user: session.user,
-        profile: profileFromUser(session.user),
+        profile: prof,
         isAuthenticated: true,
         loading: false,
       });
@@ -131,9 +226,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     supabase.auth.onAuthStateChange((_event, session) => {
       const user = session?.user ?? null;
+      const prof = profileFromUser(user);
+      applyPremiumToPlayer(prof?.is_premium ?? false);
       set({
         user,
-        profile: profileFromUser(user),
+        profile: prof,
         isAuthenticated: !!user,
       });
     });

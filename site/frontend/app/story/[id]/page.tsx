@@ -7,6 +7,7 @@ import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory } from '@/lib/stories';
+import { fetchStoriesFromApi, fetchStoryByIdFromApi, useDjangoApi } from '@/lib/api';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock } from 'lucide-react';
@@ -36,7 +37,20 @@ export default function StoryPage() {
   const [similar, setSimilar] = useState<Story[]>([]);
 
   useEffect(() => {
-    if (!supabase || idParam === '') {
+    if (idParam === '') {
+      setPageStory(null);
+      return;
+    }
+    if (useDjangoApi()) {
+      Promise.all([fetchStoryByIdFromApi(idParam), fetchStoriesFromApi()]).then(
+        ([current, all]) => {
+          setPageStory(current ?? null);
+          if (current) setSimilar(getSimilarStories(current, all, 8));
+        }
+      );
+      return;
+    }
+    if (!supabase) {
       setPageStory(null);
       return;
     }

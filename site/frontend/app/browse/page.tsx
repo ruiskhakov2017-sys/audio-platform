@@ -8,6 +8,7 @@ import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
 import { StoryTile } from '@/components/browse/StoryTile';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory } from '@/lib/stories';
+import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
 import type { Story } from '@/types/story';
 
 const SORT_OPTIONS = [
@@ -75,6 +76,12 @@ export default function BrowsePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (useDjangoApi()) {
+      fetchStoriesFromApi()
+        .then((data) => setList(data))
+        .finally(() => setLoading(false));
+      return;
+    }
     if (!supabase) {
       setLoading(false);
       return;

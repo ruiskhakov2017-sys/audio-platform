@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { usePlayerStore } from '@/store/playerStore';
-import { Play, Pause, SkipBack, SkipForward, Volume2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Lock } from 'lucide-react';
 
 export function GlobalPlayerBar() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -18,6 +18,8 @@ export function GlobalPlayerBar() {
   const seek = usePlayerStore((s) => s.seek);
   const queue = usePlayerStore((s) => s.queue);
   const hasMultipleTracks = queue.length > 1;
+  const isPremiumUser = usePlayerStore((s) => s.isPremiumUser);
+  const setPaywallOpen = usePlayerStore((s) => s.setPaywallOpen);
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -27,6 +29,9 @@ export function GlobalPlayerBar() {
 
   if (!currentTrack) return null;
 
+  const isLocked =
+    currentTrack.isPremium &&
+    (!currentTrack.audioSrc?.trim() || !isPremiumUser);
   const progress = duration > 0 ? (position / duration) * 100 : 0;
 
   return (
@@ -68,42 +73,60 @@ export function GlobalPlayerBar() {
               {currentTrack.title}
             </p>
             <p className="text-xs text-zinc-400 truncate">
-              {currentTrack.authorName}
+              {isLocked ? (
+                <span className="inline-flex items-center gap-1 text-amber-400">
+                  <Lock className="w-3 h-3 shrink-0" />
+                  Доступно только по подписке
+                </span>
+              ) : (
+                currentTrack.authorName
+              )}
             </p>
           </div>
         </div>
 
-        {/* Центр: Play/Pause и перемотка ±15с на десктопе */}
-        <div className="flex items-center gap-2 md:gap-4 shrink-0">
-          <button
-            type="button"
-            onClick={() => (hasMultipleTracks ? previous() : seek(Math.max(0, position - 15)))}
-            className="hidden md:flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:text-white transition-colors disabled:opacity-40"
-            aria-label={hasMultipleTracks ? 'Предыдущий трек' : '15 секунд назад'}
-            disabled={!hasMultipleTracks && position <= 0}
-          >
-            <SkipBack className="w-5 h-5" strokeWidth={1.5} />
-          </button>
-          <button
-            type="button"
-            onClick={togglePlay}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-cyan-500 text-white shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:brightness-110 transition-transform hover:scale-105"
-            aria-label={isPlaying ? 'Пауза' : 'Воспроизведение'}
-          >
-            {isPlaying ? (
-              <Pause className="w-6 h-6" strokeWidth={2} />
-            ) : (
-              <Play className="w-6 h-6 ml-0.5" strokeWidth={2} fill="currentColor" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => (hasMultipleTracks ? next() : seek(Math.min(duration, position + 15)))}
-            className="hidden md:flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:text-white transition-colors"
-            aria-label={hasMultipleTracks ? 'Следующий трек' : '15 секунд вперёд'}
-          >
-            <SkipForward className="w-5 h-5" strokeWidth={1.5} />
-          </button>
+        {/* Центр: Play/Pause или замок */}
+        <div className="flex flex-col items-center gap-1 shrink-0">
+          {isLocked && (
+            <p className="text-xs text-amber-400/90">Доступно только по подписке</p>
+          )}
+          <div className="flex items-center gap-2 md:gap-4">
+            <button
+              type="button"
+              onClick={() => (hasMultipleTracks ? previous() : seek(Math.max(0, position - 15)))}
+              className="hidden md:flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:text-white transition-colors disabled:opacity-40"
+              aria-label={hasMultipleTracks ? 'Предыдущий трек' : '15 секунд назад'}
+              disabled={!hasMultipleTracks && position <= 0}
+            >
+              <SkipBack className="w-5 h-5" strokeWidth={1.5} />
+            </button>
+            <button
+              type="button"
+              onClick={() => (isLocked ? setPaywallOpen(true) : togglePlay())}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-white shadow-[0_0_20px_rgba(6,182,212,0.4)] transition-transform hover:scale-105 ${
+                isLocked
+                  ? 'bg-amber-500/80 hover:brightness-110'
+                  : 'bg-cyan-500 hover:brightness-110'
+              }`}
+              aria-label={isLocked ? 'Доступ по подписке' : isPlaying ? 'Пауза' : 'Воспроизведение'}
+            >
+              {isLocked ? (
+                <Lock className="w-6 h-6" strokeWidth={2} />
+              ) : isPlaying ? (
+                <Pause className="w-6 h-6" strokeWidth={2} />
+              ) : (
+                <Play className="w-6 h-6 ml-0.5" strokeWidth={2} fill="currentColor" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => (hasMultipleTracks ? next() : seek(Math.min(duration, position + 15)))}
+              className="hidden md:flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:text-white transition-colors"
+              aria-label={hasMultipleTracks ? 'Следующий трек' : '15 секунд вперёд'}
+            >
+              <SkipForward className="w-5 h-5" strokeWidth={1.5} />
+            </button>
+          </div>
         </div>
 
         {/* Справа: громкость на десктопе */}

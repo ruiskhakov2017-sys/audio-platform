@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Play, Crown, Heart } from 'lucide-react';
+import { Play, Crown, Heart, Lock } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -74,7 +74,7 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                             strokeWidth={1.5}
                         />
                     </button>
-                    {/* Free / Premium badge — top-right corner */}
+                    {/* Free / Premium (замок) — top-right corner */}
                     <div className="absolute top-3 right-3 z-10">
                         {isFree ? (
                             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-teal-500/20 text-teal-300 border border-teal-500/50">
@@ -82,8 +82,8 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                             </span>
                         ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 border border-amber-500/50">
-                                <Crown className="w-3.5 h-3.5 shrink-0" strokeWidth={2} />
-                                Premium
+                                <Lock className="w-3.5 h-3.5 shrink-0" strokeWidth={2} />
+                                По подписке
                             </span>
                         )}
                     </div>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { mapRowToStory } from "@/lib/stories";
+import { fetchStoriesFromApi, useDjangoApi } from "@/lib/api";
 import { StoryCard } from "@/components/v1/ui/StoryCard";
 import { getAllTags, filterStoriesByTags, getUniqueCategories } from "@/lib/tags";
 import { Search, Filter, X } from "lucide-react";
@@ -15,6 +16,10 @@ export default function CatalogPage() {
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
+    if (useDjangoApi()) {
+      fetchStoriesFromApi().then(setStories);
+      return;
+    }
     if (!supabase) return;
     supabase
       .from("stories")
