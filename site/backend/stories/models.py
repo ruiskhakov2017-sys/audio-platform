@@ -43,7 +43,7 @@ class Story(models.Model):
     author = models.ForeignKey(Author, on_delete=models.SET_NULL, null=True, verbose_name="Автор", related_name="stories")
 
     # Файлы
-    cover_image = models.ImageField("Обложка", upload_to="covers/", blank=True, null=True)
+    cover_image = models.FileField("Обложка", upload_to="covers/", blank=True, null=True)
     audio_file = models.FileField("Аудиофайл", upload_to="audio/")
     
     # Свойства
