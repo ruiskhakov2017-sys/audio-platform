@@ -3,14 +3,18 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory } from '@/lib/stories';
-import { fetchStoriesFromApi, fetchStoryByIdFromApi, useDjangoApi } from '@/lib/api';
+import { fetchStoriesFromApi, fetchStoryByIdFromApi, fetchRelatedStoriesFromApi, useDjangoApi } from '@/lib/api';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
-import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock } from 'lucide-react';
+import { useAuthStore } from '@/store/authStore';
+import { toggleFavoriteApi } from '@/lib/favoritesApi';
+import { fetchReviewsByStoryId, submitReviewApi, type ReviewItem } from '@/lib/reviewsApi';
+import { toast } from 'sonner';
+import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star } from 'lucide-react';
 import type { Story } from '@/types/story';
 
 const formatDuration = (sec: number) => {
@@ -32,9 +36,14 @@ const TEST_AUDIO_SRC = '/audio/test.mp3';
 
 export default function StoryPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const idParam = params.id ?? '';
   const [story, setPageStory] = useState<Story | null | undefined>(undefined);
   const [similar, setSimilar] = useState<Story[]>([]);
+  const [reviews, setReviews] = useState<ReviewItem[]>([]);
+  const [reviewForm, setReviewForm] = useState({ rating: 5, text: '' });
+  const [submittingReview, setSubmittingReview] = useState(false);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   useEffect(() => {
     if (idParam === '') {
@@ -45,7 +54,11 @@ export default function StoryPage() {
       Promise.all([fetchStoryByIdFromApi(idParam), fetchStoriesFromApi()]).then(
         ([current, all]) => {
           setPageStory(current ?? null);
-          if (current) setSimilar(getSimilarStories(current, all, 8));
+          if (current) {
+            fetchRelatedStoriesFromApi(current.slug).then((related) => {
+              setSimilar(related.length > 0 ? related : getSimilarStories(current, all, 8));
+            });
+          }
         }
       );
       return;
@@ -70,6 +83,11 @@ export default function StoryPage() {
       });
   }, [idParam]);
 
+  useEffect(() => {
+    if (!story || typeof story.id !== 'number' || !useDjangoApi() || !process.env.NEXT_PUBLIC_API_URL) return;
+    fetchReviewsByStoryId(story.id).then(setReviews);
+  }, [story?.id]);
+
   const {
     currentTrack,
     isPlaying,
@@ -82,7 +100,6 @@ export default function StoryPage() {
     next,
     previous,
     isPremiumUser,
-    setPaywallOpen,
   } = usePlayerStore();
   const { toggleLike, isLiked } = useFavoritesStore();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -100,7 +117,7 @@ export default function StoryPage() {
   const handlePlay = () => {
     if (!story) return;
     if (story.isPremium && !isPremiumUser) {
-      setPaywallOpen(true);
+      router.push('/pricing');
       return;
     }
     const storyWithSrc = {
@@ -152,6 +169,27 @@ export default function StoryPage() {
 
   const descriptionLong = story.description.length > 200;
   const showExpandButton = descriptionLong && !descriptionExpanded;
+  const avgRating = reviews.length > 0
+    ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length
+    : 0;
+  const handleSubmitReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!story || submittingReview || !isAuthenticated) return;
+    setSubmittingReview(true);
+    const result = await submitReviewApi({
+      story: Number(story.id),
+      rating: reviewForm.rating,
+      text: reviewForm.text.trim(),
+    });
+    setSubmittingReview(false);
+    if ('error' in result) {
+      toast.error(result.error);
+      return;
+    }
+    setReviews((prev) => [result, ...prev]);
+    setReviewForm({ rating: 5, text: '' });
+    toast.success('Отзыв добавлен');
+  };
 
   return (
     <div className="min-h-screen bg-[#000814] text-white">
@@ -191,13 +229,38 @@ export default function StoryPage() {
             {/* Колонка справа — на чёрном фоне, без карточек */}
             <div>
               <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-                <h1 className="font-heading text-3xl md:text-4xl font-bold text-white leading-tight">
-                  {story.title}
-                </h1>
+                <div>
+                  <h1 className="font-heading text-3xl md:text-4xl font-bold text-white leading-tight">
+                    {story.title}
+                  </h1>
+                  {reviews.length > 0 && (
+                    <div className="flex items-center gap-1.5 mt-2" aria-label={`Рейтинг: ${avgRating.toFixed(1)} из 5`}>
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <Star
+                          key={i}
+                          className={`w-5 h-5 ${i <= Math.round(avgRating) ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`}
+                          strokeWidth={1.5}
+                        />
+                      ))}
+                      <span className="text-sm text-zinc-500 ml-1">
+                        {avgRating.toFixed(1)} ({reviews.length})
+                      </span>
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => story && toggleLike(String(story.id))}
+                    onClick={async () => {
+                      if (!story) return;
+                      const useApi = Boolean(process.env.NEXT_PUBLIC_API_URL && typeof window !== 'undefined' && localStorage.getItem('auth_access_token'));
+                      if (useApi) {
+                        const res = await toggleFavoriteApi(story.slug);
+                        if (res) toggleLike(String(story.id));
+                      } else {
+                        toggleLike(String(story.id));
+                      }
+                    }}
                     className={`p-2 transition-colors rounded-full hover:bg-white/10 ${isFavorite ? 'text-cyan-500' : 'text-zinc-500 hover:text-white'}`}
                     aria-label={isFavorite ? 'Убрать из избранного' : 'В избранное'}
                   >
@@ -305,6 +368,64 @@ export default function StoryPage() {
                   </button>
                 )}
               </div>
+
+              {/* Отзывы — только при наличии API */}
+              {process.env.NEXT_PUBLIC_API_URL && (
+                <section className="mt-12">
+                  <h2 className="font-heading text-xl font-bold text-white mb-4">Отзывы</h2>
+                  {isAuthenticated && (
+                    <form onSubmit={handleSubmitReview} className="mb-8">
+                      <div className="flex flex-wrap gap-4 items-center mb-3">
+                        <label className="text-zinc-400 text-sm">Оценка:</label>
+                        <div className="flex gap-1">
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => setReviewForm((f) => ({ ...f, rating: i }))}
+                              className={`p-1 rounded ${reviewForm.rating >= i ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`}
+                              aria-label={`Оценка ${i}`}
+                            >
+                              <Star className="w-5 h-5" strokeWidth={1.5} fill={reviewForm.rating >= i ? 'currentColor' : 'none'} />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <textarea
+                        value={reviewForm.text}
+                        onChange={(e) => setReviewForm((f) => ({ ...f, text: e.target.value }))}
+                        placeholder="Текст отзыва (необязательно)"
+                        className="w-full max-w-md rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-zinc-500 focus:border-[#00B4D8]/50 focus:outline-none resize-y min-h-[80px]"
+                        rows={3}
+                      />
+                      <button
+                        type="submit"
+                        disabled={submittingReview}
+                        className="mt-3 px-5 py-2.5 rounded-full bg-[#00B4D8] text-black font-medium hover:bg-[#00B4D8]/90 disabled:opacity-50"
+                      >
+                        {submittingReview ? 'Отправка...' : 'Отправить отзыв'}
+                      </button>
+                    </form>
+                  )}
+                  <ul className="space-y-4">
+                    {reviews.map((r) => (
+                      <li key={r.id} className="border-b border-white/10 pb-4 last:border-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-zinc-400 text-sm">{r.user_email}</span>
+                          <span className="flex gap-0.5">
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <Star key={i} className={`w-4 h-4 ${i <= r.rating ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`} strokeWidth={1.5} />
+                            ))}
+                          </span>
+                          <span className="text-zinc-500 text-xs">{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>
+                        </div>
+                        {r.text && <p className="text-zinc-300 text-sm">{r.text}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                  {reviews.length === 0 && <p className="text-zinc-500 text-sm">Пока нет отзывов.</p>}
+                </section>
+              )}
             </div>
           </div>
 

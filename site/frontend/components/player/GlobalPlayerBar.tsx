@@ -2,10 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { usePlayerStore } from '@/store/playerStore';
-import { Play, Pause, SkipBack, SkipForward, Volume2, Lock } from 'lucide-react';
+import { useFavoritesStore } from '@/store/favoritesStore';
+import { toggleFavoriteApi } from '@/lib/favoritesApi';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart } from 'lucide-react';
 
 export function GlobalPlayerBar() {
+  const router = useRouter();
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const position = usePlayerStore((s) => s.position);
@@ -19,9 +24,31 @@ export function GlobalPlayerBar() {
   const queue = usePlayerStore((s) => s.queue);
   const hasMultipleTracks = queue.length > 1;
   const isPremiumUser = usePlayerStore((s) => s.isPremiumUser);
-  const setPaywallOpen = usePlayerStore((s) => s.setPaywallOpen);
+  const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate);
+  const { toggleLike, isLiked } = useFavoritesStore();
 
   const [mounted, setMounted] = useState(false);
+  const isFavorite = currentTrack ? isLiked(String(currentTrack.id)) : false;
+  const handleFavoriteClick = async () => {
+    if (!currentTrack) return;
+    const slug = currentTrack.slug;
+    const useApi = Boolean(slug && process.env.NEXT_PUBLIC_API_URL && typeof window !== 'undefined' && localStorage.getItem('auth_access_token'));
+    if (useApi) {
+      const res = await toggleFavoriteApi(slug);
+      if (res) toggleLike(String(currentTrack.id));
+    } else {
+      toggleLike(String(currentTrack.id));
+    }
+  };
+  const SPEEDS = [1, 1.25, 1.5, 2] as const;
+  const currentSpeedIndex = SPEEDS.indexOf(playbackRate as 1 | 1.25 | 1.5 | 2) >= 0
+    ? SPEEDS.indexOf(playbackRate as 1 | 1.25 | 1.5 | 2)
+    : 0;
+  const handleSpeedClick = () => {
+    const next = (currentSpeedIndex + 1) % SPEEDS.length;
+    setPlaybackRate(SPEEDS[next]);
+  };
   useEffect(() => {
     if (currentTrack) setMounted(true);
     else setMounted(false);
@@ -56,7 +83,10 @@ export function GlobalPlayerBar() {
       <div className="h-full flex items-center justify-between gap-4 px-4 md:px-6 max-w-7xl mx-auto">
         {/* Слева: обложка + название + автор */}
         <div className="flex items-center gap-3 min-w-0 flex-1">
-          <div className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5">
+          <Link
+            href={currentTrack ? `/story/${currentTrack.slug || currentTrack.id}` : '#'}
+            className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block"
+          >
             {currentTrack.coverImage && (
               <Image
                 src={currentTrack.coverImage}
@@ -67,8 +97,16 @@ export function GlobalPlayerBar() {
                 sizes="48px"
               />
             )}
-          </div>
-          <div className="min-w-0">
+          </Link>
+          <button
+            type="button"
+            onClick={handleFavoriteClick}
+            className={`p-2 rounded-full transition-colors shrink-0 ${isFavorite ? 'text-rose-500' : 'text-zinc-400 hover:text-white'}`}
+            aria-label={isFavorite ? 'Убрать из избранного' : 'В избранное'}
+          >
+            <Heart className="w-5 h-5" strokeWidth={1.5} fill={isFavorite ? 'currentColor' : 'none'} />
+          </button>
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-white truncate">
               {currentTrack.title}
             </p>
@@ -102,7 +140,7 @@ export function GlobalPlayerBar() {
             </button>
             <button
               type="button"
-              onClick={() => (isLocked ? setPaywallOpen(true) : togglePlay())}
+              onClick={() => (isLocked ? router.push('/pricing') : togglePlay())}
               className={`flex h-12 w-12 items-center justify-center rounded-full text-white shadow-[0_0_20px_rgba(6,182,212,0.4)] transition-transform hover:scale-105 ${
                 isLocked
                   ? 'bg-amber-500/80 hover:brightness-110'
@@ -125,6 +163,15 @@ export function GlobalPlayerBar() {
               aria-label={hasMultipleTracks ? 'Следующий трек' : '15 секунд вперёд'}
             >
               <SkipForward className="w-5 h-5" strokeWidth={1.5} />
+            </button>
+            <button
+              type="button"
+              onClick={handleSpeedClick}
+              className="flex h-9 min-w-[2.5rem] md:min-w-[3rem] items-center justify-center rounded-full text-zinc-400 hover:text-white transition-colors text-xs md:text-sm font-medium"
+              aria-label={`Скорость воспроизведения ${playbackRate}x`}
+              title={`Скорость ${playbackRate}x`}
+            >
+              {playbackRate}x
             </button>
           </div>
         </div>

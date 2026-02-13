@@ -18,24 +18,24 @@ SECRET_KEY = os.environ.get(
     'SECRET_KEY',
     'django-insecure-dev-only-change-in-production'
 )
-DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-# Хосты: локаль + *.railway.app + доп. из ALLOWED_HOSTS (через запятую)
-_ALLOWED = ['localhost', '127.0.0.1', '.railway.app']
-_extra = os.environ.get('ALLOWED_HOSTS', '').strip()
-if _extra:
-    _ALLOWED.extend(s.strip() for s in _extra.split(',') if s.strip())
-ALLOWED_HOSTS = _ALLOWED
+# Хосты: из ALLOWED_HOSTS (через запятую) или дефолт локаль + Railway
+_allowed_raw = os.environ.get('ALLOWED_HOSTS', '').strip()
+if _allowed_raw:
+    ALLOWED_HOSTS = [s.strip() for s in _allowed_raw.split(',') if s.strip()]
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.railway.app']
 
-# CSRF: Vercel + Railway; доп. источники через CSRF_TRUSTED_ORIGINS (через запятую)
-_CSRF = [
-    'https://audio-platform-phi.vercel.app',
-    'https://audio-platform-git-main-ruiskhakov2017-sys-projects.vercel.app',
-]
-_csrf_extra = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
-if _csrf_extra:
-    _CSRF.extend(s.strip() for s in _csrf_extra.split(',') if s.strip())
-CSRF_TRUSTED_ORIGINS = _CSRF
+# CSRF: список из CSRF_TRUSTED_ORIGINS (через запятую) или дефолт для Vercel + Railway
+_csrf_raw = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
+if _csrf_raw:
+    CSRF_TRUSTED_ORIGINS = [s.strip() for s in _csrf_raw.split(',') if s.strip()]
+else:
+    CSRF_TRUSTED_ORIGINS = [
+        'https://audio-platform-phi.vercel.app',
+        'https://audio-platform-git-main-ruiskhakov2017-sys-projects.vercel.app',
+    ]
 
 
 # Application definition
@@ -198,12 +198,53 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
-# Разрешаем запросы с фронтенда (Next.js + Vercel + Railway)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "https://audio-platform-phi.vercel.app",
-    "https://audio-platform-git-main-ruiskhakov2017-sys-projects.vercel.app",
-]
+# CORS: из переменной (через запятую) или дефолт
+_cors_raw = os.environ.get('CORS_ALLOWED_ORIGINS', '').strip()
+if _cors_raw:
+    CORS_ALLOWED_ORIGINS = [s.strip() for s in _cors_raw.split(',') if s.strip()]
+else:
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "https://audio-platform-phi.vercel.app",
+        "https://audio-platform-git-main-ruiskhakov2017-sys-projects.vercel.app",
+    ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://[\w\-]+\.railway\.app$",
 ]
+
+# Продакшен: HTTPS и безопасные куки
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+# Email: SMTP из .env или консоль
+_email_host = os.environ.get('EMAIL_HOST', '').strip()
+_email_user = os.environ.get('EMAIL_HOST_USER', '').strip()
+if _email_host and _email_user:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST = _email_host
+    EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+    EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'true').lower() in ('true', '1', 'yes')
+    EMAIL_HOST_USER = _email_user
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+else:
+    EMAIL_BACKEND = os.environ.get(
+        'EMAIL_BACKEND',
+        'django.core.mail.backends.console.EmailBackend'
+    )
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@eroticaudio.local')
+
+# Sentry (если задан SENTRY_DSN)
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration()],
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+        environment='production' if not DEBUG else 'development',
+    )

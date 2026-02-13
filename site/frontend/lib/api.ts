@@ -1,6 +1,16 @@
 import type { Story } from '@/types/story';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+const AUTH_ACCESS_KEY = 'auth_access_token';
+
+function getAuthHeaders(): HeadersInit {
+  const headers: HeadersInit = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem(AUTH_ACCESS_KEY);
+    if (token) (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
 
 export type DjangoStory = {
   id: number;
@@ -44,7 +54,7 @@ export async function fetchStoriesFromApi(params?: {
   if (params?.search) searchParams.set('search', params.search);
   const qs = searchParams.toString();
   const url = `${API_BASE.replace(/\/$/, '')}/api/stories/${qs ? `?${qs}` : ''}`;
-  const res = await fetch(url, { next: { revalidate: 60 } });
+  const res = await fetch(url, { headers: getAuthHeaders(), next: { revalidate: 60 } });
   if (!res.ok) return [];
   const data: DjangoStory[] = await res.json();
   return data.map(mapDjangoStoryToStory);
@@ -53,7 +63,7 @@ export async function fetchStoriesFromApi(params?: {
 export async function fetchStoryBySlugFromApi(slug: string): Promise<Story | null> {
   if (!API_BASE) return null;
   const url = `${API_BASE.replace(/\/$/, '')}/api/stories/${slug}/`;
-  const res = await fetch(url, { next: { revalidate: 60 } });
+  const res = await fetch(url, { headers: getAuthHeaders(), next: { revalidate: 60 } });
   if (!res.ok) return null;
   const data: DjangoStory = await res.json();
   return mapDjangoStoryToStory(data);
@@ -64,6 +74,15 @@ export async function fetchStoryByIdFromApi(id: number | string): Promise<Story 
   const list = await fetchStoriesFromApi();
   const story = list.find((s) => String(s.id) === String(id));
   return story ?? null;
+}
+
+export async function fetchRelatedStoriesFromApi(storySlug: string): Promise<Story[]> {
+  if (!API_BASE) return [];
+  const url = `${API_BASE.replace(/\/$/, '')}/api/stories/${encodeURIComponent(storySlug)}/related/`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data.map((row: DjangoStory) => mapDjangoStoryToStory(row)) : [];
 }
 
 export function useDjangoApi(): boolean {

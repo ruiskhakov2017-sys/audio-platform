@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils.text import slugify
+from django.conf import settings
 
 # 1. Жанры
 class Genre(models.Model):
@@ -63,3 +64,31 @@ class Story(models.Model):
         verbose_name = "Рассказ"
         verbose_name_plural = "Рассказы"
         ordering = ['-created_at']
+
+
+# 4. Отзывы (один отзыв на пользователя на историю)
+class Review(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='story_reviews',
+    )
+    story = models.ForeignKey(
+        Story,
+        on_delete=models.CASCADE,
+        related_name='reviews',
+    )
+    rating = models.PositiveSmallIntegerField("Оценка (1-5)", choices=[(i, str(i)) for i in range(1, 6)])
+    text = models.TextField("Текст отзыва", blank=True)
+    created_at = models.DateTimeField("Дата", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Отзыв"
+        verbose_name_plural = "Отзывы"
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'story'], name='unique_user_story_review'),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} — {self.story.title}: {self.rating}"

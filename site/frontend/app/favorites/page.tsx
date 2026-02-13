@@ -1,21 +1,37 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Header } from '@/components/layout/Header';
 import { StoryTile } from '@/components/browse/StoryTile';
 import { MOCK_STORIES } from '@/data/mockData';
 import { useFavoritesStore } from '@/store/favoritesStore';
+import { useAuthStore } from '@/store/authStore';
+import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
 import type { Story } from '@/types/story';
 
 export default function FavoritesPage() {
   const likedIds = useFavoritesStore((s) => s.likedIds);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const [apiStories, setApiStories] = useState<Story[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!useDjangoApi() || !isAuthenticated) {
+      setLoading(false);
+      return;
+    }
+    fetchStoriesFromApi()
+      .then(setApiStories)
+      .finally(() => setLoading(false));
+  }, [isAuthenticated]);
 
   const allStories = useMemo(() => {
+    if (useDjangoApi() && apiStories.length > 0) return apiStories;
     const raw = Array.isArray(MOCK_STORIES) ? MOCK_STORIES : [];
     const duplicated = [...raw, ...raw, ...raw, ...raw];
     return duplicated.map((story, index) => ({ ...story, id: index + 1 })) as Story[];
-  }, []);
+  }, [apiStories]);
 
   const favoriteStories = useMemo(
     () => allStories.filter((s) => likedIds.includes(String(s.id))),
@@ -28,9 +44,10 @@ export default function FavoritesPage() {
         id: story.id,
         title: story.title,
         coverImage: story.coverImage,
-        category: story.tags[0] || 'Аудио',
+        category: story.tags?.[0] || 'Аудио',
         price: story.isPremium ? 190 : undefined,
         isPremium: story.isPremium,
+        story,
       })),
     [favoriteStories]
   );
@@ -52,7 +69,9 @@ export default function FavoritesPage() {
             </p>
           </div>
 
-          {storiesForGrid.length === 0 ? (
+          {loading ? (
+            <p className="text-zinc-500 py-12">Загрузка...</p>
+          ) : storiesForGrid.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 text-center max-w-md mx-auto">
               <p className="text-xl text-zinc-400 mb-6 leading-relaxed">
                 Здесь пока пусто. Отметьте истории сердечком, чтобы не потерять их.

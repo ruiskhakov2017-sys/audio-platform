@@ -1,5 +1,6 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { withSentryConfig } from '@sentry/nextjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pathToTailwind = path.join(__dirname, 'node_modules', 'tailwindcss');
@@ -29,4 +30,8 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG || '',
+  project: process.env.SENTRY_PROJECT || '',
+  silent: !process.env.CI,
+});

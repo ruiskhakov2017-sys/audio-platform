@@ -10,6 +10,7 @@ export type MeResponse = {
   username: string;
   email: string;
   is_premium: boolean;
+  avatar_url?: string | null;
 };
 
 export async function loginWithDjango(
@@ -62,5 +63,21 @@ export async function fetchMeWithDjango(accessToken: string): Promise<MeResponse
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return null;
+  return res.json();
+}
+
+export async function uploadAvatarWithDjango(accessToken: string, file: File): Promise<MeResponse | { error: string }> {
+  if (!API_BASE || !accessToken) return { error: 'API не настроен' };
+  const formData = new FormData();
+  formData.append('avatar', file);
+  const res = await fetch(`${API_BASE.replace(/\/$/, '')}/api/auth/me/`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return { error: (data.avatar as string[])?.[0] || data.detail || res.statusText };
+  }
   return res.json();
 }

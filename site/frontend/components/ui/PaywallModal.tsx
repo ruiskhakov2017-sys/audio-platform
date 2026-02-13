@@ -1,17 +1,21 @@
 'use client';
 
+import { useEffect } from 'react';
+import Link from 'next/link';
+import { toast } from 'sonner';
 import { usePlayerStore } from '@/store/playerStore';
 import { X } from 'lucide-react';
 
 export function PaywallModal() {
-  const { isPaywallOpen, setPaywallOpen, setPremiumStatus } = usePlayerStore();
+  const { isPaywallOpen, setPaywallOpen } = usePlayerStore();
+
+  useEffect(() => {
+    if (isPaywallOpen) {
+      toast.info('Нужен Premium', { id: 'paywall', description: 'Доступно только по подписке' });
+    }
+  }, [isPaywallOpen]);
 
   if (!isPaywallOpen) return null;
-
-  const handleUnlock = () => {
-    setPremiumStatus(true);
-    setPaywallOpen(false);
-  };
 
   const handleClose = () => setPaywallOpen(false);
 
@@ -43,13 +47,13 @@ export function PaywallModal() {
         <p className="text-zinc-400 text-center mb-8 text-sm leading-relaxed">
           Эта история слишком откровенна для публичного доступа. Оформите подписку, чтобы услышать всё.
         </p>
-        <button
-          type="button"
-          onClick={handleUnlock}
-          className="w-full py-3.5 px-4 rounded-full bg-amber-500 text-black font-semibold hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20"
+        <Link
+          href="/pricing"
+          onClick={handleClose}
+          className="block w-full py-3.5 px-4 rounded-full bg-amber-500 text-black font-semibold hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20 text-center"
         >
-          Unlock Full Access
-        </button>
+          Перейти к тарифам
+        </Link>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Profile
+from .models import Profile, ContactRequest
 
 User = get_user_model()
 
@@ -36,3 +36,37 @@ class MeSerializer(serializers.Serializer):
     username = serializers.CharField(read_only=True)
     email = serializers.EmailField(read_only=True)
     is_premium = serializers.BooleanField(read_only=True)
+    avatar_url = serializers.SerializerMethodField(read_only=True)
+
+    def get_avatar_url(self, obj):
+        profile = getattr(obj, 'profile', None)
+        if not profile or not profile.avatar:
+            return None
+        request = self.context.get('request')
+        url = profile.avatar.url
+        if request and url and not url.startswith(('http://', 'https://')):
+            return request.build_absolute_uri(url)
+        return url
+
+    def to_representation(self, instance):
+        profile = getattr(instance, 'profile', None)
+        return {
+            'id': instance.id,
+            'username': instance.username,
+            'email': getattr(instance, 'email', ''),
+            'is_premium': profile.is_premium if profile else False,
+            'avatar_url': self.get_avatar_url(instance),
+        }
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """Для PATCH /api/auth/me/ (avatar)."""
+    class Meta:
+        model = Profile
+        fields = ['avatar']
+
+
+class ContactRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactRequest
+        fields = ['email', 'subject', 'message']

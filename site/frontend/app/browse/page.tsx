@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { SlidersHorizontal } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { FilterSidebar } from '@/components/browse/FilterSidebar';
 import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
 import { StoryTile } from '@/components/browse/StoryTile';
+import { StoryTileSkeleton } from '@/components/browse/StoryTileSkeleton';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory } from '@/lib/stories';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
@@ -65,10 +67,23 @@ function filterAndSortStories(
   return sortStories(list, activeSort);
 }
 
+const GENRE_PARAM = 'genre';
+const SEARCH_PARAM = 'search';
+const TAG_PARAM = 'tag';
+
 export default function BrowsePage() {
-  const [activeGenre, setActiveGenre] = useState<string>(ALL_GENRES);
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const [activeGenre, setActiveGenre] = useState<string>(() =>
+    searchParams.get(GENRE_PARAM) || ALL_GENRES
+  );
+  const [selectedTag, setSelectedTag] = useState<string | null>(() =>
+    searchParams.get(TAG_PARAM) || null
+  );
+  const [searchQuery, setSearchQuery] = useState(() =>
+    searchParams.get(SEARCH_PARAM) || ''
+  );
   const [activeSort, setActiveSort] = useState<SortKey>('popular');
   const [visibleCount, setVisibleCount] = useState(20);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -76,8 +91,23 @@ export default function BrowsePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const params = new URLSearchParams();
+    if (searchQuery.trim()) params.set(SEARCH_PARAM, searchQuery.trim());
+    if (activeGenre !== ALL_GENRES) params.set(GENRE_PARAM, activeGenre);
+    if (selectedTag) params.set(TAG_PARAM, selectedTag);
+    const qs = params.toString();
+    const want = qs ? `?${qs}` : '';
+    if (typeof window !== 'undefined' && window.location.search !== want) {
+      router.replace(want ? `/browse?${qs}` : '/browse', { scroll: false });
+    }
+  }, [activeGenre, selectedTag, searchQuery, router]);
+
+  useEffect(() => {
     if (useDjangoApi()) {
-      fetchStoriesFromApi()
+      fetchStoriesFromApi({
+        search: searchQuery.trim() || undefined,
+        genre: activeGenre !== ALL_GENRES ? activeGenre : undefined,
+      })
         .then((data) => setList(data))
         .finally(() => setLoading(false));
       return;
@@ -95,7 +125,7 @@ export default function BrowsePage() {
         if (error) return;
         setList((data ?? []).map(mapRowToStory));
       });
-  }, []);
+  }, [searchQuery, activeGenre]);
 
   const genres = useMemo(() => {
     const set = new Set<string>();
@@ -217,7 +247,13 @@ export default function BrowsePage() {
                 Показано {Math.min(visibleCount, filteredStories.length)} из {filteredStories.length} историй
               </div>
 
-              {storiesForGrid.length === 0 ? (
+              {loading ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <StoryTileSkeleton key={i} />
+                  ))}
+                </div>
+              ) : storiesForGrid.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center">
                   <p className="text-xl text-zinc-400 mb-2">
                     Ничего не найдено, попробуйте другой запрос

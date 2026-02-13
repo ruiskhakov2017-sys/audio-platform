@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Header } from '@/components/layout/Header';
 import { useAuthStore } from '@/store/authStore';
 
@@ -25,11 +26,16 @@ export default function SignupPage() {
     setSubmitting(true);
     const { error: err, needsEmailConfirm } = await register(email, password, name);
     setSubmitting(false);
-    if (err) return;
-    if (needsEmailConfirm) {
-      setMessage('Проверьте почту: мы отправили ссылку для подтверждения.');
+    if (err) {
+      toast.error(err.message || 'Ошибка регистрации');
       return;
     }
+    if (needsEmailConfirm) {
+      setMessage('Проверьте почту: мы отправили ссылку для подтверждения.');
+      toast.info('Проверьте почту');
+      return;
+    }
+    toast.success('Регистрация прошла успешно!');
     router.push('/');
   };
 

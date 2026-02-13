@@ -1,8 +1,12 @@
-from rest_framework import viewsets
+import random
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
 from django.db.models import Q
-from .models import Story, Genre, Author
-from .serializers import StorySerializer, GenreSerializer, AuthorSerializer
+from accounts.models import Bookmark
+from .models import Story, Genre, Author, Review
+from .serializers import StorySerializer, GenreSerializer, AuthorSerializer, ReviewSerializer
 
 
 class StoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -24,6 +28,59 @@ class StoryViewSet(viewsets.ReadOnlyModelViewSet):
                 Q(title__icontains=search) | Q(description__icontains=search)
             )
         return qs.distinct()
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def favorite(self, request, slug=None):
+        story = self.get_object()
+        bookmark, created = Bookmark.objects.get_or_create(
+            user=request.user,
+            story_id=story.id,
+        )
+        if not created:
+            bookmark.delete()
+            is_favorite = False
+        else:
+            is_favorite = True
+        return Response({'is_favorite': is_favorite})
+
+    @action(detail=True, methods=['get'], url_path='related', permission_classes=[AllowAny])
+    def related(self, request, slug=None):
+        story = self.get_object()
+        genre = story.genre
+        qs = Story.objects.select_related('genre', 'author').exclude(pk=story.pk).order_by('-created_at')
+        if genre:
+            qs = qs.filter(genre=genre)
+        ids = list(qs.values_list('pk', flat=True)[:20])
+        random.shuffle(ids)
+        selected = ids[:4]
+        if not selected:
+            qs = Story.objects.select_related('genre', 'author').exclude(pk=story.pk).order_by('-created_at')[:4]
+        else:
+            qs = Story.objects.filter(pk__in=selected).select_related('genre', 'author')
+            qs = sorted(qs, key=lambda s: selected.index(s.pk))
+        serializer = StorySerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class ReviewViewSet(viewsets.ModelViewSet):
+    serializer_class = ReviewSerializer
+    permission_classes = [AllowAny]
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsAuthenticated()]
+        return [AllowAny()]
+
+    def get_queryset(self):
+        qs = Review.objects.select_related('user', 'story').order_by('-created_at')
+        story_id = self.request.query_params.get('story_id')
+        if story_id:
+            qs = qs.filter(story_id=story_id)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
 
 class GenreViewSet(viewsets.ReadOnlyModelViewSet):

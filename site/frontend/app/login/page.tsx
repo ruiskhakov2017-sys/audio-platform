@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Header } from '@/components/layout/Header';
 import { useAuthStore } from '@/store/authStore';
 
@@ -22,7 +23,11 @@ export default function LoginPage() {
     setSubmitting(true);
     const { error: err } = await login(email, password);
     setSubmitting(false);
-    if (err) return;
+    if (err) {
+      toast.error(err.message || 'Ошибка входа');
+      return;
+    }
+    toast.success('Добро пожаловать!');
     router.push('/');
   };
 
@@ -79,6 +84,11 @@ export default function LoginPage() {
             >
               {submitting ? 'Вход...' : 'Войти'}
             </button>
+            <p className="text-center text-sm text-zinc-400">
+              <Link href="/forgot-password" className="text-[#00B4D8] hover:underline">
+                Забыли пароль?
+              </Link>
+            </p>
             <button
               type="button"
               className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10 transition-colors"

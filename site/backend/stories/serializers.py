@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Story, Genre, Author
+from .models import Story, Genre, Author, Review
 
 
 class GenreSerializer(serializers.ModelSerializer):
@@ -54,3 +54,25 @@ class StorySerializer(serializers.ModelSerializer):
         if request and url and not url.startswith(('http://', 'https://')):
             return request.build_absolute_uri(url)
         return url
+
+
+class ReviewSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+
+    class Meta:
+        model = Review
+        fields = ['id', 'user', 'user_email', 'story', 'rating', 'text', 'created_at']
+        read_only_fields = ['user', 'created_at']
+
+    def validate_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError('Оценка должна быть от 1 до 5.')
+        return value
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        story = validated_data['story']
+        if Review.objects.filter(user=user, story=story).exists():
+            raise serializers.ValidationError({'non_field_errors': ['Вы уже оставили отзыв на эту историю.']})
+        validated_data['user'] = user
+        return super().create(validated_data)

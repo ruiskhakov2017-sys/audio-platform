@@ -7,6 +7,8 @@ import { GlobalPlayerBar } from '@/components/player/GlobalPlayerBar';
 import { PaywallModal } from '@/components/ui/PaywallModal';
 import { AuthToast } from '@/components/ui/AuthToast';
 import { AuthInitializer } from '@/components/auth/AuthInitializer';
+import { ToasterSonner } from '@/components/ui/ToasterSonner';
+import { Footer } from '@/components/layout/Footer';
 
 const philosopher = Philosopher({
   subsets: ['cyrillic', 'latin'],
@@ -23,6 +25,23 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: "EroticAudio — искусство звука для вашего наслаждения",
   description: "Аудио-портал эротического контента. Погружение, звук и воображение.",
+  manifest: "/manifest.json",
+  themeColor: "#00B4D8",
+  viewport: {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 1,
+    viewportFit: "cover",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "EroticAudio",
+  },
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({
@@ -35,11 +54,15 @@ export default function RootLayout({
         style={{ backgroundColor: '#000814' }}
       >
         <AuthInitializer />
-        {children}
+        <div className="flex flex-col min-h-screen">
+          {children}
+          <Footer />
+        </div>
         <GlobalAudioPlayer />
         <GlobalPlayerBar />
         <PaywallModal />
         <AuthToast />
+        <ToasterSonner />
       </body>
     </html>
   );

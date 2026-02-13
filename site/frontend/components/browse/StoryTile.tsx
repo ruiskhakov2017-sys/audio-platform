@@ -1,12 +1,13 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Play, Crown, Heart, Lock } from 'lucide-react';
+import { Play, Heart, Lock } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useState } from 'react';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { usePlayerStore } from '@/store/playerStore';
+import { toggleFavoriteApi } from '@/lib/favoritesApi';
 import type { Story } from '@/types/story';
 
 interface StoryTileProps {
@@ -26,10 +27,17 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
     const { setTrack, setIsPlaying } = usePlayerStore();
     const liked = isLiked(String(id));
 
-    const handleLikeClick = (e: React.MouseEvent) => {
+    const handleLikeClick = async (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        toggleLike(String(id));
+        const slug = story?.slug;
+        const useApi = Boolean(slug && process.env.NEXT_PUBLIC_API_URL && typeof window !== 'undefined' && localStorage.getItem('auth_access_token'));
+        if (useApi) {
+            const res = await toggleFavoriteApi(slug!);
+            if (res) toggleLike(String(id));
+        } else {
+            toggleLike(String(id));
+        }
     };
 
     const handlePlayClick = (e: React.MouseEvent) => {
