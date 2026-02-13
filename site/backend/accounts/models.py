@@ -14,7 +14,9 @@ class Bookmark(models.Model):
     class Meta:
         verbose_name = "Избранное"
         verbose_name_plural = "Избранное"
-        unique_together = [['user', 'story_id']]
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'story_id'], name='accounts_bookmark_user_story_id_uniq'),
+        ]
 
     def __str__(self):
         return f"{self.user_id} -> story {self.story_id}"

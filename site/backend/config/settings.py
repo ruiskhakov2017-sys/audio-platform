@@ -213,6 +213,8 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 # Продакшен: HTTPS и безопасные куки
+# За прокси (Railway/Vercel) клиент уже на HTTPS; прокси шлёт X-Forwarded-Proto
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 if not DEBUG:
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
