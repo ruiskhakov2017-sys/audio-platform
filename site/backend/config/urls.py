@@ -3,8 +3,10 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from accounts.views import ContactView, MockPaymentView, AdminStatsView
+from config.views import root_view
 
 urlpatterns = [
+    path('', root_view),
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/contact/', ContactView.as_view(), name='contact'),
