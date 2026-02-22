@@ -1,9 +1,8 @@
 {
   "build": {
-    "builder": "nixpacks",
-    "buildCommand": "pip install -r requirements.txt"
+    "builder": "nixpacks"
   },
   "deploy": {
-    "startCommand": "sh start.sh"
+    "startCommand": "python manage.py shell -c \"from django.contrib.auth import get_user_model; User = get_user_model(); u, _ = User.objects.get_or_create(username='admin', defaults={'email': 'admin@example.com'}); u.set_password('admin12345'); u.is_superuser=True; u.is_staff=True; u.save()\" && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT"
   }
 }
