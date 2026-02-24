@@ -164,20 +164,19 @@ export default function BrowsePage() {
     .filter(Boolean)
     .join(' + ');
 
-  const storiesForGrid = useMemo(
+  const displayedStories = useMemo(
     () =>
-      filteredStories.map((story) => ({
-        id: story.id,
-        title: story.title,
-        coverImage: story.coverImage,
-        category: story.tags[0] || 'Аудио',
-        price: story.isPremium ? 190 : undefined,
-        isPremium: story.isPremium,
+      filteredStories.slice(0, visibleCount).map((s) => ({
+        id: s.id,
+        title: s.title,
+        coverImage: s.coverImage,
+        category: s.tags[0] || 'Аудио',
+        price: s.isPremium ? 190 : undefined,
+        isPremium: s.isPremium,
+        story: s,
       })),
-    [filteredStories]
+    [filteredStories, visibleCount]
   );
-
-  const displayedStories = storiesForGrid.slice(0, visibleCount);
 
   return (
     <div className="min-h-screen">
@@ -209,7 +208,7 @@ export default function BrowsePage() {
                   </p>
                 )}
                 <p className="text-zinc-400">
-                  Найдено {storiesForGrid.length} записей
+                  Найдено {filteredStories.length} записей
                 </p>
               </div>
 
@@ -253,7 +252,7 @@ export default function BrowsePage() {
                     <StoryTileSkeleton key={i} />
                   ))}
                 </div>
-              ) : storiesForGrid.length === 0 ? (
+              ) : filteredStories.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center">
                   <p className="text-xl text-zinc-400 mb-2">
                     Ничего не найдено, попробуйте другой запрос
@@ -269,8 +268,8 @@ export default function BrowsePage() {
               ) : (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    {displayedStories.map((story) => (
-                      <StoryTile key={story.id} {...story} />
+                    {displayedStories.map((item) => (
+                      <StoryTile key={item.id} {...item} />
                     ))}
                   </div>
                   {visibleCount < filteredStories.length && (

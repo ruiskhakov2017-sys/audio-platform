@@ -46,9 +46,7 @@ class MeSerializer(serializers.Serializer):
         url = profile.avatar.url
         if request and url and not url.startswith(('http://', 'https://')):
             return request.build_absolute_uri(url)
-        return url
-
-    def to_representation(self, instance):
+        return url    def to_representation(self, instance):
         profile = getattr(instance, 'profile', None)
         return {
             'id': instance.id,

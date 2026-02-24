@@ -1,6 +1,6 @@
 'use server';
 
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createClient } from '@supabase/supabase-js';
 import { r2, R2_BUCKET, R2_PUBLIC_URL } from '@/lib/r2';
@@ -75,4 +75,54 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
     return { success: false, error: error.message };
   }
   return { success: true, id: data?.id };
+}
+
+export type UpdateStoryGenreResult = { success: true } | { success: false; error: string };
+
+export async function updateStoryGenre(
+  id: number,
+  genre: string,
+  tags?: string[]
+): Promise<UpdateStoryGenreResult> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    return { success: false, error: 'Supabase не настроен' };
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const updates: Record<string, unknown> = { genre };
+  if (tags != null) updates.tags = tags;
+  const { error } = await supabase.from('stories').update(updates).eq('id', id);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+export type DeleteStoryResult = { success: true } | { success: false; error: string };
+
+export async function deleteStory(id: number): Promise<DeleteStoryResult> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    return { success: false, error: 'Supabase не настроен' };
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: row, error: fetchErr } = await supabase
+    .from('stories')
+    .select('audio_url')
+    .eq('id', id)
+    .single();
+  if (fetchErr || !row) return { success: false, error: fetchErr?.message ?? 'История не найдена' };
+
+  const audioUrl = row.audio_url as string | null;
+  if (audioUrl && r2) {
+    try {
+      const u = new URL(audioUrl);
+      const key = u.pathname.replace(/^\//, '');
+      if (key) {
+        await r2.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+      }
+    } catch {
+      // R2 delete failed — continue with DB delete
+    }
+  }
+
+  const { error: deleteErr } = await supabase.from('stories').delete().eq('id', id);
+  if (deleteErr) return { success: false, error: deleteErr.message };
+  return { success: true };
 }
