@@ -126,7 +126,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ error: null });
     if (useDjangoAuth()) {
       const result = await registerWithDjango(email, password);
-      if ('error' in result && result.error && !result.tokens?.access) {
+      if ('error' in result && result.error) {
         set({ error: result.error });
         return { error: new Error(result.error), needsEmailConfirm: false };
       }
