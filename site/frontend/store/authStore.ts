@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/utils/supabase/client';
-import { loginWithDjango, registerWithDjango, fetchMeWithDjango } from '@/lib/authApi';
+import { loginWithDjango, registerWithDjango, fetchMeWithDjango, type MeResponse } from '@/lib/authApi';
 import { fetchFavoritesFromApi } from '@/lib/favoritesApi';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
