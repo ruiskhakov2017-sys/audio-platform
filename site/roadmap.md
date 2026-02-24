@@ -89,6 +89,6 @@
 ## 11) Финальные проверки и релиз
 - [x] Проверить безопасность .env и доступы к S3 (DEBUG=False по умолчанию, ALLOWED_HOSTS/CORS из env, SSL-куки)
 - [x] Провести базовый QA: список/деталка/поиск/плеер
-- [x] Настроить деплой: backend (Railway), frontend (Vercel)
+- [x] Настроить деплой: Supabase, Cloudflare, frontend (Vercel)
 - [x] Настроить домен, HTTPS, резервные копии БД
 - [x] Добавить мониторинг (Sentry: backend SENTRY_DSN, frontend @sentry/nextjs)
