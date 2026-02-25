@@ -1,32 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Pencil, Trash2, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory } from '@/lib/stories';
-import { updateStoryGenre, deleteStory } from '@/app/actions/upload';
+import { updateStoryGenresAndTags, deleteStory } from '@/app/actions/upload';
 import type { Story } from '@/types/story';
-
-const GENRES = [
-  'asmr',
-  'romance',
-  'sci-fi',
-  'city',
-  'night',
-  'neon',
-  'soft',
-  'voice',
-  'premium',
-  'drama',
-  'thriller',
-  'ambient',
-  'mystery',
-  'hypnosis',
-  'roleplay',
-  'domination',
-];
 
 export default function AdminStoriesPage() {
   const [list, setList] = useState<Story[]>([]);
@@ -34,8 +15,13 @@ export default function AdminStoriesPage() {
   const [search, setSearch] = useState('');
   const [genreFilter, setGenreFilter] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editGenre, setEditGenre] = useState('');
+  const [editTags, setEditTags] = useState('');
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const uniqueTags = useMemo(() => {
+    const set = new Set<string>();
+    list.forEach((s) => s.tags.forEach((t) => set.add(t)));
+    return Array.from(set).sort();
+  }, [list]);
 
   const fetchStories = useCallback(async () => {
     if (!supabase) {
@@ -57,22 +43,20 @@ export default function AdminStoriesPage() {
 
   const filtered = list.filter((s) => {
     const q = search.trim().toLowerCase();
-    if (q && !s.title.toLowerCase().includes(q) && !s.authorName.toLowerCase().includes(q)) return false;
+    if (q && !s.title.toLowerCase().includes(q)) return false;
     if (genreFilter && !s.tags.includes(genreFilter)) return false;
     return true;
   });
 
-  const handleGenreSave = async (id: number) => {
-    const tags = editGenre ? [editGenre] : [];
-    const res = await updateStoryGenre(id, editGenre || '', tags);
+  const handleTagsSave = async (id: number) => {
+    const tagsArray = editTags.split(',').map((t) => t.trim()).filter(Boolean);
+    const res = await updateStoryGenresAndTags(id, undefined, tagsArray);
     if (res.success) {
       setList((prev) =>
-        prev.map((s) =>
-          s.id === id ? { ...s, tags: tags.length ? tags : s.tags, authorName: s.authorName } : s
-        )
+        prev.map((s) => (s.id === id ? { ...s, tags: tagsArray.length ? tagsArray : s.tags } : s))
       );
       setEditingId(null);
-      setEditGenre('');
+      setEditTags('');
     } else {
       alert(res.error);
     }
@@ -109,7 +93,7 @@ export default function AdminStoriesPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск по названию или автору..."
+            placeholder="Поиск по названию..."
             className="w-full pl-9 pr-4 py-2 rounded-lg border border-zinc-700 bg-zinc-900 text-white placeholder:text-zinc-500 focus:border-cyan-600 focus:outline-none text-sm"
           />
         </div>
@@ -118,8 +102,8 @@ export default function AdminStoriesPage() {
           onChange={(e) => setGenreFilter(e.target.value)}
           className="px-4 py-2 rounded-lg border border-zinc-700 bg-zinc-900 text-white focus:border-cyan-600 focus:outline-none text-sm min-w-[160px]"
         >
-          <option value="">Все жанры</option>
-          {GENRES.map((g) => (
+          <option value="">Все теги</option>
+          {uniqueTags.map((g) => (
             <option key={g} value={g}>
               {g}
             </option>
@@ -135,8 +119,8 @@ export default function AdminStoriesPage() {
             <thead>
               <tr className="border-b border-zinc-800 text-left text-zinc-500">
                 <th className="p-4 font-medium w-20">Обложка</th>
-                <th className="p-4 font-medium">Название / Автор</th>
-                <th className="p-4 font-medium">Жанр</th>
+                <th className="p-4 font-medium">Название</th>
+                <th className="p-4 font-medium">Теги / Жанры</th>
                 <th className="p-4 font-medium">Статус</th>
                 <th className="p-4 font-medium w-28">Действия</th>
               </tr>
@@ -166,29 +150,21 @@ export default function AdminStoriesPage() {
                     </div>
                   </td>
                   <td className="p-4">
-                    <div>
-                      <p className="text-white font-medium">{story.title}</p>
-                      <p className="text-zinc-500 text-xs">{story.authorName || '—'}</p>
-                    </div>
+                    <p className="text-white font-medium">{story.title}</p>
                   </td>
                   <td className="p-4 text-zinc-400">
                     {editingId === story.id ? (
-                      <div className="flex items-center gap-1">
-                        <select
-                          value={editGenre}
-                          onChange={(e) => setEditGenre(e.target.value)}
-                          className="px-2 py-1 rounded border border-zinc-600 bg-zinc-800 text-white text-xs focus:border-cyan-500 focus:outline-none"
-                        >
-                          <option value="">—</option>
-                          {GENRES.map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                        </select>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <input
+                          type="text"
+                          value={editTags}
+                          onChange={(e) => setEditTags(e.target.value)}
+                          className="px-2 py-1 rounded border border-zinc-600 bg-zinc-800 text-white text-xs focus:border-cyan-500 focus:outline-none min-w-[120px]"
+                          placeholder="тег1, тег2"
+                        />
                         <button
                           type="button"
-                          onClick={() => handleGenreSave(story.id)}
+                          onClick={() => handleTagsSave(story.id)}
                           className="px-2 py-1 rounded bg-cyan-600 text-white text-xs hover:bg-cyan-500"
                         >
                           OK
@@ -197,7 +173,7 @@ export default function AdminStoriesPage() {
                           type="button"
                           onClick={() => {
                             setEditingId(null);
-                            setEditGenre('');
+                            setEditTags('');
                           }}
                           className="px-2 py-1 rounded bg-zinc-700 text-zinc-400 text-xs hover:bg-zinc-600"
                         >
@@ -205,7 +181,7 @@ export default function AdminStoriesPage() {
                         </button>
                       </div>
                     ) : (
-                      <span>{story.tags[0] ?? '—'}</span>
+                      <span className="text-xs">{story.tags.slice(0, 3).join(', ') || '—'}</span>
                     )}
                   </td>
                   <td className="p-4">
@@ -225,7 +201,7 @@ export default function AdminStoriesPage() {
                         type="button"
                         onClick={() => {
                           setEditingId(story.id);
-                          setEditGenre(story.tags[0] ?? '');
+                          setEditTags(story.tags.join(', '));
                         }}
                         disabled={editingId != null && editingId !== story.id}
                         className="p-1.5 rounded text-zinc-500 hover:text-white hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

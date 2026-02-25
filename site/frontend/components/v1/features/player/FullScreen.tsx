@@ -28,7 +28,6 @@ export default function FullScreen() {
           <div>
             <div className="text-xs uppercase tracking-[0.3em] text-white/40">Now Playing</div>
             <div className="mt-2 text-2xl font-semibold text-white">{currentTrack?.title || 'No track'}</div>
-            <div className="text-sm text-white/60">{currentTrack?.authorName || ''}</div>
           </div>
           <button
             onClick={toggleExpand}

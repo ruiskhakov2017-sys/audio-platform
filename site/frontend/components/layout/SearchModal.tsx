@@ -108,7 +108,6 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-white truncate">{story.title}</p>
-                      <p className="text-sm text-zinc-400 truncate">{story.authorName}</p>
                     </div>
                   </button>
                 </li>

@@ -42,8 +42,7 @@ export async function getPresignedUrl(
 
 export type SaveStoryPayload = {
   title: string;
-  author: string;
-  genre: string;
+  genres: string[];
   image_url: string;
   audio_url: string;
   duration: number;
@@ -61,13 +60,16 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const row: Record<string, unknown> = {
     title: payload.title,
-    author: payload.author,
-    genre: payload.genre,
     image_url: payload.image_url,
     audio_url: payload.audio_url,
     duration: payload.duration,
     is_premium: payload.is_premium,
   };
+  row.author = '';
+  if (payload.genres?.length) {
+    row.genres = payload.genres;
+    row.genre = payload.genres[0] ?? null;
+  }
   if (payload.description != null) row.description = payload.description;
   if (payload.tags != null) row.tags = payload.tags;
   const { data, error } = await supabase.from('stories').insert(row).select('id').single();
@@ -79,17 +81,19 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
 
 export type UpdateStoryGenreResult = { success: true } | { success: false; error: string };
 
-export async function updateStoryGenre(
+export async function updateStoryGenresAndTags(
   id: number,
-  genre: string,
-  tags?: string[]
+  genres: string[] | undefined,
+  tags: string[] | undefined
 ): Promise<UpdateStoryGenreResult> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     return { success: false, error: 'Supabase не настроен' };
   }
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const updates: Record<string, unknown> = { genre };
-  if (tags != null) updates.tags = tags;
+  const updates: Record<string, unknown> = {};
+  if (genres !== undefined) updates.genres = genres;
+  if (tags !== undefined) updates.tags = tags;
+  if (Object.keys(updates).length === 0) return { success: true };
   const { error } = await supabase.from('stories').update(updates).eq('id', id);
   if (error) return { success: false, error: error.message };
   return { success: true };

@@ -90,9 +90,6 @@ export default function PlayerBar() {
                 <div className="truncate text-sm font-bold tracking-tight text-white">
                   {currentTrack.title}
                 </div>
-                <div className="truncate text-xs text-zinc-400">
-                  {currentTrack.authorName}
-                </div>
               </div>
             </>
           ) : (

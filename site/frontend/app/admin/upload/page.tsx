@@ -5,12 +5,9 @@ import Image from 'next/image';
 import { Music, ImageIcon } from 'lucide-react';
 import { getPresignedUrl, saveStoryToSupabase } from '@/app/actions/upload';
 
-const GENRES = ['asmr', 'romance', 'sci-fi', 'city', 'night', 'neon', 'soft', 'voice', 'premium', 'drama', 'thriller'];
-
 export default function AdminUploadPage() {
   const [title, setTitle] = useState('');
-  const [author, setAuthor] = useState('');
-  const [genre, setGenre] = useState('');
+  const [genresInput, setGenresInput] = useState('');
   const [tags, setTags] = useState('');
   const [description, setDescription] = useState('');
   const [isPremium, setIsPremium] = useState(false);
@@ -45,8 +42,7 @@ export default function AdminUploadPage() {
 
   const resetForm = () => {
     setTitle('');
-    setAuthor('');
-    setGenre('');
+    setGenresInput('');
     setTags('');
     setDescription('');
     setIsPremium(false);
@@ -102,17 +98,22 @@ export default function AdminUploadPage() {
         setSubmitting(false);
         return;
       }
+      const genresList = genresInput.split(',').map((t) => t.trim()).filter(Boolean);
       const tagsList = tags.split(',').map((t) => t.trim()).filter(Boolean);
+      if (genresList.length === 0) {
+        setMessage({ type: 'error', text: 'Укажите хотя бы один жанр (через запятую).' });
+        setSubmitting(false);
+        return;
+      }
       const saveResult = await saveStoryToSupabase({
         title,
-        author,
-        genre,
+        genres: genresList,
         image_url: imagePresign.publicUrl,
         audio_url: audioPresign.publicUrl,
         duration: 0,
         is_premium: isPremium,
         ...(description && { description }),
-        ...(tagsList.length ? { tags: tagsList } : { tags: [genre] }),
+        ...(tagsList.length ? { tags: tagsList } : {}),
       });
       if (!saveResult.success) {
         setMessage({ type: 'error', text: saveResult.error });
@@ -255,18 +256,6 @@ export default function AdminUploadPage() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-zinc-400 mb-1.5">Автор</label>
-          <input
-            type="text"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            required
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-white placeholder:text-zinc-500 focus:border-cyan-600 focus:outline-none"
-            placeholder="Имя автора"
-          />
-        </div>
-
-        <div>
           <label className="block text-sm font-medium text-zinc-400 mb-1.5">Описание</label>
           <textarea
             value={description}
@@ -279,18 +268,15 @@ export default function AdminUploadPage() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-zinc-400 mb-1.5">Жанр</label>
-          <select
-            value={genre}
-            onChange={(e) => setGenre(e.target.value)}
+          <label className="block text-sm font-medium text-zinc-400 mb-1.5">Жанры (через запятую, несколько)</label>
+          <input
+            type="text"
+            value={genresInput}
+            onChange={(e) => setGenresInput(e.target.value)}
             required
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-white focus:border-cyan-600 focus:outline-none"
-          >
-            <option value="">Выберите жанр</option>
-            {GENRES.map((g) => (
-              <option key={g} value={g}>{g}</option>
-            ))}
-          </select>
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-white placeholder:text-zinc-500 focus:border-cyan-600 focus:outline-none"
+            placeholder="романтика, 18+, по принуждению"
+          />
         </div>
 
         <div>

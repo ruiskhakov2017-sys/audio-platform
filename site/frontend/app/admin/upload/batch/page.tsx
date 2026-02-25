@@ -5,8 +5,6 @@ import Image from 'next/image';
 import { Music, ImageIcon, Trash2, Loader2, Check, AlertCircle } from 'lucide-react';
 import { getPresignedUrl, saveStoryToSupabase } from '@/app/actions/upload';
 
-const GENRES = ['asmr', 'romance', 'sci-fi', 'city', 'night', 'neon', 'soft', 'voice', 'premium', 'drama', 'thriller'];
-
 export type DraftStatus = 'idle' | 'uploading' | 'success' | 'error';
 
 export type DraftStory = {
@@ -15,8 +13,7 @@ export type DraftStory = {
   coverFile: File | null;
   coverPreview: string | null;
   title: string;
-  author: string;
-  genre: string;
+  genres: string[];
   tags: string;
   status: DraftStatus;
   errorMessage?: string;
@@ -34,6 +31,8 @@ export default function BatchUploadPage() {
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const MAX_STORIES = 10;
+
   const handleAudioSelect = useCallback((files: FileList | null) => {
     if (!files?.length) return;
     const list = Array.from(files);
@@ -42,20 +41,33 @@ export default function BatchUploadPage() {
     );
     const toAdd = audioFiles.length > 0 ? audioFiles : list;
     if (toAdd.length === 0) return;
-    const newDrafts: DraftStory[] = toAdd.map((audioFile) => ({
-      id: generateId(),
-      audioFile,
-      coverFile: null,
-      coverPreview: null,
-      title: audioFile.name.replace(/\.[^/.]+$/, ''),
-      author: '',
-      genre: '',
-      tags: '',
-      status: 'idle',
-    }));
-    setStories((prev) => [...prev, ...newDrafts]);
-    setAddMessage(`Добавлено треков: ${toAdd.length}${audioFiles.length !== list.length ? ' (часть файлов не распознана как аудио)' : ''}`);
-    setTimeout(() => setAddMessage(null), 4000);
+    setStories((prev) => {
+      const free = MAX_STORIES - prev.length;
+      if (free <= 0) return prev;
+      const slice = toAdd.slice(0, free);
+      const newDrafts: DraftStory[] = slice.map((audioFile) => ({
+        id: generateId(),
+        audioFile,
+        coverFile: null,
+        coverPreview: null,
+        title: audioFile.name.replace(/\.[^/.]+$/, ''),
+        genres: [],
+        tags: '',
+        status: 'idle',
+      }));
+      const added = newDrafts.length;
+      setTimeout(
+        () =>
+          setAddMessage(
+            added > 0
+              ? `Добавлено: ${added}. Макс. ${MAX_STORIES} рассказов за раз.${added < toAdd.length ? ' Часть не добавлена (лимит).' : ''}`
+              : `Достигнут лимит ${MAX_STORIES} рассказов.`
+          ),
+        0
+      );
+      setTimeout(() => setAddMessage(null), 4000);
+      return [...prev, ...newDrafts];
+    });
   }, []);
 
   const handleDrop = useCallback(
@@ -81,7 +93,7 @@ export default function BatchUploadPage() {
   }, []);
 
   const updateDraft = useCallback(
-    (id: string, patch: Partial<Pick<DraftStory, 'title' | 'author' | 'genre' | 'tags'>>) => {
+    (id: string, patch: Partial<Pick<DraftStory, 'title' | 'genres' | 'tags'>>) => {
       setStories((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
     },
     []
@@ -106,9 +118,8 @@ export default function BatchUploadPage() {
       (s) =>
         s.coverFile &&
         s.title.trim() &&
-        s.author.trim() &&
-        s.genre &&
-        tagsList(s.tags).length > 0
+        s.genres.length > 0 &&
+        tagsList(s.tags).length >= 0
     );
   const hasIdle = stories.some((s) => s.status === 'idle' || s.status === 'error');
 
@@ -158,8 +169,7 @@ export default function BatchUploadPage() {
         }
         const saveResult = await saveStoryToSupabase({
           title: story.title.trim(),
-          author: story.author.trim(),
-          genre: story.genre,
+          genres: story.genres,
           image_url: coverPresign.publicUrl,
           audio_url: audioPresign.publicUrl,
           duration: 0,
@@ -193,24 +203,30 @@ export default function BatchUploadPage() {
     <div className="p-8 max-w-4xl mx-auto">
       <h1 className="text-2xl font-semibold text-white mb-2">Пакетная загрузка историй</h1>
       <p className="text-sm text-zinc-500 mb-8">
-        Выберите несколько аудиофайлов, для каждого задайте обложку и метаданные, затем опубликуйте все.
+        От 1 до 10 рассказов за раз: выберите аудиофайлы, для каждого задайте обложку, жанры и теги, затем опубликуйте.
       </p>
 
       {/* Dropzone */}
       <div
         onDragOver={(e) => {
           e.preventDefault();
-          setDragActive(true);
+          if (stories.length < MAX_STORIES) setDragActive(true);
         }}
         onDragLeave={() => setDragActive(false)}
         onDrop={handleDrop}
         className={`mb-10 rounded-xl border-2 border-dashed flex flex-col items-center justify-center py-14 px-6 transition-colors ${
-          dragActive ? 'border-cyan-500 bg-cyan-500/10' : 'border-zinc-700 bg-zinc-800/50'
+          stories.length >= MAX_STORIES
+            ? 'border-zinc-700 bg-zinc-800/30 opacity-70'
+            : dragActive
+              ? 'border-cyan-500 bg-cyan-500/10'
+              : 'border-zinc-700 bg-zinc-800/50'
         }`}
       >
         <Music className="w-14 h-14 text-zinc-500 mb-3" />
-        <p className="text-zinc-400 mb-1">Выберите аудиофайлы (можно много)</p>
-        <p className="text-sm text-zinc-500 mb-4">MP3, WAV и др. — по одному файлу = одна история</p>
+        <p className="text-zinc-400 mb-1">
+          {stories.length >= MAX_STORIES ? `Достигнут лимит (${MAX_STORIES})` : 'Выберите аудиофайлы (до 10)'}
+        </p>
+        <p className="text-sm text-zinc-500 mb-4">MP3, WAV и др. — макс. 10 рассказов за раз</p>
         <input
           ref={fileInputRef}
           type="file"
@@ -221,11 +237,13 @@ export default function BatchUploadPage() {
             handleAudioSelect(e.target.files);
             e.target.value = '';
           }}
+          disabled={stories.length >= MAX_STORIES}
         />
         <button
           type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="px-5 py-2.5 rounded-lg bg-cyan-600 text-white font-medium hover:bg-cyan-500 transition-colors"
+          onClick={() => stories.length < MAX_STORIES && fileInputRef.current?.click()}
+          disabled={stories.length >= MAX_STORIES}
+          className="px-5 py-2.5 rounded-lg bg-cyan-600 text-white font-medium hover:bg-cyan-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Выбрать файлы
         </button>
@@ -263,7 +281,6 @@ export default function BatchUploadPage() {
               <DraftCard
                 key={story.id}
                 story={story}
-                genres={GENRES}
                 onCoverSelect={(file) => handleCoverSelect(story.id, file)}
                 onUpdate={(patch) => updateDraft(story.id, patch)}
                 onRemove={() => removeDraft(story.id)}
@@ -305,15 +322,25 @@ export default function BatchUploadPage() {
 
 type DraftCardProps = {
   story: DraftStory;
-  genres: string[];
   onCoverSelect: (file: File) => void;
-  onUpdate: (patch: Partial<Pick<DraftStory, 'title' | 'author' | 'genre' | 'tags'>>) => void;
+  onUpdate: (patch: Partial<Pick<DraftStory, 'title' | 'genres' | 'tags'>>) => void;
   onRemove: () => void;
 };
 
-function DraftCard({ story, genres, onCoverSelect, onUpdate, onRemove }: DraftCardProps) {
+function DraftCard({ story, onCoverSelect, onUpdate, onRemove }: DraftCardProps) {
   const coverInputRef = useRef<HTMLInputElement>(null);
+  const genreInputRef = useRef<HTMLInputElement>(null);
   const isDisabled = story.status === 'uploading' || story.status === 'success';
+
+  const handleAddGenre = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const v = (e.target as HTMLInputElement).value.trim();
+    if (!v) return;
+    if (story.genres.includes(v)) return;
+    onUpdate({ genres: [...story.genres, v] });
+    (e.target as HTMLInputElement).value = '';
+  };
 
   const borderColor =
     story.status === 'success'
@@ -384,61 +411,45 @@ function DraftCard({ story, genres, onCoverSelect, onUpdate, onRemove }: DraftCa
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-500 mb-1">Автор</label>
+            <label className="block text-xs text-zinc-500 mb-1">Жанры (несколько)</label>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {story.genres.map((g) => (
+                <span
+                  key={g}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-600/30 text-cyan-200 text-xs"
+                >
+                  {g}
+                  <button
+                    type="button"
+                    onClick={() => onUpdate({ genres: story.genres.filter((x) => x !== g) })}
+                    disabled={isDisabled}
+                    className="hover:text-white disabled:opacity-50"
+                    aria-label={`Удалить ${g}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
             <input
+              ref={genreInputRef}
               type="text"
-              value={story.author}
-              onChange={(e) => onUpdate({ author: e.target.value })}
               disabled={isDisabled}
+              onKeyDown={handleAddGenre}
+              placeholder="Введите жанр и Enter"
               className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white text-sm placeholder:text-zinc-500 focus:border-cyan-600 focus:outline-none disabled:opacity-70"
-              placeholder="Автор"
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-500 mb-1">Жанр</label>
-            <select
-              value={story.genre}
-              onChange={(e) => onUpdate({ genre: e.target.value })}
-              disabled={isDisabled}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white text-sm focus:border-cyan-600 focus:outline-none disabled:opacity-70"
-            >
-              <option value="">Выберите жанр</option>
-              {genres.map((g) => (
-                <option key={g} value={g}>{g}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-zinc-500 mb-1">Теги (обязательно, через запятую)</label>
+            <label className="block text-xs text-zinc-500 mb-1">Теги (через запятую)</label>
             <input
               type="text"
               value={story.tags}
               onChange={(e) => onUpdate({ tags: e.target.value })}
               disabled={isDisabled}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white text-sm placeholder:text-zinc-500 focus:border-cyan-600 focus:outline-none disabled:opacity-70"
-              placeholder="Выберите ниже или введите свои"
+              placeholder="тег1, тег2, тег3"
             />
-            <p className="text-xs text-zinc-500 mt-1.5 mb-1">Вставить тег:</p>
-            <div className="flex flex-wrap gap-1.5">
-              {genres.map((tag) => {
-                const appendTag = () => {
-                  const cur = story.tags.trim();
-                  const sep = cur ? (cur.endsWith(',') ? '' : ', ') : '';
-                  onUpdate({ tags: cur + sep + tag + ', ' });
-                };
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={appendTag}
-                    disabled={isDisabled}
-                    className="px-2.5 py-1 rounded-md bg-zinc-700 text-zinc-300 text-xs hover:bg-cyan-600 hover:text-white transition-colors disabled:opacity-50"
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
-            </div>
           </div>
         </div>
 

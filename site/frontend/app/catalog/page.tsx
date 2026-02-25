@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
-import { mapRowToStory } from "@/lib/stories";
+import { getStoriesForCatalog } from "@/app/actions/catalog";
 import { fetchStoriesFromApi, useDjangoApi } from "@/lib/api";
 import { StoryCard } from "@/components/v1/ui/StoryCard";
 import { getAllTags, filterStoriesByTags, getUniqueCategories } from "@/lib/tags";
@@ -20,24 +19,14 @@ export default function CatalogPage() {
       fetchStoriesFromApi().then(setStories);
       return;
     }
-    if (!supabase) return;
-    supabase
-      .from("stories")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error || !data) return;
-        setStories(data.map(mapRowToStory));
-      });
+    getStoriesForCatalog().then(setStories);
   }, []);
 
   const allTags = getAllTags(stories);
   const categories = getUniqueCategories(allTags);
 
-  const filteredStories = filterStoriesByTags(stories, selectedTags).filter(
-    (story) =>
-      story.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      story.authorName.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredStories = filterStoriesByTags(stories, selectedTags).filter((story) =>
+    story.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const toggleTag = (tag: string) => {

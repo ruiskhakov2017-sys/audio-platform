@@ -58,10 +58,7 @@ function filterAndSortStories(
 
   const q = searchQuery.trim().toLowerCase();
   if (q) {
-    list = list.filter(
-      (s) =>
-        s.title.toLowerCase().includes(q) || s.authorName.toLowerCase().includes(q)
-    );
+    list = list.filter((s) => s.title.toLowerCase().includes(q));
   }
 
   return sortStories(list, activeSort);
