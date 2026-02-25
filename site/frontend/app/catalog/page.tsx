@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { getStoriesForCatalog } from "@/app/actions/catalog";
 import { fetchStoriesFromApi, useDjangoApi } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import { mapRowToStory } from "@/lib/stories";
 import { StoryCard } from "@/components/v1/ui/StoryCard";
 import { getAllTags, filterStoriesByTags, getUniqueCategories } from "@/lib/tags";
 import { Search, Filter, X } from "lucide-react";
@@ -15,11 +17,30 @@ export default function CatalogPage() {
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
-    if (useDjangoApi()) {
-      fetchStoriesFromApi().then(setStories);
-      return;
+    async function load() {
+      const fromServer = await getStoriesForCatalog();
+      if (fromServer.length > 0) {
+        setStories(fromServer);
+        return;
+      }
+      if (useDjangoApi()) {
+        const fromApi = await fetchStoriesFromApi();
+        if (fromApi.length > 0) {
+          setStories(fromApi);
+          return;
+        }
+      }
+      if (supabase) {
+        const { data, error } = await supabase
+          .from("stories")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (!error && data?.length) {
+          setStories(data.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0])));
+        }
+      }
     }
-    getStoriesForCatalog().then(setStories);
+    load();
   }, []);
 
   const allTags = getAllTags(stories);

@@ -22,19 +22,44 @@ export default function AdminLayout({
 }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { profile, isAuthenticated, logout } = useAuthStore();
+  const { profile, isAuthenticated, loading, logout } = useAuthStore();
+  const isAdmin = profile?.role === 'admin';
+  const showAccessDenied = !loading && isAuthenticated && !isAdmin && !MOCK_ADMIN_ALLOW_DEV;
 
   useEffect(() => {
-    if (!MOCK_ADMIN_ALLOW_DEV && (!isAuthenticated || profile?.role !== 'admin')) {
-      router.push('/login');
+    if (loading) return;
+    if (!isAuthenticated && !MOCK_ADMIN_ALLOW_DEV) {
+      router.push('/login?redirect=/admin');
       return;
     }
-  }, [isAuthenticated, profile?.role, router]);
+    if (isAuthenticated && !isAdmin && !MOCK_ADMIN_ALLOW_DEV) {
+      return;
+    }
+  }, [loading, isAuthenticated, isAdmin, router]);
 
   const handleLogout = () => {
     logout();
     router.push('/');
   };
+
+  if (showAccessDenied) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-200 flex items-center justify-center p-8">
+        <div className="text-center max-w-md">
+          <h1 className="text-xl font-semibold text-white mb-2">Доступ ограничен</h1>
+          <p className="text-zinc-400 mb-6">
+            Для входа в админ-панель нужна роль администратора. Обратитесь к владельцу сайта или задайте роль в Supabase (User Metadata: role = &quot;admin&quot;).
+          </p>
+          <Link
+            href="/"
+            className="inline-block px-4 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-500"
+          >
+            На главную
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-200 flex">
