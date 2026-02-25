@@ -64,6 +64,7 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
     audio_url: payload.audio_url,
     duration: payload.duration,
     is_premium: payload.is_premium,
+  if (payload.genres?.length && payload.genres.length > 1) (row as Record<string, unknown>).genres = payload.genres;
   };
   row.author = '';
   row.genre = payload.genres?.[0] ?? null;

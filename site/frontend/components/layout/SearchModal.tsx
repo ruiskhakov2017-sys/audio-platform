@@ -105,6 +105,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                           sizes="48px"
                         />
                       )}
+                      <p className="text-sm text-zinc-400 truncate">{story.authorName}</p>
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-white truncate">{story.title}</p>

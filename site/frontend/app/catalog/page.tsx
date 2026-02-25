@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getStoriesForCatalog } from "@/app/actions/catalog";
-import { fetchStoriesFromApi, useDjangoApi } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { mapRowToStory } from "@/lib/stories";
+import { fetchStoriesFromApi, useDjangoApi } from "@/lib/api";
 import { StoryCard } from "@/components/v1/ui/StoryCard";
 import { getAllTags, filterStoriesByTags, getUniqueCategories } from "@/lib/tags";
 import { Search, Filter, X } from "lucide-react";
@@ -17,37 +16,28 @@ export default function CatalogPage() {
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      const fromServer = await getStoriesForCatalog();
-      if (fromServer.length > 0) {
-        setStories(fromServer);
-        return;
-      }
-      if (useDjangoApi()) {
-        const fromApi = await fetchStoriesFromApi();
-        if (fromApi.length > 0) {
-          setStories(fromApi);
-          return;
-        }
-      }
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("stories")
-          .select("*")
-          .order("created_at", { ascending: false });
-        if (!error && data?.length) {
-          setStories(data.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0])));
-        }
-      }
+    if (useDjangoApi()) {
+      fetchStoriesFromApi().then(setStories);
+      return;
     }
-    load();
+    if (!supabase) return;
+    supabase
+      .from("stories")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        setStories(data.map(mapRowToStory));
+      });
   }, []);
 
   const allTags = getAllTags(stories);
   const categories = getUniqueCategories(allTags);
 
-  const filteredStories = filterStoriesByTags(stories, selectedTags).filter((story) =>
-    story.title.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredStories = filterStoriesByTags(stories, selectedTags).filter(
+    (story) =>
+      story.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      story.authorName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const toggleTag = (tag: string) => {

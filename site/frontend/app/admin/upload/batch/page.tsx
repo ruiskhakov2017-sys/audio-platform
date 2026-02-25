@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useRef } from 'react';
 import Image from 'next/image';
+const GENRES = ['asmr', 'romance', 'sci-fi', 'city', 'night', 'neon', 'soft', 'voice', 'premium', 'drama', 'thriller'];
+
 import { Music, ImageIcon, Trash2, Loader2, Check, AlertCircle } from 'lucide-react';
 import { getPresignedUrl, saveStoryToSupabase } from '@/app/actions/upload';
 
@@ -270,6 +272,7 @@ export default function BatchUploadPage() {
         </div>
       )}
 
+                genres={GENRES}
       {/* Drafts list */}
       {stories.length > 0 && (
         <>

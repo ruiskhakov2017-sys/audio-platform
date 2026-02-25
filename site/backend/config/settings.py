@@ -13,21 +13,21 @@ load_dotenv(env_path)
 Django settings for config project.
 """
 
-# SECURITY: из переменных окружения (обязательно задать на проде)
+# SECURITY: из переменных окружения (обязательно задать на Railway)
 SECRET_KEY = os.environ.get(
     'SECRET_KEY',
     'django-insecure-dev-only-change-in-production'
 )
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-# Хосты: из ALLOWED_HOSTS (через запятую) или дефолт локаль + Vercel + Cloudflare Pages
+# Хосты: из ALLOWED_HOSTS (через запятую) или дефолт локаль + Railway
 _allowed_raw = os.environ.get('ALLOWED_HOSTS', '').strip()
 if _allowed_raw:
     ALLOWED_HOSTS = [s.strip() for s in _allowed_raw.split(',') if s.strip()]
 else:
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.vercel.app', '.pages.dev']
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.railway.app']
 
-# CSRF: список из CSRF_TRUSTED_ORIGINS (через запятую) или дефолт для Vercel
+# CSRF: список из CSRF_TRUSTED_ORIGINS (через запятую) или дефолт для Vercel + Railway
 _csrf_raw = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
 if _csrf_raw:
     CSRF_TRUSTED_ORIGINS = [s.strip() for s in _csrf_raw.split(',') if s.strip()]
@@ -106,7 +106,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
-# Database: DATABASE_URL на проде (например Supabase/Postgres), иначе SQLite локально
+# Database: DATABASE_URL на проде (Railway), иначе SQLite локально
 _db_default = {
     'ENGINE': 'django.db.backends.sqlite3',
     'NAME': BASE_DIR / 'db.sqlite3',
@@ -209,12 +209,11 @@ else:
         "https://audio-platform-git-main-ruiskhakov2017-sys-projects.vercel.app",
     ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://[\w\-]+\.vercel\.app$",
-    r"^https://[\w\-]+\.pages\.dev$",
+    r"^https://[\w\-]+\.railway\.app$",
 ]
 
 # Продакшен: HTTPS и безопасные куки
-# За прокси (Vercel / Cloudflare) клиент уже на HTTPS; прокси шлёт X-Forwarded-Proto
+# За прокси (Railway/Vercel) клиент уже на HTTPS; прокси шлёт X-Forwarded-Proto
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 if not DEBUG:
     SECURE_SSL_REDIRECT = True

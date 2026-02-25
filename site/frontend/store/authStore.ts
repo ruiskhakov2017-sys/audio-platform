@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/utils/supabase/client';
-import { loginWithDjango, registerWithDjango, fetchMeWithDjango, type MeResponse } from '@/lib/authApi';
+import { loginWithDjango, registerWithDjango, fetchMeWithDjango } from '@/lib/authApi';
 import { fetchFavoritesFromApi } from '@/lib/favoritesApi';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
@@ -126,9 +126,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ error: null });
     if (useDjangoAuth()) {
       const result = await registerWithDjango(email, password);
-      if ('error' in result && result.error) {
+      if ('error' in result && result.error && !result.tokens?.access) {
         set({ error: result.error });
-        // error branch: result is { error: string }, no tokens
         return { error: new Error(result.error), needsEmailConfirm: false };
       }
       if ('tokens' in result && result.tokens.access) {

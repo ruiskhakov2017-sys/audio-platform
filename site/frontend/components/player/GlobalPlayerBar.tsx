@@ -111,11 +111,13 @@ export function GlobalPlayerBar() {
               {currentTrack.title}
             </p>
             <p className="text-xs text-zinc-400 truncate">
-              {isLocked && (
+              {isLocked ? (
                 <span className="inline-flex items-center gap-1 text-amber-400">
                   <Lock className="w-3 h-3 shrink-0" />
                   Доступно только по подписке
                 </span>
+              ) : (
+                currentTrack.authorName
               )}
             </p>
           </div>

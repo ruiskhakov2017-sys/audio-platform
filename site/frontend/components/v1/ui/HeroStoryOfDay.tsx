@@ -71,6 +71,9 @@ export default function HeroStoryOfDay({ story }: HeroStoryOfDayProps) {
             {isPlayingCurrent ? (
               <span className="h-5 w-5 rounded-sm bg-white" />
             ) : (
+          <span className="text-sm" style={{ color: '#94a3b8' }}>
+            {story.authorName}
+          </span>
               <Play className="ml-1 h-6 w-6 fill-current" />
             )}
           </button>

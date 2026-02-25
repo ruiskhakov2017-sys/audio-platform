@@ -220,16 +220,19 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
           <h3 className="line-clamp-1 text-sm font-bold tracking-tight" style={{ color: '#f1f5f9' }}>
             {story.title}
           </h3>
+          <p className="line-clamp-1 text-xs" style={{ color: '#94a3b8' }}>
+            {story.authorName}
+          </p>
         </div>
       </Link>
 
       {story.tags.length > 0 && (
-        <div className="px-3 pb-3 flex flex-wrap gap-1.5 leading-tight overflow-hidden" style={{ maxHeight: '2.8em' }}>
-          {story.tags.slice(0, 6).map((tag) => (
+        <div className="flex flex-wrap gap-1 px-3 pb-3">
+          {story.tags.slice(0, 3).map((tag) => (
             <Link
               key={tag}
               href={`/browse?tag=${encodeURIComponent(tag)}`}
-              className="rounded px-1.5 py-0.5 text-[10px] transition-opacity hover:opacity-80 shrink-0"
+              className="rounded px-1.5 py-0.5 text-[10px] transition-opacity hover:opacity-80"
               style={{
                 backgroundColor: 'rgba(59, 130, 246, 0.2)',
                 color: '#93c5fd',
