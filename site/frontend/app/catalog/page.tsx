@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
-import { mapRowToStory } from "@/lib/stories";
 import { fetchStoriesFromApi, useDjangoApi } from "@/lib/api";
 import { StoryCard } from "@/components/v1/ui/StoryCard";
 import { getAllTags, filterStoriesByTags, getUniqueCategories } from "@/lib/tags";
@@ -14,30 +12,34 @@ export default function CatalogPage() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (useDjangoApi()) {
-      fetchStoriesFromApi().then(setStories);
-      return;
+    setLoadError(null);
+    const hasSupabase = typeof window !== "undefined" && !!process.env.NEXT_PUBLIC_SUPABASE_URL;
+    async function load() {
+      if (hasSupabase) {
+        const res = await fetch("/api/stories", { cache: "no-store" });
+        const data = res.ok ? await res.json() : [];
+        setStories(Array.isArray(data) ? data : []);
+        if (!res.ok) setLoadError("Ошибка загрузки. В Vercel задайте SUPABASE_SERVICE_ROLE_KEY.");
+        return;
+      }
+      if (useDjangoApi()) {
+        const list = await fetchStoriesFromApi();
+        setStories(Array.isArray(list) ? list : []);
+        return;
+      }
+      setLoadError("Задайте NEXT_PUBLIC_SUPABASE_URL в настройках проекта.");
     }
-    if (!supabase) return;
-    supabase
-      .from("stories")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error || !data) return;
-        setStories(data.map(mapRowToStory));
-      });
+    load().catch(() => setLoadError("Ошибка загрузки каталога."));
   }, []);
 
   const allTags = getAllTags(stories);
   const categories = getUniqueCategories(allTags);
 
-  const filteredStories = filterStoriesByTags(stories, selectedTags).filter(
-    (story) =>
-      story.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      story.authorName.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredStories = filterStoriesByTags(stories, selectedTags).filter((story) =>
+    story.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const toggleTag = (tag: string) => {
@@ -128,13 +130,19 @@ export default function CatalogPage() {
               </div>
             ) : (
               <div className="flex h-64 flex-col items-center justify-center text-center">
-                <p className="text-lg text-gray-400">Ничего не найдено</p>
-                <button
-                  onClick={() => {setSelectedTags([]); setSearchQuery("");}}
-                  className="mt-4 text-purple-400 hover:text-purple-300"
-                >
-                  Сбросить фильтры
-                </button>
+                {loadError ? (
+                  <p className="text-lg text-amber-400">{loadError}</p>
+                ) : (
+                  <>
+                    <p className="text-lg text-gray-400">Ничего не найдено</p>
+                    <button
+                      onClick={() => { setSelectedTags([]); setSearchQuery(""); }}
+                      className="mt-4 text-purple-400 hover:text-purple-300"
+                    >
+                      Сбросить фильтры
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
