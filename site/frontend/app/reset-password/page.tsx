@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { Header } from '@/components/layout/Header';
 import { confirmPasswordResetApi } from '@/lib/passwordResetApi';
+import { createClient } from '@/utils/supabase/client';
 
 function ResetPasswordForm() {
   const router = useRouter();
@@ -16,12 +17,23 @@ function ResetPasswordForm() {
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [supabaseSession, setSupabaseSession] = useState<boolean | null>(null);
 
   useEffect(() => {
-    if (!uid || !token) {
-      toast.error('Неверная или устаревшая ссылка');
+    if (uid && token) return;
+    const supabase = createClient();
+    if (!supabase) {
+      setSupabaseSession(false);
+      return;
     }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSupabaseSession(!!session?.user);
+      if (!session?.user) toast.error('Неверная или устаревшая ссылка');
+    });
   }, [uid, token]);
+
+  const isDjango = uid && token;
+  const showForm = isDjango || supabaseSession === true;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,20 +45,40 @@ function ResetPasswordForm() {
       toast.error('Пароли не совпадают');
       return;
     }
-    if (!uid || !token) return;
     setSubmitting(true);
-    const result = await confirmPasswordResetApi(uid, token, password);
-    setSubmitting(false);
-    if ('error' in result) {
-      toast.error(result.error);
+    if (isDjango) {
+      const result = await confirmPasswordResetApi(uid, token, password);
+      setSubmitting(false);
+      if ('error' in result) {
+        toast.error(result.error);
+        return;
+      }
+      setDone(true);
+      toast.success('Пароль изменён. Войдите с новым паролем.');
+      setTimeout(() => router.push('/login'), 1500);
       return;
     }
-    setDone(true);
-    toast.success('Пароль изменён. Войдите с новым паролем.');
-    setTimeout(() => router.push('/login'), 1500);
+    if (supabaseSession) {
+      const supabase = createClient();
+      if (!supabase) {
+        setSubmitting(false);
+        return;
+      }
+      const { error } = await supabase.auth.updateUser({ password });
+      setSubmitting(false);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      setDone(true);
+      toast.success('Пароль изменён. Войдите с новым паролем.');
+      setTimeout(() => router.push('/login'), 1500);
+    } else {
+      setSubmitting(false);
+    }
   };
 
-  if (!uid || !token) {
+  if (!showForm && supabaseSession === false) {
     return (
       <div className="text-center text-zinc-400">
         <p className="mb-4">Ссылка недействительна или устарела.</p>
@@ -55,6 +87,9 @@ function ResetPasswordForm() {
         </Link>
       </div>
     );
+  }
+  if (!showForm && supabaseSession === null && !isDjango) {
+    return <p className="text-center text-zinc-500">Загрузка...</p>;
   }
 
   if (done) {
@@ -87,7 +122,7 @@ function ResetPasswordForm() {
       />
       <button
         type="submit"
-        disabled={submitting || !process.env.NEXT_PUBLIC_API_URL}
+        disabled={submitting}
         className="w-full py-3.5 rounded-xl bg-[#00B4D8] text-black font-semibold hover:bg-[#00B4D8]/90 disabled:opacity-50 transition-colors"
       >
         {submitting ? 'Сохранение...' : 'Сохранить пароль'}

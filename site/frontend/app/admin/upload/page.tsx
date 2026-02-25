@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import Link from 'next/link';
 import Image from 'next/image';
 import { Music, ImageIcon } from 'lucide-react';
 import { getPresignedUrl, saveStoryToSupabase } from '@/app/actions/upload';
@@ -134,7 +135,15 @@ export default function AdminUploadPage() {
 
   return (
     <div className="p-8">
-      <h1 className="text-2xl font-semibold text-white mb-8">Загрузка истории</h1>
+      <div className="flex items-center justify-between gap-4 mb-8 flex-wrap">
+        <h1 className="text-2xl font-semibold text-white">Загрузка одной истории</h1>
+        <Link
+          href="/admin/upload/batch"
+          className="text-sm text-cyan-400 hover:text-cyan-300 underline"
+        >
+          Загрузить несколько (до 10 рассказов) →
+        </Link>
+      </div>
 
       {message && (
         <p

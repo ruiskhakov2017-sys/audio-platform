@@ -10,7 +10,8 @@ import { useEffect } from 'react';
 const nav = [
   { href: '/admin', label: 'Дашборд', icon: LayoutDashboard },
   { href: '/admin/stories', label: 'Контент', icon: FileAudio },
-  { href: '/admin/upload', label: 'Загрузить', icon: Upload },
+  { href: '/admin/upload', label: 'Загрузить (1)', icon: Upload },
+  { href: '/admin/upload/batch', label: 'Пакет (до 10)', icon: Upload },
   { href: '/admin/users', label: 'Пользователи', icon: Users },
 ];
 

@@ -66,10 +66,7 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
     is_premium: payload.is_premium,
   };
   row.author = '';
-  if (payload.genres?.length) {
-    row.genres = payload.genres;
-    row.genre = payload.genres[0] ?? null;
-  }
+  row.genre = payload.genres?.[0] ?? null;
   if (payload.description != null) row.description = payload.description;
   if (payload.tags != null) row.tags = payload.tags;
   const { data, error } = await supabase.from('stories').insert(row).select('id').single();

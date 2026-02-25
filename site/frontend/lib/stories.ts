@@ -26,14 +26,15 @@ export function mapRowToStory(row: StoryRow): Story {
   const genres = Array.isArray(row.genres) ? row.genres : row.genre ? [row.genre] : [];
   const tagList = Array.isArray(row.tags) ? row.tags : [];
   const tags = [...genres, ...tagList];
+  const id = typeof row.id === 'number' ? row.id : Number(row.id) || 0;
   return {
-    id: row.id,
-    slug: slugFromTitle(row.title),
-    title: row.title,
-    description: row.description ?? '',
-    authorName: row.author ?? '',
-    coverImage: row.image_url ?? '',
-    audioSrc: row.audio_url ?? '',
+    id,
+    slug: slugFromTitle(String(row.title ?? '')),
+    title: String(row.title ?? ''),
+    description: String(row.description ?? ''),
+    authorName: String(row.author ?? ''),
+    coverImage: String(row.image_url ?? ''),
+    audioSrc: String(row.audio_url ?? ''),
     durationSec: Number(row.duration) || 0,
     isPremium: Boolean(row.is_premium),
     tags,

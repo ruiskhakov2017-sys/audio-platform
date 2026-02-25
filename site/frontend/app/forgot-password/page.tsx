@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { Header } from '@/components/layout/Header';
 import { requestPasswordResetApi } from '@/lib/passwordResetApi';
+import { createClient } from '@/utils/supabase/client';
+
+const useDjangoAuth = () => Boolean(typeof window !== 'undefined' && process.env.NEXT_PUBLIC_API_URL);
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -15,15 +18,35 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     if (!email.trim()) return;
     setSubmitting(true);
-    const result = await requestPasswordResetApi(email.trim());
+    if (useDjangoAuth()) {
+      const result = await requestPasswordResetApi(email.trim());
+      setSubmitting(false);
+      if ('error' in result) {
+        toast.error(result.error);
+        return;
+      }
+      setSent(true);
+      toast.success('Если email зарегистрирован, вы получите ссылку для сброса пароля.');
+      return;
+    }
+    const supabase = createClient();
+    if (!supabase) {
+      setSubmitting(false);
+      toast.error('Вход через Supabase не настроен.');
+      return;
+    }
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/reset-password` : '';
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
     setSubmitting(false);
-    if ('error' in result) {
-      toast.error(result.error);
+    if (error) {
+      toast.error(error.message);
       return;
     }
     setSent(true);
-    toast.success('Если email зарегистрирован, вы получите ссылку для сброса пароля.');
+    toast.success('Проверьте почту — ссылка для сброса пароля отправлена (проверьте Спам).');
   };
+
+  const canSubmit = useDjangoAuth() || (typeof window !== 'undefined' && !!process.env.NEXT_PUBLIC_SUPABASE_URL);
 
   return (
     <div className="min-h-screen">
@@ -55,7 +78,7 @@ export default function ForgotPasswordPage() {
               />
               <button
                 type="submit"
-                disabled={submitting || !process.env.NEXT_PUBLIC_API_URL}
+                disabled={submitting || !canSubmit}
                 className="w-full py-3.5 rounded-xl bg-[#00B4D8] text-black font-semibold hover:bg-[#00B4D8]/90 disabled:opacity-50 transition-colors"
               >
                 {submitting ? 'Отправка...' : 'Отправить ссылку'}
