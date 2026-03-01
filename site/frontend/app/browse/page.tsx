@@ -8,8 +8,6 @@ import { FilterSidebar } from '@/components/browse/FilterSidebar';
 import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
 import { StoryTile } from '@/components/browse/StoryTile';
 import { StoryTileSkeleton } from '@/components/browse/StoryTileSkeleton';
-import { supabase } from '@/lib/supabase';
-import { mapRowToStory } from '@/lib/stories';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
 import type { Story } from '@/types/story';
 
@@ -86,6 +84,7 @@ export default function BrowsePage() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [list, setList] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -100,6 +99,7 @@ export default function BrowsePage() {
   }, [activeGenre, selectedTag, searchQuery, router]);
 
   useEffect(() => {
+    setLoadError(null);
     if (useDjangoApi()) {
       fetchStoriesFromApi({
         search: searchQuery.trim() || undefined,
@@ -109,27 +109,19 @@ export default function BrowsePage() {
         .finally(() => setLoading(false));
       return;
     }
-    const hasSupabase = typeof window !== 'undefined' && !!process.env.NEXT_PUBLIC_SUPABASE_URL;
-    if (hasSupabase) {
-      fetch('/api/stories', { cache: 'no-store' })
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data) => setList(Array.isArray(data) ? data : []))
-        .finally(() => setLoading(false));
-      return;
-    }
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
-    supabase
-      .from('stories')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
-        setLoading(false);
-        if (error) return;
-        setList((data ?? []).map((row: Parameters<typeof mapRowToStory>[0]) => mapRowToStory(row)));
-      });
+    fetch('/api/stories', { cache: 'no-store' })
+      .then((res) => {
+        if (res.ok) return res.json().then((data) => setList(Array.isArray(data) ? data : []));
+        if (res.status === 503) {
+          setLoadError('В Vercel задайте NEXT_PUBLIC_SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY, затем Redeploy. Или добавьте записи в таблицу stories в Supabase.');
+        }
+        setList([]);
+      })
+      .catch(() => {
+        setLoadError('Ошибка загрузки каталога.');
+        setList([]);
+      })
+      .finally(() => setLoading(false));
   }, [searchQuery, activeGenre]);
 
   const genres = useMemo(() => {
@@ -259,16 +251,26 @@ export default function BrowsePage() {
                 </div>
               ) : filteredStories.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center">
-                  <p className="text-xl text-zinc-400 mb-2">
-                    Ничего не найдено, попробуйте другой запрос
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleResetFilters}
-                    className="text-[#00B4D8] hover:text-cyan-300 transition-colors"
-                  >
-                    Сбросить фильтры
-                  </button>
+                  {loadError ? (
+                    <p className="text-xl text-amber-400 mb-2 max-w-xl">{loadError}</p>
+                  ) : list.length === 0 ? (
+                    <p className="text-xl text-zinc-400 mb-2">
+                      Каталог пуст. Загрузите рассказы в админке или проверьте переменные Supabase в Vercel.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-xl text-zinc-400 mb-2">
+                        Ничего не найдено, попробуйте другой запрос
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleResetFilters}
+                        className="text-[#00B4D8] hover:text-cyan-300 transition-colors"
+                      >
+                        Сбросить фильтры
+                      </button>
+                    </>
+                  )}
                 </div>
               ) : (
                 <>
