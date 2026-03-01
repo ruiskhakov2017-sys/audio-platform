@@ -105,7 +105,15 @@ export default function BrowsePage() {
         search: searchQuery.trim() || undefined,
         genre: activeGenre !== ALL_GENRES ? activeGenre : undefined,
       })
-        .then((data) => setList(data))
+        .then((data) => setList(Array.isArray(data) ? data : []))
+        .finally(() => setLoading(false));
+      return;
+    }
+    const hasSupabase = typeof window !== 'undefined' && !!process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (hasSupabase) {
+      fetch('/api/stories', { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data) => setList(Array.isArray(data) ? data : []))
         .finally(() => setLoading(false));
       return;
     }
@@ -120,7 +128,7 @@ export default function BrowsePage() {
       .then(({ data, error }) => {
         setLoading(false);
         if (error) return;
-        setList((data ?? []).map(mapRowToStory));
+        setList((data ?? []).map((row: Parameters<typeof mapRowToStory>[0]) => mapRowToStory(row)));
       });
   }, [searchQuery, activeGenre]);
 
