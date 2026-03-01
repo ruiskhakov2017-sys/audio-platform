@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from 'react';
 import { Philosopher, Montserrat } from "next/font/google";
 import "./globals.css";
@@ -22,17 +22,18 @@ const montserrat = Montserrat({
   variable: '--font-montserrat',
 });
 
+export const viewport: Viewport = {
+  themeColor: "#00B4D8",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
+};
+
 export const metadata: Metadata = {
   title: "EroticAudio — искусство звука для вашего наслаждения",
   description: "Аудио-портал эротического контента. Погружение, звук и воображение.",
   manifest: "/manifest.json",
-  themeColor: "#00B4D8",
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
-    viewportFit: "cover",
-  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

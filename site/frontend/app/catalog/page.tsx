@@ -22,7 +22,12 @@ export default function CatalogPage() {
         const res = await fetch("/api/stories", { cache: "no-store" });
         const data = res.ok ? await res.json() : [];
         setStories(Array.isArray(data) ? data : []);
-        if (!res.ok) setLoadError("Ошибка загрузки. В Vercel задайте SUPABASE_SERVICE_ROLE_KEY.");
+        if (!res.ok) {
+          const msg = res.status === 503
+            ? "Supabase не настроен. В Vercel задайте NEXT_PUBLIC_SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY, затем Redeploy."
+            : `Ошибка загрузки: ${res.status}. Проверьте SUPABASE_SERVICE_ROLE_KEY и таблицу stories.`;
+          setLoadError(msg);
+        }
         return;
       }
       if (useDjangoApi()) {
@@ -132,6 +137,8 @@ export default function CatalogPage() {
               <div className="flex h-64 flex-col items-center justify-center text-center">
                 {loadError ? (
                   <p className="text-lg text-amber-400">{loadError}</p>
+                ) : stories.length === 0 ? (
+                  <p className="text-lg text-gray-400">Каталог пуст. Загрузите рассказы в админке или проверьте переменные Supabase в Vercel.</p>
                 ) : (
                   <>
                     <p className="text-lg text-gray-400">Ничего не найдено</p>
