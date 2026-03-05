@@ -13,7 +13,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
     durationSec: 1140,
     isPremium: false,
-    tags: ['asmr', 'city', 'night'],
+    genres: ['asmr'],
+    tags: ['city', 'night'],
   },
   {
     id: 2,
@@ -25,7 +26,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
     durationSec: 1280,
     isPremium: true,
-    tags: ['sci-fi', 'neon', 'premium'],
+    genres: ['sci-fi'],
+    tags: ['neon', 'premium'],
   },
   {
     id: 3,
@@ -37,7 +39,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
     durationSec: 980,
     isPremium: false,
-    tags: ['romance', 'soft', 'voice'],
+    genres: ['romance'],
+    tags: ['soft', 'voice'],
   },
   {
     id: 4,
@@ -49,7 +52,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
     durationSec: 1320,
     isPremium: false,
-    tags: ['ambient', 'water', 'calm'],
+    genres: ['ambient'],
+    tags: ['water', 'calm'],
   },
   {
     id: 5,
@@ -61,7 +65,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3',
     durationSec: 1500,
     isPremium: true,
-    tags: ['mystery', 'night', 'premium'],
+    genres: ['mystery'],
+    tags: ['night', 'premium'],
   },
   {
     id: 6,
@@ -73,7 +78,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: '',
     durationSec: 1100,
     isPremium: false,
-    tags: ['asmr', 'glass'],
+    genres: ['asmr'],
+    tags: ['glass'],
   },
   {
     id: 7,
@@ -85,7 +91,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: '',
     durationSec: 1234,
     isPremium: false,
-    tags: ['drama', 'city', 'night'],
+    genres: ['drama'],
+    tags: ['city', 'night'],
   },
   {
     id: 8,
@@ -97,7 +104,8 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: '',
     durationSec: 999,
     isPremium: false,
-    tags: ['romance', 'asmr'],
+    genres: ['romance'],
+    tags: ['asmr'],
   },
   {
     id: 9,
@@ -109,6 +117,7 @@ export const MOCK_STORIES: Story[] = [
     audioSrc: '',
     durationSec: 1111,
     isPremium: false,
-    tags: ['neon', 'city'],
+    genres: ['neon'],
+    tags: ['city'],
   },
 ];
