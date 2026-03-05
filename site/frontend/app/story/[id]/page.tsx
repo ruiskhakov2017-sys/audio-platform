@@ -6,7 +6,7 @@ import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
 import { supabase } from '@/lib/supabase';
-import { mapRowToStory } from '@/lib/stories';
+import { mapRowToStory, getDisplayTags } from '@/lib/stories';
 import { fetchStoriesFromApi, fetchStoryByIdFromApi, fetchRelatedStoriesFromApi, useDjangoApi } from '@/lib/api';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
@@ -280,7 +280,7 @@ export default function StoryPage() {
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 mb-8">
-                {story.tags.slice(0, 5).map((tag) => (
+                {getDisplayTags(story).slice(0, 5).map((tag) => (
                   <Link
                     key={tag}
                     href={`/browse?tag=${encodeURIComponent(tag)}`}

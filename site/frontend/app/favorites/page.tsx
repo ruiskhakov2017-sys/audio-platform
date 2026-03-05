@@ -44,7 +44,7 @@ export default function FavoritesPage() {
         id: story.id,
         title: story.title,
         coverImage: story.coverImage,
-        category: story.tags?.[0] || 'Аудио',
+        category: [...(story.genres ?? []), ...(story.tags ?? [])][0] || 'Аудио',
         price: story.isPremium ? 190 : undefined,
         isPremium: story.isPremium,
         story,

@@ -169,7 +169,7 @@ export default function ProfilePage() {
                   id={story.id}
                   title={story.title}
                   coverImage={story.coverImage}
-                  category={story.tags?.[0] || 'Аудио'}
+                  category={[...(story.genres ?? []), ...(story.tags ?? [])][0] || 'Аудио'}
                   isPremium={story.isPremium}
                   story={story}
                 />

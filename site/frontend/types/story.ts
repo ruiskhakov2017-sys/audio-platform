@@ -8,5 +8,10 @@ export type Story = {
   audioSrc: string;
   durationSec: number;
   isPremium: boolean;
+  /** Жанры (отдельно в БД) */
+  genres: string[];
+  /** Теги (отдельно в БД). Для отображения используй [...genres, ...tags] */
   tags: string[];
+  /** Текст рассказа (если есть в БД) */
+  content?: string;
 };

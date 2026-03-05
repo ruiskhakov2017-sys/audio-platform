@@ -5,8 +5,9 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Pencil, Trash2, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { mapRowToStory } from '@/lib/stories';
-import { updateStoryGenresAndTags, deleteStory } from '@/app/actions/upload';
+import { mapRowToStory, getDisplayTags } from '@/lib/stories';
+import { deleteStory } from '@/app/actions/upload';
+import { EditStoryDrawer } from './EditStoryDrawer';
 import type { Story } from '@/types/story';
 
 export default function AdminStoriesPage() {
@@ -14,12 +15,11 @@ export default function AdminStoriesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [genreFilter, setGenreFilter] = useState('');
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editTags, setEditTags] = useState('');
+  const [editStory, setEditStory] = useState<Story | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const uniqueTags = useMemo(() => {
     const set = new Set<string>();
-    list.forEach((s) => s.tags.forEach((t) => set.add(t)));
+    list.forEach((s) => getDisplayTags(s).forEach((t) => set.add(t)));
     return Array.from(set).sort();
   }, [list]);
 
@@ -44,23 +44,9 @@ export default function AdminStoriesPage() {
   const filtered = list.filter((s) => {
     const q = search.trim().toLowerCase();
     if (q && !s.title.toLowerCase().includes(q)) return false;
-    if (genreFilter && !s.tags.includes(genreFilter)) return false;
+    if (genreFilter && !getDisplayTags(s).includes(genreFilter)) return false;
     return true;
   });
-
-  const handleTagsSave = async (id: number) => {
-    const tagsArray = editTags.split(',').map((t) => t.trim()).filter(Boolean);
-    const res = await updateStoryGenresAndTags(id, undefined, tagsArray);
-    if (res.success) {
-      setList((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, tags: tagsArray.length ? tagsArray : s.tags } : s))
-      );
-      setEditingId(null);
-      setEditTags('');
-    } else {
-      alert(res.error);
-    }
-  };
 
   const handleDelete = async (id: number) => {
     if (!confirm('Удалить эту историю? Файл в R2 тоже будет удалён.')) return;
@@ -153,36 +139,9 @@ export default function AdminStoriesPage() {
                     <p className="text-white font-medium">{story.title}</p>
                   </td>
                   <td className="p-4 text-zinc-400">
-                    {editingId === story.id ? (
-                      <div className="flex flex-wrap items-center gap-1">
-                        <input
-                          type="text"
-                          value={editTags}
-                          onChange={(e) => setEditTags(e.target.value)}
-                          className="px-2 py-1 rounded border border-zinc-600 bg-zinc-800 text-white text-xs focus:border-cyan-500 focus:outline-none min-w-[120px]"
-                          placeholder="тег1, тег2"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleTagsSave(story.id)}
-                          className="px-2 py-1 rounded bg-cyan-600 text-white text-xs hover:bg-cyan-500"
-                        >
-                          OK
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingId(null);
-                            setEditTags('');
-                          }}
-                          className="px-2 py-1 rounded bg-zinc-700 text-zinc-400 text-xs hover:bg-zinc-600"
-                        >
-                          Отмена
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs">{story.tags.slice(0, 3).join(', ') || '—'}</span>
-                    )}
+                    <span className="text-xs">
+                      {getDisplayTags(story).slice(0, 3).join(', ') || '—'}
+                    </span>
                   </td>
                   <td className="p-4">
                     <span
@@ -199,13 +158,9 @@ export default function AdminStoriesPage() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setEditingId(story.id);
-                          setEditTags(story.tags.join(', '));
-                        }}
-                        disabled={editingId != null && editingId !== story.id}
-                        className="p-1.5 rounded text-zinc-500 hover:text-white hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        aria-label="Редактировать жанр"
+                        onClick={() => setEditStory(story)}
+                        className="p-1.5 rounded text-zinc-500 hover:text-white hover:bg-zinc-700 transition-colors"
+                        aria-label="Редактировать"
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
@@ -216,7 +171,9 @@ export default function AdminStoriesPage() {
                         className="p-1.5 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         aria-label="Удалить"
                       >
-                        <Trash2 className={`w-4 h-4 ${deletingId === story.id ? 'animate-pulse opacity-50' : ''}`} />
+                        <Trash2
+                          className={`w-4 h-4 ${deletingId === story.id ? 'animate-pulse opacity-50' : ''}`}
+                        />
                       </button>
                     </div>
                   </td>
@@ -230,6 +187,14 @@ export default function AdminStoriesPage() {
             </div>
           )}
         </div>
+      )}
+
+      {editStory && (
+        <EditStoryDrawer
+          story={editStory}
+          onClose={() => setEditStory(null)}
+          onSaved={fetchStories}
+        />
       )}
     </div>
   );

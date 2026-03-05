@@ -12,6 +12,7 @@ export type StoryRow = {
   is_premium: boolean;
   description?: string | null;
   tags?: string[] | null;
+  content?: string | null;
   created_at?: string;
 };
 
@@ -25,7 +26,6 @@ function slugFromTitle(title: string): string {
 export function mapRowToStory(row: StoryRow): Story {
   const genres = Array.isArray(row.genres) ? row.genres : row.genre ? [row.genre] : [];
   const tagList = Array.isArray(row.tags) ? row.tags : [];
-  const tags = [...genres, ...tagList];
   const id = typeof row.id === 'number' ? row.id : Number(row.id) || 0;
   return {
     id,
@@ -37,6 +37,13 @@ export function mapRowToStory(row: StoryRow): Story {
     audioSrc: String(row.audio_url ?? ''),
     durationSec: Number(row.duration) || 0,
     isPremium: Boolean(row.is_premium),
-    tags,
+    genres,
+    tags: tagList,
+    ...(row.content != null && { content: String(row.content) }),
   };
+}
+
+/** Все метки для отображения и фильтрации (жанры + теги) */
+export function getDisplayTags(story: Story): string[] {
+  return [...(story.genres ?? []), ...(story.tags ?? [])];
 }

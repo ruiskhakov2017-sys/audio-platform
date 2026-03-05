@@ -4,6 +4,7 @@ import React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Story } from '@/types/story';
+import { getDisplayTags } from '@/lib/stories';
 import { Play, Crown, ChevronRight, Flame, Sparkles } from 'lucide-react';
 import { usePlayerStore } from '@/store/playerStore';
 
@@ -15,11 +16,12 @@ interface StoryCardProps {
 }
 
 function getCategoryLabel(story: Story): string {
-  if (story.tags.some((t) => ['asmr', 'hypnosis'].includes(t.toLowerCase())))
+  const tags = getDisplayTags(story);
+  if (tags.some((t) => ['asmr', 'hypnosis'].includes(t.toLowerCase())))
     return 'Гипнозы';
-  if (story.tags.some((t) => ['romance', 'voice', 'roleplay'].includes(t.toLowerCase())))
+  if (tags.some((t) => ['romance', 'voice', 'roleplay'].includes(t.toLowerCase())))
     return 'Ролевые игры';
-  if (story.tags.some((t) => ['drama', 'mystery'].includes(t.toLowerCase())))
+  if (tags.some((t) => ['drama', 'mystery'].includes(t.toLowerCase())))
     return 'Спектакли';
   return 'Аудио-сессия';
 }
@@ -30,7 +32,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
   const isCurrentTrack = currentTrack?.id === story.id;
   const isPlayingCurrent = isCurrentTrack && isPlaying;
   const isPremium =
-    story.isPremium || story.tags.some((t) => t.toLowerCase() === 'premium');
+    story.isPremium || getDisplayTags(story).some((t) => t.toLowerCase() === 'premium');
   const isNew = story.id >= 6;
   const isHot = story.id <= 3 && story.id >= 1;
 
@@ -226,9 +228,9 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         </div>
       </Link>
 
-      {story.tags.length > 0 && (
+      {getDisplayTags(story).length > 0 && (
         <div className="flex flex-wrap gap-1 px-3 pb-3">
-          {story.tags.slice(0, 3).map((tag) => (
+          {getDisplayTags(story).slice(0, 3).map((tag) => (
             <Link
               key={tag}
               href={`/browse?tag=${encodeURIComponent(tag)}`}

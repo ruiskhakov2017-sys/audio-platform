@@ -76,6 +76,41 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
   return { success: true, id: data?.id };
 }
 
+export type UpdateStoryPayload = {
+  title?: string;
+  description?: string;
+  content?: string;
+  image_url?: string;
+  audio_url?: string;
+  duration?: number;
+  is_premium?: boolean;
+  genres?: string[];
+  tags?: string[];
+};
+
+export type UpdateStoryResult = { success: true } | { success: false; error: string };
+
+export async function updateStory(id: number, payload: UpdateStoryPayload): Promise<UpdateStoryResult> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    return { success: false, error: 'Supabase не настроен' };
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const updates: Record<string, unknown> = {};
+  if (payload.title !== undefined) updates.title = payload.title;
+  if (payload.description !== undefined) updates.description = payload.description;
+  if (payload.content !== undefined) updates.content = payload.content;
+  if (payload.image_url !== undefined) updates.image_url = payload.image_url;
+  if (payload.audio_url !== undefined) updates.audio_url = payload.audio_url;
+  if (payload.duration !== undefined) updates.duration = payload.duration;
+  if (payload.is_premium !== undefined) updates.is_premium = payload.is_premium;
+  if (payload.genres !== undefined) updates.genres = payload.genres;
+  if (payload.tags !== undefined) updates.tags = payload.tags;
+  if (Object.keys(updates).length === 0) return { success: true };
+  const { error } = await supabase.from('stories').update(updates).eq('id', id);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
 export type UpdateStoryGenreResult = { success: true } | { success: false; error: string };
 
 export async function updateStoryGenresAndTags(
@@ -83,17 +118,7 @@ export async function updateStoryGenresAndTags(
   genres: string[] | undefined,
   tags: string[] | undefined
 ): Promise<UpdateStoryGenreResult> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    return { success: false, error: 'Supabase не настроен' };
-  }
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const updates: Record<string, unknown> = {};
-  if (genres !== undefined) updates.genres = genres;
-  if (tags !== undefined) updates.tags = tags;
-  if (Object.keys(updates).length === 0) return { success: true };
-  const { error } = await supabase.from('stories').update(updates).eq('id', id);
-  if (error) return { success: false, error: error.message };
-  return { success: true };
+  return updateStory(id, { genres, tags });
 }
 
 export type DeleteStoryResult = { success: true } | { success: false; error: string };

@@ -9,6 +9,7 @@ import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
 import { StoryTile } from '@/components/browse/StoryTile';
 import { StoryTileSkeleton } from '@/components/browse/StoryTileSkeleton';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
+import { getDisplayTags } from '@/lib/stories';
 import type { Story } from '@/types/story';
 
 const SORT_OPTIONS = [
@@ -47,11 +48,11 @@ function filterAndSortStories(
   let list = allStories;
 
   if (activeGenre !== ALL_GENRES) {
-    list = list.filter((s) => s.tags.includes(activeGenre));
+    list = list.filter((s) => getDisplayTags(s).includes(activeGenre));
   }
 
   if (selectedTag) {
-    list = list.filter((s) => s.tags.includes(selectedTag));
+    list = list.filter((s) => getDisplayTags(s).includes(selectedTag));
   }
 
   const q = searchQuery.trim().toLowerCase();
@@ -126,13 +127,13 @@ export default function BrowsePage() {
 
   const genres = useMemo(() => {
     const set = new Set<string>();
-    list.forEach((s) => s.tags.forEach((t) => set.add(t)));
+    list.forEach((s) => getDisplayTags(s).forEach((t) => set.add(t)));
     return [ALL_GENRES, ...Array.from(set).sort()];
   }, [list.length]);
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
-    list.forEach((s) => s.tags.forEach((t) => set.add(t)));
+    list.forEach((s) => getDisplayTags(s).forEach((t) => set.add(t)));
     return Array.from(set).sort();
   }, [list.length]);
 
@@ -167,7 +168,7 @@ export default function BrowsePage() {
         id: s.id,
         title: s.title,
         coverImage: s.coverImage,
-        category: s.tags[0] || 'Аудио',
+        category: getDisplayTags(s)[0] || 'Аудио',
         price: s.isPremium ? 190 : undefined,
         isPremium: s.isPremium,
         story: s,

@@ -1,9 +1,10 @@
 import type { Story } from '@/types/story';
+import { getDisplayTags } from '@/lib/stories';
 
 export const getAllTags = (stories: Story[]) => {
   const set = new Set<string>();
   stories.forEach((story) => {
-    story.tags.forEach((tag) => set.add(tag));
+    getDisplayTags(story).forEach((tag) => set.add(tag));
   });
   return Array.from(set);
 };
@@ -34,7 +35,7 @@ export const filterStoriesByTags = (stories: Story[], selectedTags: string[], ta
   if (!hasSelected && !hasQuery) return stories;
 
   return stories.filter((story) => {
-    const tagsLower = story.tags.map((tag) => tag.toLowerCase());
+    const tagsLower = getDisplayTags(story).map((tag) => tag.toLowerCase());
 
     // OR logic for tags (if any selected tag is present)
     const matchesSelected = !hasSelected || selectedTags.some((tag) => tagsLower.includes(tag.toLowerCase()));
