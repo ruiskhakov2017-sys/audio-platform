@@ -27,7 +27,7 @@ export type DjangoStory = {
 };
 
 export function mapDjangoStoryToStory(row: DjangoStory): Story {
-  const tags = row.genre ? [row.genre.name] : [];
+  const genres = row.genre ? [row.genre.name] : [];
   return {
     id: row.id,
     slug: row.slug,
@@ -38,7 +38,8 @@ export function mapDjangoStoryToStory(row: DjangoStory): Story {
     audioSrc: row.audio_file_url ?? '',
     durationSec: Number(row.duration) || 0,
     isPremium: Boolean(row.is_premium),
-    tags,
+    genres,
+    tags: [],
   };
 }
 
