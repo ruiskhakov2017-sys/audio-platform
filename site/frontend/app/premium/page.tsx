@@ -238,23 +238,6 @@ export default function PremiumPage() {
           </div>
         </div>
       </section>
-
-      {/* CTA strip */}
-      <section className="relative py-16 px-6 border-t border-white/10">
-        <div className="max-w-3xl mx-auto text-center">
-          <motion.p
-            className="text-zinc-400 mb-6"
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-          >
-            Оплата защищена. Отмена в любой момент.
-          </motion.p>
-          <p className="text-zinc-600 text-sm">
-            © 2026 Dirty Secrets. 18+
-          </p>
-        </div>
-      </section>
     </div>
   );
 }

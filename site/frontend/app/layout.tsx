@@ -57,7 +57,9 @@ export default function RootLayout({
       >
         <AuthInitializer />
         <div className="flex flex-col min-h-screen">
-          {children}
+          <main className="flex-grow">
+            {children}
+          </main>
           <Footer />
         </div>
         <GlobalAudioPlayer />
