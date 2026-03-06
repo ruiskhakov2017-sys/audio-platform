@@ -7,7 +7,6 @@ import { CategoryChoices } from '@/components/home/CategoryChoices';
 import { CustomExperience } from '@/components/home/CustomExperience';
 import { TopSales } from '@/components/home/TopSales';
 import { Reviews } from '@/components/home/Reviews';
-import { Footer } from '@/components/home/Footer';
 
 export default function HomePage() {
   return (
@@ -21,7 +20,6 @@ export default function HomePage() {
       <TopSales />
       <CustomExperience />
       <Reviews />
-      <Footer />
     </div>
   );
 }
