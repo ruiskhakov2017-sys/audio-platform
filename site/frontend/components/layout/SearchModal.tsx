@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { X } from 'lucide-react';
-import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { mapRowToStory } from '@/lib/stories';
 import type { Story } from '@/types/story';
 
 const DEBOUNCE_MS = 300;
@@ -21,14 +22,30 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const [loading, setLoading] = useState(false);
 
   const runSearch = useCallback(async (q: string) => {
-    if (!q.trim() || !useDjangoApi()) {
+    const term = q.trim();
+    if (!term) {
+      setResults([]);
+      return;
+    }
+    if (!supabase) {
       setResults([]);
       return;
     }
     setLoading(true);
-    const list = await fetchStoriesFromApi({ search: q.trim() });
-    setResults(list.slice(0, 8));
+    const escaped = term.replace(/'/g, "''");
+    const pattern = `'%${escaped}%'`;
+    const { data, error } = await supabase
+      .from('stories')
+      .select('*')
+      .or(`title.ilike.${pattern},description.ilike.${pattern}`)
+      .order('created_at', { ascending: false })
+      .limit(8);
     setLoading(false);
+    if (error) {
+      setResults([]);
+      return;
+    }
+    setResults((data ?? []).map((row) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0])));
   }, []);
 
   useEffect(() => {
@@ -40,7 +57,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const handleSelect = (story: Story) => {
     onClose();
     setQuery('');
-    router.push(`/story/${story.slug || story.id}`);
+    router.push(`/story/${story.id}`);
   };
 
   if (!isOpen) return null;
@@ -64,7 +81,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Поиск по названию..."
+            placeholder="Поиск по названию или описанию..."
             className="flex-1 bg-transparent text-white placeholder-zinc-500 px-3 py-2 focus:outline-none focus:ring-0"
             autoFocus
             aria-label="Поиск"
@@ -79,9 +96,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
           </button>
         </div>
         <div className="max-h-[60vh] overflow-y-auto">
-          {!process.env.NEXT_PUBLIC_API_URL || !useDjangoApi() ? (
-            <p className="p-4 text-zinc-500 text-sm text-center">Поиск доступен при подключённом API.</p>
-          ) : loading ? (
+          {loading ? (
             <p className="p-4 text-zinc-500 text-sm text-center">Поиск...</p>
           ) : results.length === 0 && query.trim() ? (
             <p className="p-4 text-zinc-500 text-sm text-center">Ничего не найдено.</p>
@@ -95,7 +110,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                     className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/10 transition-colors"
                   >
                     <div className="relative w-12 h-16 shrink-0 rounded overflow-hidden bg-white/10">
-                      {story.coverImage && (
+                      {story.coverImage ? (
                         <Image
                           src={story.coverImage}
                           alt=""
@@ -104,11 +119,13 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                           unoptimized
                           sizes="48px"
                         />
-                      )}
-                      <p className="text-sm text-zinc-400 truncate">{story.authorName}</p>
+                      ) : null}
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-white truncate">{story.title}</p>
+                      {story.authorName && (
+                        <p className="text-sm text-zinc-400 truncate">{story.authorName}</p>
+                      )}
                     </div>
                   </button>
                 </li>

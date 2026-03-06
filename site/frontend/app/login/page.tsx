@@ -1,21 +1,32 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { Header } from '@/components/layout/Header';
 import { useAuthStore } from '@/store/authStore';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const login = useAuthStore((s) => s.login);
+  const loginWithOAuth = useAuthStore((s) => s.loginWithOAuth);
   const error = useAuthStore((s) => s.error);
   const setError = useAuthStore((s) => s.setError);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
+
+  useEffect(() => {
+    const err = searchParams.get('error');
+    if (err) {
+      setError(decodeURIComponent(err));
+      if (typeof window !== 'undefined') console.error('[Login redirect error]', err);
+    }
+  }, [searchParams, setError]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,6 +40,14 @@ export default function LoginPage() {
     }
     toast.success('Добро пожаловать!');
     router.push('/');
+  };
+
+  const handleGoogleLogin = async () => {
+    setError(null);
+    setOauthLoading(true);
+    const { error: err } = await loginWithOAuth('google');
+    setOauthLoading(false);
+    if (err) toast.error(err.message || 'Ошибка входа через Google');
   };
 
   return (
@@ -91,7 +110,10 @@ export default function LoginPage() {
             </p>
             <button
               type="button"
-              className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10 transition-colors"
+              onClick={handleGoogleLogin}
+              disabled={oauthLoading}
+              className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10 transition-colors disabled:opacity-50"
+              aria-label="Войти через Google"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden>
                 <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />

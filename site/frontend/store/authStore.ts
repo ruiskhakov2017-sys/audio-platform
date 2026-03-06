@@ -28,6 +28,7 @@ type AuthState = {
   toastMessage: string | null;
   error: string | null;
   login: (email: string, password: string) => Promise<{ error: Error | null }>;
+  loginWithOAuth: (provider: 'google') => Promise<{ error: Error | null }>;
   register: (
     email: string,
     password: string,
@@ -107,7 +108,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       password,
     });
     if (error) {
-      set({ error: error.message });
+      if (typeof window !== 'undefined') console.error('[Supabase Auth]', error);
+      const friendly =
+        /email not confirmed|Email not confirmed|confirm your email/i.test(error.message)
+          ? 'Подтвердите почту: проверьте письмо от Supabase или папку «Спам».'
+          : error.message;
+      set({ error: friendly });
       return { error };
     }
     const prof = profileFromUser(data.user);
@@ -119,6 +125,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       error: null,
       toastMessage: `Добро пожаловать, ${prof?.full_name || email.split('@')[0]}`,
     });
+    return { error: null };
+  },
+
+  loginWithOAuth: async (provider) => {
+    set({ error: null });
+    if (useDjangoAuth()) {
+      set({ error: 'OAuth доступен только при входе через Supabase.' });
+      return { error: new Error('OAuth not available with Django API') };
+    }
+    const supabase = createClient();
+    if (!supabase) {
+      set({ error: 'Supabase не настроен.' });
+      return { error: new Error('Supabase not configured') };
+    }
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${origin}/auth/callback` },
+    });
+    if (error) {
+      if (typeof window !== 'undefined') console.error('[Supabase OAuth]', error);
+      set({ error: error.message });
+      return { error };
+    }
+    if (data?.url && typeof window !== 'undefined') {
+      window.location.href = data.url;
+    }
     return { error: null };
   },
 
