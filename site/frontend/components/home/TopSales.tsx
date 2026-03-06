@@ -4,24 +4,27 @@ import { motion } from 'framer-motion';
 import { Play } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { getTopStories } from '@/app/actions/catalog';
+import { getDisplayTags } from '@/lib/stories';
+import type { Story } from '@/types/story';
 
-const TOP_ITEMS = Array.from({ length: 12 }, (_, i) => ({
-    id: i + 1,
-    title: `Топ ${i + 1}`,
-    coverImage: `/images/top-${i + 1}.jpg`,
-    price: i % 2 === 0 ? undefined : 190,
-}));
+const DEFAULT_COVER = '/images/custom-order.png';
 
 export function TopSales() {
+    const [stories, setStories] = useState<Story[]>([]);
     const [hoveredId, setHoveredId] = useState<number | null>(null);
+
+    useEffect(() => {
+        getTopStories(12).then(setStories);
+    }, []);
 
     return (
         <section className="relative py-20 px-6 overflow-hidden">
             <div className="absolute inset-0 z-0">
                 <Image
                     src="/bg4.jpg"
-                    alt="background"
+                    alt=""
                     fill
                     className="object-cover w-full h-full opacity-5 grayscale"
                     quality={50}
@@ -42,7 +45,12 @@ export function TopSales() {
                 </motion.div>
 
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-                    {TOP_ITEMS.map((story, index) => (
+                    {stories.length === 0 && (
+                        <div className="col-span-full py-12 text-center text-zinc-500">
+                            Загрузка...
+                        </div>
+                    )}
+                    {stories.map((story, index) => (
                         <motion.div
                             key={story.id}
                             initial={{ opacity: 0, y: 20 }}
@@ -55,12 +63,16 @@ export function TopSales() {
                             <Link href={`/story/${story.id}`}>
                                 <div className="relative aspect-[3/4] rounded-[2rem] overflow-hidden glass-premium hover:border-[#00B4D8]/50 transition-all duration-500 group">
                                     <Image
-                                        src={story.coverImage}
+                                        src={story.coverImage || DEFAULT_COVER}
                                         alt={story.title}
                                         fill
                                         className="object-cover transition-transform duration-700 group-hover:scale-110 opacity-80 group-hover:opacity-100"
                                         unoptimized
                                         sizes="(max-width: 1024px) 50vw, 25vw"
+                                        onError={(e) => {
+                                            const t = e.target as HTMLImageElement;
+                                            if (t?.src && !t.src.includes('default-cover')) t.src = DEFAULT_COVER;
+                                        }}
                                     />
                                     <div className="absolute inset-0 bg-gradient-to-t from-[#000814] via-transparent to-transparent opacity-90" />
                                     <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${hoveredId === story.id ? 'opacity-100' : 'opacity-0'}`}>
@@ -74,13 +86,25 @@ export function TopSales() {
                                             <Play className="w-8 h-8 text-white ml-1" strokeWidth={2} fill="white" />
                                         </motion.div>
                                     </div>
+                                    <div className="absolute top-3 left-3 z-10">
+                                        <span className="inline-block px-2 py-0.5 rounded bg-black/60 text-[#00B4D8] text-sm font-bold">
+                                            Топ {index + 1}
+                                        </span>
+                                    </div>
                                     <div className="absolute bottom-0 left-0 right-0 p-6 transform transition-transform duration-300 group-hover:-translate-y-2">
-                                        <h3 className="text-lg font-bold text-white mb-2 line-clamp-2 drop-shadow-md">
+                                        <h3 className="text-lg font-bold text-white mb-1 line-clamp-2 drop-shadow-md">
                                             {story.title}
                                         </h3>
-                                        <p className="text-[#00B4D8] font-medium drop-shadow-[0_0_8px_rgba(0,180,216,0.5)]">
-                                            {story.price ? `${story.price} ₽` : 'Бесплатно'}
-                                        </p>
+                                        {story.authorName && (
+                                            <p className="text-zinc-400 text-sm mb-1 drop-shadow-md">
+                                                {story.authorName}
+                                            </p>
+                                        )}
+                                        {getDisplayTags(story)[0] && (
+                                            <p className="text-[#00B4D8] text-sm font-medium drop-shadow-[0_0_8px_rgba(0,180,216,0.5)]">
+                                                {getDisplayTags(story)[0]}
+                                            </p>
+                                        )}
                                     </div>
                                     <div className="absolute inset-0 border border-[#00B4D8]/0 group-hover:border-[#00B4D8]/50 rounded-[2rem] transition-colors duration-500 pointer-events-none" />
                                 </div>

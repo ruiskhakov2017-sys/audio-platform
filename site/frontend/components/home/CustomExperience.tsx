@@ -6,17 +6,16 @@ import Image from 'next/image';
 
 export function CustomExperience() {
     return (
-        <section className="relative py-20 px-6 overflow-hidden">
-            <div className="absolute inset-0 z-0">
-                <Image
-                    src="/bg3.jpg"
-                    alt="background"
-                    fill
-                    className="object-cover w-full h-full opacity-10 grayscale"
-                    quality={50}
-                    unoptimized
-                />
-            </div>
+        <section className="relative py-20 px-6 overflow-hidden min-h-[28rem]">
+            {/* Background image: cover, centered */}
+            <div
+                className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat"
+                style={{ backgroundImage: 'url(/images/custom-order.png)' }}
+                aria-hidden
+            />
+            {/* Dark overlay for text readability */}
+            <div className="absolute inset-0 z-[1] bg-black/50" aria-hidden />
+            <div className="absolute inset-0 z-[1] bg-gradient-to-t from-black/80 via-black/50 to-black/60" aria-hidden />
             <div className="relative z-10 max-w-7xl mx-auto">
                 <motion.div
                     className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center"
@@ -34,7 +33,7 @@ export function CustomExperience() {
                         transition={{ duration: 0.6, delay: 0.2 }}
                     >
                         <Image
-                            src="/images/custom-voice.jpg"
+                            src="/images/custom-order.png"
                             alt="Озвучка на заказ"
                             fill
                             className="object-cover"

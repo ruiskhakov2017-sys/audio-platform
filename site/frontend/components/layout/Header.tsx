@@ -54,7 +54,7 @@ export function Header() {
                             Каталог
                         </Link>
                         <Link
-                            href="#premium"
+                            href="/premium"
                             className="text-lg md:text-xl text-zinc-400 hover:text-[#00B4D8] transition-colors"
                         >
                             Premium
@@ -147,7 +147,7 @@ export function Header() {
                                 Каталог
                             </Link>
                             <Link
-                                href="#premium"
+                                href="/premium"
                                 className="text-sm uppercase tracking-wider text-zinc-400 hover:text-[#00B4D8]"
                                 onClick={() => setMobileMenuOpen(false)}
                             >
