@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Массовая очистка текстов рассказов из папки all_stories.
-Результат сохраняется в каждой подпапке как clean_text.txt.
+Массовая очистка текстов рассказов.
+Структура: корень → папки категорий → папки рассказов (в каждой .txt).
+Очищенный текст сохраняется под исходным именем файла, исходник переименовывается в clean_text.txt.
 """
 
 import re
@@ -12,7 +13,8 @@ from tqdm import tqdm
 
 # Путь к главной папке: 1) аргумент командной строки, 2) папка all_stories рядом со скриптом
 ROOT_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent / "all_stories"
-OUTPUT_FILENAME = "clean_text.txt"
+# Имя файла, в который переименовывается исходный текст (очищенный получает имя исходного)
+BACKUP_FILENAME = "clean_text.txt"
 
 
 def _is_equals_line(line: str) -> bool:
@@ -70,14 +72,31 @@ def remove_technical_header(text: str) -> str:
     return "\n".join(result_lines)
 
 
+# Строка целиком — только «СТРАНИЦА N ИЗ M» с опциональным | и URL
+PAGE_HEADER_LINE = re.compile(
+    r"^\s*СТРАНИЦА\s+\d+\s+ИЗ\s+\d+\s*(\|\s*.*?)?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# В начале строки: «СТРАНИЦА N ИЗ M | » (если склеено с текстом)
+PAGE_HEADER_PREFIX = re.compile(
+    r"^\s*СТРАНИЦА\s+\d+\s+ИЗ\s+\d+\s*\|?\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
 def remove_page_separators(text: str) -> str:
-    """Удалить разделители страниц (─── СТРАНИЦА X ИЗ Y | https://... ───)."""
+    """Удалить разделители страниц: блоки с ───, отдельные строки «СТРАНИЦА N ИЗ M», префикс в начале строки."""
     pattern = r"─{3,}\s*\n.*?СТРАНИЦА\s+\d+\s+ИЗ\s+\d+.*?\n.*?─{3,}\s*"
-    return re.sub(pattern, "\n", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(pattern, "\n", text, flags=re.DOTALL | re.IGNORECASE)
+    text = PAGE_HEADER_LINE.sub("", text)
+    text = PAGE_HEADER_PREFIX.sub("", text)
+    return text
 
 
-# Окно слов: при повторном появлении считаем начало глобального дубликата и отрезаем хвост
+# Окно слов для поиска дубликатов: режем только если подряд идёт несколько совпадений (реальный дубль)
 TAIL_DEDUP_WINDOW = 40
+# Сколько подряд идущих n-грамм должны совпасть, чтобы считать это дубликатом (не случайной фразой)
+TAIL_DEDUP_MIN_RUN = 2
 
 # Только буквы и цифры для сравнения (без пунктуации и регистра)
 _WORD_NORM = re.compile(r"[a-zA-Zа-яА-ЯёЁ0-9]+")
@@ -92,36 +111,56 @@ def _normalize_word_for_cmp(word: str) -> str:
 
 def cut_duplicate_tail_by_ngrams(text: str) -> str:
     """
-    Универсальная дедупликация по скользящему окну слов (n-grams).
-    Текст → сплошной список слов (пунктуация/переносы не влияют на сравнение).
-    Окно 40 слов: при повторном вхождении — начало дубликата, отрезаем хвост до конца файла.
-    По возможности обрезаем по последней точке перед дублем.
+    Удаляем только повторяющийся блок: когда подряд несколько окон по 40 слов
+    совпадают с более ранним куском, вырезаем именно этот дубль (второе вхождение),
+    а не всё до конца рассказа. Остальной текст сохраняем.
     """
     words = text.split()
-    if len(words) < TAIL_DEDUP_WINDOW:
+    n = TAIL_DEDUP_WINDOW
+    if len(words) < n + TAIL_DEDUP_MIN_RUN - 1:
         return text
 
     norms = [_normalize_word_for_cmp(w) for w in words]
-    n = TAIL_DEDUP_WINDOW
     seen: dict[tuple[str, ...], int] = {}
 
     for i in range(len(norms) - n + 1):
         ngram = tuple(norms[i : i + n])
         if not any(ngram):
             continue
-        if ngram in seen:
-            j = seen[ngram]
-            if j + n <= i:
-                cut_index = i
-                for pos in range(i - 1, max(0, i - 300), -1):
-                    if _SENTENCE_END.match(words[pos].strip()):
-                        cut_index = pos + 1
-                        break
-                out = " ".join(words[:cut_index])
-                out = re.sub(r"([.!?])\s+([А-ЯA-Z])", r"\1\n\n\2", out)
-                return out
-        else:
+        if ngram not in seen:
             seen[ngram] = i
+            continue
+        j = seen[ngram]
+        if j + n > i:
+            continue
+        run = 1
+        while run < TAIL_DEDUP_MIN_RUN and i + run + n <= len(norms) and j + run + n <= len(norms):
+            ngram_i = tuple(norms[i + run : i + run + n])
+            ngram_j = tuple(norms[j + run : j + run + n])
+            if ngram_i != ngram_j or not any(ngram_i):
+                break
+            run += 1
+        if run < TAIL_DEDUP_MIN_RUN:
+            continue
+        # Длина дубликата в словах: n + (run - 1)
+        block_len = n + (run - 1)
+        # Начало блока — по границе предложения
+        block_start = i
+        for pos in range(i - 1, max(0, i - 300), -1):
+            if _SENTENCE_END.match(words[pos].strip()):
+                block_start = pos + 1
+                break
+        # Конец блока — по границе предложения (не режем предложение)
+        block_end = min(block_start + block_len, len(words))
+        for pos in range(block_end, min(block_end + 100, len(words))):
+            if _SENTENCE_END.match(words[pos].strip()):
+                block_end = pos + 1
+                break
+        # Вырезаем только дубль, остальное склеиваем
+        out_words = words[:block_start] + words[block_end:]
+        out = " ".join(out_words)
+        out = re.sub(r"([.!?])\s+([А-ЯA-Z])", r"\1\n\n\2", out)
+        return out
 
     return text
 
@@ -129,6 +168,29 @@ def cut_duplicate_tail_by_ngrams(text: str) -> str:
 def _normalize_block(s: str) -> str:
     """Нормализация для сравнения: без лишних пробелов и переносов."""
     return re.sub(r"\s+", " ", s.strip())
+
+
+DUPLICATE_BLOCK_MIN_PARAS = 3
+
+
+def remove_duplicate_paragraph_sequences(text: str) -> str:
+    """Удалить блоки из 3+ параграфов, которые повторяются в тексте (второй раз вырезаем)."""
+    paras = [p for p in text.split("\n\n") if p.strip()]
+    if len(paras) < DUPLICATE_BLOCK_MIN_PARAS * 2:
+        return text
+    norms = [_normalize_block(p) for p in paras]
+    for run in range(min(20, len(paras) - DUPLICATE_BLOCK_MIN_PARAS), DUPLICATE_BLOCK_MIN_PARAS - 1, -1):
+        if run > len(paras) // 2:
+            continue
+        tail_start = len(paras) - run
+        chunk = tuple(norms[tail_start : tail_start + run])
+        for i in range(len(norms) - run):
+            if i + run > tail_start:
+                break
+            if tuple(norms[i : i + run]) == chunk:
+                new_paras = paras[:tail_start] + paras[tail_start + run :]
+                return "\n\n".join(new_paras)
+    return text
 
 
 def remove_duplicate_paragraphs(text: str) -> str:
@@ -158,9 +220,12 @@ CHAPTER_HEADER = re.compile(r"^\s*Глава\s*(\d+)\s*[.:]?\s*", re.IGNORECASE)
 
 
 def remove_duplicate_chapters(text: str) -> str:
-    """Удалить повторяющиеся блоки глав: если Глава N уже была, второй такой же блок выкинуть."""
+    """
+    Если одна и та же глава (номер N) встречается несколько раз — оставляем один блок с этим номером:
+    тот, где больше текста (реальная глава). Дубликаты и короткие повторы выкидываем. Порядок глав сохраняем.
+    """
     lines = text.split("\n")
-    blocks = []  # (chapter_num or None для вступления, список строк)
+    blocks = []
     current_num = None
     current_lines = []
 
@@ -177,16 +242,27 @@ def remove_duplicate_chapters(text: str) -> str:
     if current_num is not None or current_lines:
         blocks.append((current_num, current_lines))
 
-    seen = set()
-    result = []
+    # По каждому номеру главы выбираем один блок — самый длинный (реальная глава, не дубль)
+    best_by_num: dict[int, list[str]] = {}
     for num, block_lines in blocks:
         if num is None:
+            continue
+        length = sum(len(l) for l in block_lines)
+        if num not in best_by_num or length > sum(len(l) for l in best_by_num[num]):
+            best_by_num[num] = block_lines
+
+    # Собираем результат в исходном порядке: вступление, потом первое появление каждой главы (берём выбранный блок)
+    result = []
+    seen_nums = set()
+    for num, block_lines in blocks:
+        if num is None:
+            # Вступление — может быть несколько кусков подряд
             result.extend(block_lines)
             continue
-        if num in seen:
+        if num in seen_nums:
             continue
-        seen.add(num)
-        result.extend(block_lines)
+        seen_nums.add(num)
+        result.extend(best_by_num[num])
 
     return "\n".join(result)
 
@@ -238,9 +314,10 @@ def clean_text(raw: str) -> str:
     text = remove_page_separators(text)
     text = remove_bestweapon_links(text)
     text = remove_sentences_with_urls(text)
-    text = remove_duplicate_chapters(text)
+    # Удаляет только найденный дубль (блок слов), не режет до конца рассказа
     text = cut_duplicate_tail_by_ngrams(text)
     text = remove_duplicate_paragraphs(text)
+    text = remove_duplicate_paragraph_sequences(text)
     text = collapse_blank_lines(text)
     return text.strip()
 
@@ -253,67 +330,83 @@ def get_subdirs(root: Path):
 
 
 def get_dirty_txt(subdir: Path):
-    """Найти .txt в папке, не clean_text.txt."""
+    """Найти .txt в папке (исходник рассказа), не clean_text.txt."""
     for f in subdir.iterdir():
-        if f.is_file() and f.suffix.lower() == ".txt" and f.name != OUTPUT_FILENAME:
+        if f.is_file() and f.suffix.lower() == ".txt" and f.name != BACKUP_FILENAME:
             return f
     return None
 
 
+def _collect_story_dirs(root_dir: Path) -> list[tuple[Path, Path]]:
+    """Собрать пары (категория, папка рассказа): корень → категории → папки рассказов."""
+    result = []
+    for category in get_subdirs(root_dir):
+        for story_dir in get_subdirs(category):
+            result.append((category, story_dir))
+    return result
+
+
 def run_clean(root_dir: Path, progress_callback=None):
     """
-    Обработать все подпапки в root_dir.
-    progress_callback(current_index, total, current_folder_name) вызывается при каждой папке.
+    Обработать структуру: root_dir → категории → папки рассказов.
+    В каждой папке рассказа: исходный .txt переименовывается в clean_text.txt,
+    очищенный текст записывается под исходным именем файла.
+    progress_callback(current_index, total, current_folder_name).
     Возвращает dict: processed, skipped, errors, total.
     """
     if not root_dir.exists():
         return {"error": f"Папка не найдена: {root_dir}", "processed": 0, "skipped": 0, "errors": 0, "total": 0}
 
-    subdirs = get_subdirs(root_dir)
-    total = len(subdirs)
+    story_dirs = _collect_story_dirs(root_dir)
+    total = len(story_dirs)
     if total == 0:
-        return {"error": "Нет подпапок", "processed": 0, "skipped": 0, "errors": 0, "total": 0}
+        return {"error": "Нет папок рассказов (ожидается: корень → категории → папки с .txt)", "processed": 0, "skipped": 0, "errors": 0, "total": 0}
 
     processed = 0
     skipped = 0
     errors = 0
 
-    for i, subdir in enumerate(subdirs):
+    for i, (category, story_dir) in enumerate(story_dirs):
+        display_name = f"{category.name} / {story_dir.name}"
         if progress_callback:
-            progress_callback(i + 1, total, subdir.name)
+            progress_callback(i + 1, total, display_name)
 
-        out_file = subdir / OUTPUT_FILENAME
-        src = get_dirty_txt(subdir)
-        if not src and out_file.exists():
-            src = out_file
+        src = get_dirty_txt(story_dir)
         if not src:
             skipped += 1
             continue
 
+        backup_file = story_dir / BACKUP_FILENAME
+        original_name = src.name
+
         try:
             raw = src.read_text(encoding="utf-8", errors="replace")
             cleaned = clean_text(raw)
-            out_file.write_text(cleaned, encoding="utf-8")
+            # Исходник → clean_text.txt, очищенный → под именем исходного файла
+            if backup_file.exists():
+                backup_file.unlink()
+            src.rename(backup_file)
+            (story_dir / original_name).write_text(cleaned, encoding="utf-8")
             processed += 1
         except Exception as e:
             errors += 1
             if progress_callback:
-                progress_callback(i + 1, total, f"Ошибка: {subdir.name} — {e}")
+                progress_callback(i + 1, total, f"Ошибка: {display_name} — {e}")
 
     return {"processed": processed, "skipped": skipped, "errors": errors, "total": total}
 
 
 def main():
     root = ROOT_DIR
-    subdirs = get_subdirs(root)
     if not root.exists():
         print(f"Папка не найдена: {root}")
         return
-    if not subdirs:
-        print("Нет подпапок.")
+    story_dirs = _collect_story_dirs(root)
+    if not story_dirs:
+        print("Нет папок рассказов. Ожидается: корень → категории → папки с .txt")
         return
 
-    with tqdm(total=len(subdirs), desc="Обработка папок", unit="папка") as pbar:
+    with tqdm(total=len(story_dirs), desc="Обработка папок", unit="папка") as pbar:
         def on_progress(current, total, name):
             pbar.n = current
             pbar.set_postfix_str(name[:30])

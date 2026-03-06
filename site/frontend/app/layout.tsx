@@ -52,11 +52,11 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <body
-        className={`${philosopher.variable} ${montserrat.variable} font-sans antialiased min-h-screen text-white pb-24`}
+        className={`${philosopher.variable} ${montserrat.variable} font-sans antialiased min-h-screen text-white flex flex-col`}
         style={{ backgroundColor: '#000814' }}
       >
         <AuthInitializer />
-        <div className="flex flex-col min-h-screen">
+        <div className="flex flex-col flex-1 min-h-screen">
           <main className="flex-grow">
             {children}
           </main>

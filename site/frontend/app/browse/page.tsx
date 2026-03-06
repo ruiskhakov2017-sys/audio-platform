@@ -20,6 +20,20 @@ const SORT_OPTIONS = [
   { key: 'editor', label: 'Выбор редакции', icon: '💎' },
 ] as const;
 
+/** Путь к картинке жанра: есть готовые в public, остальные — заглушка */
+function genreImagePath(genre: string): string {
+  const map: Record<string, string> = {
+    '18 лет': '18-plus',
+    'Группа': 'group',
+    'Подчинение': 'submission',
+    'Измена': 'betrayal',
+    'Фантазии': 'fantasies',
+    'Служебный роман': 'office',
+  };
+  const slug = map[genre] || '18-plus';
+  return `/images/genres/${slug}.jpg`;
+}
+
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
 
 const ALL_GENRES = 'All';
@@ -99,10 +113,13 @@ const GENRE_PARAM = 'genre';
 const SEARCH_PARAM = 'search';
 const TAG_PARAM = 'tag';
 
+type ViewMode = 'genres' | 'stories';
+
 export default function BrowsePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const [viewMode, setViewMode] = useState<ViewMode>('genres');
   const [activeGenre, setActiveGenre] = useState<string>(() =>
     searchParams.get(GENRE_PARAM) || ALL_GENRES
   );
@@ -243,13 +260,28 @@ export default function BrowsePage() {
               </button>
 
               <div className="flex flex-wrap gap-2 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('genres')}
+                  className={`inline-flex items-center gap-2 py-2 px-3.5 rounded-full text-sm font-medium transition-all ${
+                    viewMode === 'genres'
+                      ? 'bg-[#00B4D8] text-white'
+                      : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
+                  }`}
+                >
+                  <span aria-hidden>📚</span>
+                  Жанры
+                </button>
                 {SORT_OPTIONS.map((opt) => {
-                  const isActive = activeSort === opt.key;
+                  const isActive = viewMode === 'stories' && activeSort === opt.key;
                   return (
                     <button
                       key={opt.key}
                       type="button"
-                      onClick={() => setActiveSort(opt.key)}
+                      onClick={() => {
+                        setViewMode('stories');
+                        setActiveSort(opt.key);
+                      }}
                       className={`inline-flex items-center gap-2 py-2 px-3.5 rounded-full text-sm font-medium transition-all ${
                         isActive
                           ? 'bg-[#00B4D8] text-white'
@@ -263,56 +295,86 @@ export default function BrowsePage() {
                 })}
               </div>
 
-              <div className="text-zinc-500 text-sm mb-4">
-                Показано {Math.min(visibleCount, filteredStories.length)} из {filteredStories.length} историй
-              </div>
-
-              {loading ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <StoryTileSkeleton key={i} />
+              {viewMode === 'genres' ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                  {GENRES_LIST.map((genre) => (
+                    <button
+                      key={genre}
+                      type="button"
+                      onClick={() => {
+                        setActiveGenre(genre);
+                        setViewMode('stories');
+                      }}
+                      className="relative aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all group"
+                    >
+                      <span
+                        className="absolute inset-0 bg-cover bg-center"
+                        style={{
+                          backgroundImage: `url(${genreImagePath(genre)})`,
+                        }}
+                        aria-hidden
+                      />
+                      <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
+                      <span className="absolute inset-0 flex items-center justify-center text-center px-2 text-white font-medium text-sm sm:text-base drop-shadow-lg">
+                        {genre}
+                      </span>
+                    </button>
                   ))}
-                </div>
-              ) : filteredStories.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-24 text-center">
-                  {loadError ? (
-                    <p className="text-xl text-amber-400 mb-2 max-w-xl">{loadError}</p>
-                  ) : list.length === 0 ? (
-                    <p className="text-xl text-zinc-400 mb-2">
-                      Каталог пуст. Загрузите рассказы в админке или проверьте переменные Supabase в Vercel.
-                    </p>
-                  ) : (
-                    <>
-                      <p className="text-xl text-zinc-400 mb-2">
-                        Ничего не найдено, попробуйте другой запрос
-                      </p>
-                      <button
-                        type="button"
-                        onClick={handleResetFilters}
-                        className="text-[#00B4D8] hover:text-cyan-300 transition-colors"
-                      >
-                        Сбросить фильтры
-                      </button>
-                    </>
-                  )}
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {displayedStories.map((item) => (
-                      <StoryTile key={item.id} {...item} />
-                    ))}
+                  <div className="text-zinc-500 text-sm mb-4">
+                    Показано {Math.min(visibleCount, filteredStories.length)} из {filteredStories.length} историй
                   </div>
-                  {visibleCount < filteredStories.length && (
-                    <div className="mt-8 flex justify-center">
-                      <button
-                        type="button"
-                        onClick={() => setVisibleCount((prev) => prev + 20)}
-                        className="w-full max-w-md py-4 text-lg font-medium text-white rounded-full border border-white/20 hover:bg-white/10 transition"
-                      >
-                        Показать еще ({filteredStories.length - visibleCount})
-                      </button>
+
+                  {loading ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <StoryTileSkeleton key={i} />
+                      ))}
                     </div>
+                  ) : filteredStories.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-24 text-center">
+                      {loadError ? (
+                        <p className="text-xl text-amber-400 mb-2 max-w-xl">{loadError}</p>
+                      ) : list.length === 0 ? (
+                        <p className="text-xl text-zinc-400 mb-2">
+                          Каталог пуст. Загрузите рассказы в админке или проверьте переменные Supabase в Vercel.
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-xl text-zinc-400 mb-2">
+                            Ничего не найдено, попробуйте другой запрос
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleResetFilters}
+                            className="text-[#00B4D8] hover:text-cyan-300 transition-colors"
+                          >
+                            Сбросить фильтры
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {displayedStories.map((item) => (
+                          <StoryTile key={item.id} {...item} />
+                        ))}
+                      </div>
+                      {visibleCount < filteredStories.length && (
+                        <div className="mt-8 flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() => setVisibleCount((prev) => prev + 20)}
+                            className="w-full max-w-md py-4 text-lg font-medium text-white rounded-full border border-white/20 hover:bg-white/10 transition"
+                          >
+                            Показать еще ({filteredStories.length - visibleCount})
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}

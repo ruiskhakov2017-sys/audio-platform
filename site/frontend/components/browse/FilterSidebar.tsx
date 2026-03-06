@@ -44,7 +44,7 @@ export function FilterSidebar({
   };
 
   return (
-    <aside className="w-72 min-w-[18rem] flex-shrink-0 sticky top-24 self-start max-h-[calc(100vh-6rem)] overflow-y-auto hidden lg:block">
+    <aside className="w-[300px] min-w-[300px] flex-shrink-0 sticky top-24 self-start max-h-[calc(100vh-6rem)] overflow-y-auto hidden lg:block">
       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
         <h3 className="text-sm font-semibold text-white mb-3">Фильтры</h3>
 

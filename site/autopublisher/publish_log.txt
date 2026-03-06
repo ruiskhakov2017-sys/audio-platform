@@ -1,0 +1,4 @@
+[ОШИБКА] - 06.03.2026 17:28 - Папка "21_октября_год_спустя_42812". Причина: Supabase HTTP 400: {"code":"PGRST204","details":null,"hint":null,"message":"Could not find the 'genres' column of 'stories' in the schema cache"}
+[ОШИБКА] - 06.03.2026 17:29 - Папка "7_дней_6_ночей_69898". Причина: Supabase HTTP 400: {"code":"PGRST204","details":null,"hint":null,"message":"Could not find the 'genres' column of 'stories' in the schema cache"}
+[УСПЕХ] - 06.03.2026 17:36 - Рассказ "Годовщина искушения" опубликован.
+[УСПЕХ] - 06.03.2026 17:37 - Рассказ "Волны скрытых желаний" опубликован.
