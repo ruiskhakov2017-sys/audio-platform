@@ -214,7 +214,7 @@ export function EditStoryDrawer({ story, onClose, onSaved }: EditStoryDrawerProp
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end"
+      className="fixed inset-0 z-[100] flex justify-end"
       role="dialog"
       aria-modal="true"
       aria-labelledby="edit-story-title"

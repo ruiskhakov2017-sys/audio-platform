@@ -108,7 +108,7 @@ export default function AdminStoriesPage() {
                 <th className="p-4 font-medium">Название</th>
                 <th className="p-4 font-medium">Теги / Жанры</th>
                 <th className="p-4 font-medium">Статус</th>
-                <th className="p-4 font-medium w-28">Действия</th>
+                <th className="p-4 font-medium w-48">Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -155,25 +155,28 @@ export default function AdminStoriesPage() {
                     </span>
                   </td>
                   <td className="p-4">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
                         onClick={() => setEditStory(story)}
-                        className="p-1.5 rounded text-zinc-500 hover:text-white hover:bg-zinc-700 transition-colors"
-                        aria-label="Редактировать"
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-cyan-600 text-white text-sm font-medium hover:bg-cyan-500 transition-colors shadow-sm"
+                        aria-label="Редактировать рассказ"
                       >
-                        <Pencil className="w-4 h-4" />
+                        <Pencil className="w-4 h-4 shrink-0" aria-hidden />
+                        <span>Редактировать</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDelete(story.id)}
                         disabled={deletingId === story.id}
-                        className="p-1.5 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-600 text-zinc-400 hover:text-rose-400 hover:border-rose-500/50 hover:bg-rose-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                         aria-label="Удалить"
                       >
                         <Trash2
-                          className={`w-4 h-4 ${deletingId === story.id ? 'animate-pulse opacity-50' : ''}`}
+                          className={`w-4 h-4 shrink-0 ${deletingId === story.id ? 'animate-pulse opacity-50' : ''}`}
+                          aria-hidden
                         />
+                        <span>Удалить</span>
                       </button>
                     </div>
                   </td>
