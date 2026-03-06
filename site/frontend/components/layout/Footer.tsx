@@ -26,7 +26,7 @@ export function Footer() {
           </nav>
         </div>
         <p className="mt-6 text-center text-zinc-500 text-xs">
-          © 2026 Dirty Secrets
+          © 2026 Dirty Secrets. Все права защищены. 18+
         </p>
       </div>
     </footer>

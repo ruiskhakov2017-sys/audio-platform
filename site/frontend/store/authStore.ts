@@ -140,9 +140,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return { error: new Error('Supabase not configured') };
     }
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const redirectTo = `${origin}/auth/callback`;
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${origin}/auth/callback` },
+      options: { redirectTo },
     });
     if (error) {
       if (typeof window !== 'undefined') console.error('[Supabase OAuth]', error);
