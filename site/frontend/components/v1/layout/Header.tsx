@@ -9,7 +9,7 @@ export default function Header() {
       <div className="mx-auto max-w-6xl px-4 md:px-8">
         <div className="flex h-14 items-center justify-between">
           <Link href="/" className="text-sm font-semibold text-white">
-            EroticAudio
+            Dirty Secrets
           </Link>
           <div className="flex items-center gap-3">
             <input

@@ -41,8 +41,7 @@ export function Header() {
                             className="text-3xl md:text-4xl font-black tracking-tight"
                             whileHover={{ scale: 1.05 }}
                         >
-                            <span className="text-white">EroticAudio</span>
-                            <span className="text-[#00B4D8]">.</span>
+                            <span className="text-white">Dirty Secrets</span>
                         </motion.div>
                     </Link>
 

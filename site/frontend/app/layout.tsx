@@ -31,13 +31,14 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "EroticAudio — искусство звука для вашего наслаждения",
-  description: "Аудио-портал эротического контента. Погружение, звук и воображение.",
+  metadataBase: new URL('https://dirtysecrets.ru'),
+  title: "Dirty Secrets",
+  description: "Dirty Secrets — коллекция откровенных аудио рассказов и тайных фантазий.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "EroticAudio",
+    title: "Dirty Secrets",
   },
   icons: {
     icon: "/favicon.ico",

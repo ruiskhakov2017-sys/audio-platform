@@ -5,12 +5,12 @@ import Link from 'next/link';
 import Image from 'next/image';
 
 const categories = [
-    { title: 'Служебный роман', description: 'Страсть в офисе после заката', image: '/images/genre-office.jpg', href: '/browse?category=office' },
-    { title: 'Группа', description: 'То, что нельзя, но очень хочется', image: '/images/genre-forbidden.jpg', href: '/browse?category=forbidden' },
-    { title: 'Восемнадцать лет', description: 'Вечеринки, флирт и молодость', image: '/images/genre-college.jpg', href: '/browse?category=college' },
-    { title: 'Подчинение', description: 'Игры власти и подчинения', image: '/images/genre-domination.jpg', href: '/browse?category=domination' },
-    { title: 'Измена', description: 'Случайные встречи, яркие эмоции', image: '/images/genre-strangers.jpg', href: '/browse?category=strangers' },
-    { title: 'Фантазии', description: 'Другие миры, другие правила', image: '/images/genre-fantasy.jpg', href: '/browse?category=fantasy' },
+    { title: 'Восемнадцать лет', description: 'Откровенные истории для взрослых', image: '/images/genres/18-plus.jpg', href: '/browse?genre=Восемнадцать+лет' },
+    { title: 'Служебный роман', description: 'Страсть в офисе после заката', image: '/images/genres/office.jpg', href: '/browse?genre=Служебный+роман' },
+    { title: 'Группа', description: 'То, что нельзя, но очень хочется', image: '/images/genres/group.jpg', href: '/browse?genre=Группа' },
+    { title: 'Подчинение', description: 'Игры власти и подчинения', image: '/images/genres/submission.jpg', href: '/browse?genre=Подчинение' },
+    { title: 'Измена', description: 'Случайные встречи, яркие эмоции', image: '/images/genres/betrayal.jpg', href: '/browse?genre=Измена' },
+    { title: 'Фантазии', description: 'Другие миры, другие правила', image: '/images/genres/fantasies.jpg', href: '/browse?genre=Фантазии' },
 ];
 
 export function CategoryChoices() {

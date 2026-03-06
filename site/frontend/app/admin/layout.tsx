@@ -66,7 +66,7 @@ export default function AdminLayout({
       <aside className="w-56 border-r border-zinc-800 bg-zinc-900/50 flex flex-col shrink-0 fixed left-0 top-0 bottom-0 z-10">
         <div className="p-4 border-b border-zinc-800">
           <Link href="/admin" className="text-lg font-semibold text-white">
-            EroticAudio <span className="text-cyan-500">Admin</span>
+            Dirty Secrets <span className="text-cyan-500">Admin</span>
           </Link>
         </div>
         <nav className="p-2 flex flex-col gap-0.5 flex-1">

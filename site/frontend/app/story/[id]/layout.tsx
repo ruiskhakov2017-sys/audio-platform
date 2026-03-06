@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { fetchStoryBySlugFromApi } from '@/lib/api';
 
-const BRAND = 'EroticAudio';
+const BRAND = 'Dirty Secrets';
 
 type Props = {
   children: ReactNode;

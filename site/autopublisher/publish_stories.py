@@ -1,21 +1,58 @@
 """
 GUI-автопаблишер: сканирует To_Publish, загружает медиа в R2, вставляет в Supabase,
 пишет отчёт в publish_log.txt. Запуск публикации в отдельном потоке.
+
+Структура папок:
+  To_Publish/           <- сюда кладёте ПАПКИ (каждая папка = один рассказ)
+    Название_рассказа1/
+      info.txt          <- название, описание, жанры, теги (опционально)
+      *.mp3 или *.wav   <- одно аудио
+      *.jpg или *.png   <- одна обложка
+      другие .txt       <- текст рассказа (если есть)
+    Название_рассказа2/
+      ...
+  Скрипт заходит в To_Publish, перебирает только папки (не файлы),
+  в каждой папке ищет аудио, обложку и info.txt.
 """
 import os
 import re
 import time
 import threading
 import queue
+import json
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-from supabase import create_client, Client
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(path: str | Path | None = None) -> None:
+        env_file = path or Path(__file__).resolve().parent / ".env"
+        if not Path(env_file).exists():
+            return
+        with open(env_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                idx = line.find("=")
+                if idx <= 0:
+                    continue
+                key = line[:idx].strip()
+                value = line[idx + 1 :].strip().strip("'\"")
+                os.environ.setdefault(key, value)
+
 from botocore.config import Config
 import boto3
 from tinytag import TinyTag
 
+# Загружаем .env из папки скрипта и/или из родителя (site/.env.local)
+_load_dir = Path(__file__).resolve().parent
+load_dotenv(_load_dir / ".env")
+load_dotenv(_load_dir.parent / ".env.local")
+load_dotenv(_load_dir.parent / ".env")
 load_dotenv()
 
 # --- Конфиг из env ---
@@ -164,9 +201,34 @@ def ensure_dirs():
     PUBLISHED_ARCHIVE.mkdir(parents=True, exist_ok=True)
 
 
+def insert_story_to_supabase(url: str, service_key: str, row: dict) -> None:
+    """Вставляет запись в таблицу stories через Supabase REST API (без SDK)."""
+    api_url = f"{url.rstrip('/')}/rest/v1/stories"
+    data = json.dumps(row).encode("utf-8")
+    req = urllib.request.Request(
+        api_url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+            "Prefer": "return=minimal",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            if resp.status not in (200, 201, 204):
+                raise RuntimeError(f"HTTP {resp.status}")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        raise RuntimeError(f"Supabase HTTP {e.code}: {body or e.reason}")
+
+
 def publish_one(
     folder: Path,
-    supabase: Client,
+    supabase_url: str,
+    supabase_key: str,
     r2_client,
     report,
     log_success,
@@ -238,7 +300,7 @@ def publish_one(
 
     report("  Сохранение в Supabase...")
     try:
-        supabase.table("stories").insert(row).execute()
+        insert_story_to_supabase(supabase_url, supabase_key, row)
         report("  Supabase: запись создана.")
     except Exception as e:
         reason = str(e)
@@ -287,18 +349,14 @@ def worker_run(status_queue: queue.Queue) -> None:
     ensure_dirs()
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        report("Ошибка: задайте SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY в .env")
+        report(
+            "Ошибка: задайте SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY в .env (или NEXT_PUBLIC_SUPABASE_URL в .env.local). "
+            "Для вставки в БД нужен именно service_role ключ (Supabase Dashboard → Settings → API → service_role), не anon."
+        )
         status_queue.put(SENTINEL)
         return
 
-    _console("Подключение к Supabase...")
-    try:
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-        _console("Supabase: OK")
-    except Exception as e:
-        report(f"Ошибка подключения к Supabase: {e}")
-        status_queue.put(SENTINEL)
-        return
+    _console("Supabase: URL и ключ заданы в .env")
 
     _console("Подключение к R2...")
     r2_client = get_r2_client()
@@ -319,7 +377,9 @@ def worker_run(status_queue: queue.Queue) -> None:
     for i, folder in enumerate(folders, 1):
         report(f"[{i}/{len(folders)}] Обработка папки: {folder.name}")
         try:
-            success, err = publish_one(folder, supabase, r2_client, report, log_success, log_error)
+            success, err = publish_one(
+                folder, SUPABASE_URL, SUPABASE_SERVICE_KEY, r2_client, report, log_success, log_error
+            )
             if success:
                 ok += 1
                 report("  -> Успешно опубликовано.")

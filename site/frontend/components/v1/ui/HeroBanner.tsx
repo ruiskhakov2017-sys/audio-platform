@@ -39,9 +39,9 @@ export default function HeroBanner() {
           className="text-4xl font-bold leading-tight tracking-tight md:text-5xl lg:text-6xl"
           style={{ color: '#f1f5f9' }}
         >
-          EroticAudio — искусство звука
+          Dirty Secrets — коллекция откровенных
           <br />
-          для вашего наслаждения
+          аудио рассказов и тайных фантазий
         </h1>
         <p className="mt-4 max-w-2xl text-base md:text-lg" style={{ color: '#94a3b8' }}>
           Мы создаём чувственные аудио для взрослых: расслабление, вдохновение и

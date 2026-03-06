@@ -8,7 +8,7 @@ export function Footer() {
       <div className="max-w-[1800px] mx-auto px-6 py-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="font-heading text-xl text-white">
-            EroticAudio<span className="text-[#00B4D8]">.</span>
+            Dirty Secrets
           </div>
           <nav className="flex flex-wrap items-center justify-center gap-6 text-sm">
             <Link href="/about" className="text-zinc-400 hover:text-[#00B4D8] transition-colors">
@@ -26,7 +26,7 @@ export function Footer() {
           </nav>
         </div>
         <p className="mt-6 text-center text-zinc-500 text-xs">
-          © {new Date().getFullYear()} EroticAudio. Все права защищены.
+          © 2026 Dirty Secrets
         </p>
       </div>
     </footer>
