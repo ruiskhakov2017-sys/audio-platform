@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import { Header } from '@/components/layout/Header';
 import { useAuthStore } from '@/store/authStore';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const login = useAuthStore((s) => s.login);
@@ -35,6 +35,7 @@ export default function LoginPage() {
     const { error: err } = await login(email, password);
     setSubmitting(false);
     if (err) {
+      if (typeof window !== 'undefined') console.error('[Login] Supabase error:', err);
       toast.error(err.message || 'Ошибка входа');
       return;
     }
@@ -133,5 +134,17 @@ export default function LoginPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-[#000814]">
+        <p className="text-zinc-400">Загрузка...</p>
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   );
 }
