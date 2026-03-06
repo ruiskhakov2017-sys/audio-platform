@@ -58,7 +58,7 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
             onMouseLeave={() => setIsHovered(false)}
         >
             <Link href={`/story/${id}`}>
-                <div className="relative aspect-[3/4] rounded-[2rem] overflow-hidden group cursor-pointer">
+                <div className="relative aspect-[3/4] rounded-xl overflow-hidden group cursor-pointer">
                     <div className="absolute inset-0">
                         <Image
                             src={coverImage}
@@ -66,7 +66,7 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                             fill
                             className="object-cover transition-transform duration-500 group-hover:scale-110"
                             unoptimized
-                            sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
+                            sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 25vw"
                         />
                     </div>
 
@@ -119,13 +119,13 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                         </motion.div>
                     )}
 
-                    <div className="absolute bottom-0 left-0 right-0 p-6">
-                        <div className="inline-block px-3 py-1 mb-3 rounded-full bg-[#00B4D8]/20 border border-[#00B4D8]/50">
+                    <div className="absolute bottom-0 left-0 right-0 p-4">
+                        <div className="inline-block px-2 py-0.5 mb-2 rounded-md bg-[#00B4D8]/15 border border-[#00B4D8]/30">
                             <span className="text-[10px] uppercase tracking-wider text-[#00B4D8] font-medium">
                                 {category}
                             </span>
                         </div>
-                        <h3 className="text-lg font-bold text-white mb-2 line-clamp-2">
+                        <h3 className="text-base font-semibold text-white line-clamp-2 leading-tight">
                             {title}
                         </h3>
                     </div>

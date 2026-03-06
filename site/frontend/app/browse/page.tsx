@@ -9,6 +9,7 @@ import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
 import { StoryTile } from '@/components/browse/StoryTile';
 import { StoryTileSkeleton } from '@/components/browse/StoryTileSkeleton';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
+import { getStoriesForBrowse, type BrowseFilter } from '@/app/actions/catalog';
 import { getDisplayTags } from '@/lib/stories';
 import type { Story } from '@/types/story';
 
@@ -21,12 +22,50 @@ const SORT_OPTIONS = [
 
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
 
-function sortStories(list: Story[], sortKey: SortKey): Story[] {
+const ALL_GENRES = 'All';
+
+/** Фиксированный список жанров для сайдбара. При клике в фильтр уходит именно это название (совпадение с полем genre/genres в Supabase). */
+const GENRES_LIST: string[] = [
+  '18 лет',
+  'А в попку лучше',
+  'Би',
+  'В первый раз',
+  'Ваши рассказы',
+  'Гетеросексуалы',
+  'Группа',
+  'Драма',
+  'Жена шлюшка',
+  'Зрелый возраст',
+  'Измена',
+  'Инцест',
+  'Классика',
+  'Кунилингус',
+  'Куколд',
+  'Лесби',
+  'Мастурбация',
+  'Минет',
+  'Наблюдатели',
+  'Непорно',
+  'Перевод',
+  'Пикап-истории',
+  'По принуждению',
+  'Подчинение',
+  'Романтика',
+  'Свингеры',
+  'Секс-туризм',
+  'Сексвайф',
+  'Случайный роман',
+  'Служебный роман',
+  'Студенты',
+  'Фантазии',
+  'Фантастика',
+];
+
+function sortStoriesClient(list: Story[], sortKey: SortKey): Story[] {
   const arr = [...list];
   switch (sortKey) {
     case 'popular':
     case 'editor':
-      return arr.sort((a, b) => b.id - a.id);
     case 'new':
       return arr.sort((a, b) => b.id - a.id);
     case 'free':
@@ -36,31 +75,24 @@ function sortStories(list: Story[], sortKey: SortKey): Story[] {
   }
 }
 
-const ALL_GENRES = 'All';
-
-function filterAndSortStories(
+function filterStories(
   allStories: Story[],
   activeGenre: string,
   selectedTag: string | null,
-  searchQuery: string,
-  activeSort: SortKey
+  searchQuery: string
 ): Story[] {
   let list = allStories;
-
   if (activeGenre !== ALL_GENRES) {
     list = list.filter((s) => getDisplayTags(s).includes(activeGenre));
   }
-
   if (selectedTag) {
     list = list.filter((s) => getDisplayTags(s).includes(selectedTag));
   }
-
   const q = searchQuery.trim().toLowerCase();
   if (q) {
     list = list.filter((s) => s.title.toLowerCase().includes(q));
   }
-
-  return sortStories(list, activeSort);
+  return list;
 }
 
 const GENRE_PARAM = 'genre';
@@ -101,6 +133,7 @@ export default function BrowsePage() {
 
   useEffect(() => {
     setLoadError(null);
+    setLoading(true);
     if (useDjangoApi()) {
       fetchStoriesFromApi({
         search: searchQuery.trim() || undefined,
@@ -110,26 +143,16 @@ export default function BrowsePage() {
         .finally(() => setLoading(false));
       return;
     }
-    fetch('/api/stories', { cache: 'no-store' })
-      .then((res) => {
-        if (res.ok) return res.json().then((data) => setList(Array.isArray(data) ? data : []));
-        if (res.status === 503) {
-          setLoadError('В Vercel задайте NEXT_PUBLIC_SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY, затем Redeploy. Или добавьте записи в таблицу stories в Supabase.');
-        }
-        setList([]);
-      })
+    getStoriesForBrowse(activeSort as BrowseFilter)
+      .then((data) => setList(data ?? []))
       .catch(() => {
         setLoadError('Ошибка загрузки каталога.');
         setList([]);
       })
       .finally(() => setLoading(false));
-  }, [searchQuery, activeGenre]);
+  }, [activeSort, searchQuery, activeGenre]);
 
-  const genres = useMemo(() => {
-    const set = new Set<string>();
-    list.forEach((s) => getDisplayTags(s).forEach((t) => set.add(t)));
-    return [ALL_GENRES, ...Array.from(set).sort()];
-  }, [list.length]);
+  const genres = [ALL_GENRES, ...GENRES_LIST];
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -137,15 +160,15 @@ export default function BrowsePage() {
     return Array.from(set).sort();
   }, [list.length]);
 
-  const filteredStories = useMemo(
-    () =>
-      filterAndSortStories(list, activeGenre, selectedTag, searchQuery, activeSort),
-    [list, activeGenre, selectedTag, searchQuery, activeSort]
-  );
+  const filteredStories = useMemo(() => {
+    const filtered = filterStories(list, activeGenre, selectedTag, searchQuery);
+    if (useDjangoApi()) return sortStoriesClient(filtered, activeSort);
+    return filtered;
+  }, [list, activeGenre, selectedTag, searchQuery, activeSort]);
 
   useEffect(() => {
     setVisibleCount(20);
-  }, [activeGenre, selectedTag, searchQuery]);
+  }, [activeGenre, selectedTag, searchQuery, activeSort]);
 
   const handleResetFilters = () => {
     setActiveGenre(ALL_GENRES);
@@ -181,8 +204,8 @@ export default function BrowsePage() {
       <Header />
 
       <main className="pt-24 pb-12">
-        <div className="max-w-[95%] mx-auto px-6">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <div className="max-w-[1440px] mx-auto px-4">
+          <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
             <FilterSidebar
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
@@ -195,17 +218,17 @@ export default function BrowsePage() {
               onReset={handleResetFilters}
             />
 
-            <div className="lg:col-span-10 min-w-0">
-              <div className="mb-6">
-                <h1 className="font-heading text-3xl font-bold text-white mb-2">
+            <div className="flex-1 min-w-0 w-full">
+              <div className="mb-4">
+                <h1 className="font-heading text-2xl font-bold text-white mb-1">
                   Каталог аудио
                 </h1>
                 {hasActiveFilters && (
-                  <p className="text-sm text-cyan-400/90 mb-1">
+                  <p className="text-sm text-cyan-400/90 mb-0.5">
                     Активные фильтры: [{activeFiltersLabel}]
                   </p>
                 )}
-                <p className="text-zinc-400">
+                <p className="text-zinc-400 text-sm">
                   Найдено {filteredStories.length} записей
                 </p>
               </div>
@@ -213,13 +236,13 @@ export default function BrowsePage() {
               <button
                 type="button"
                 onClick={() => setIsFilterOpen(true)}
-                className="lg:hidden flex items-center gap-2 px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-full text-sm text-white mb-6"
+                className="lg:hidden flex items-center gap-2 px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-full text-sm text-white mb-4"
               >
                 <SlidersHorizontal size={16} aria-hidden />
                 <span>Фильтры и Жанры</span>
               </button>
 
-              <div className="flex flex-wrap gap-2 mb-8">
+              <div className="flex flex-wrap gap-2 mb-4">
                 {SORT_OPTIONS.map((opt) => {
                   const isActive = activeSort === opt.key;
                   return (
@@ -227,9 +250,9 @@ export default function BrowsePage() {
                       key={opt.key}
                       type="button"
                       onClick={() => setActiveSort(opt.key)}
-                      className={`inline-flex items-center gap-2 py-2.5 px-4 rounded-full text-sm font-medium transition-all ${
+                      className={`inline-flex items-center gap-2 py-2 px-3.5 rounded-full text-sm font-medium transition-all ${
                         isActive
-                          ? 'bg-[#00B4D8] text-white shadow-[0_0_16px_rgba(0,180,216,0.5)]'
+                          ? 'bg-[#00B4D8] text-white'
                           : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
                       }`}
                     >
@@ -240,12 +263,12 @@ export default function BrowsePage() {
                 })}
               </div>
 
-              <div className="text-zinc-500 text-sm mb-6">
+              <div className="text-zinc-500 text-sm mb-4">
                 Показано {Math.min(visibleCount, filteredStories.length)} из {filteredStories.length} историй
               </div>
 
               {loading ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   {Array.from({ length: 8 }).map((_, i) => (
                     <StoryTileSkeleton key={i} />
                   ))}
@@ -275,13 +298,13 @@ export default function BrowsePage() {
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     {displayedStories.map((item) => (
                       <StoryTile key={item.id} {...item} />
                     ))}
                   </div>
                   {visibleCount < filteredStories.length && (
-                    <div className="mt-12 flex justify-center">
+                    <div className="mt-8 flex justify-center">
                       <button
                         type="button"
                         onClick={() => setVisibleCount((prev) => prev + 20)}

@@ -41,3 +41,49 @@ export async function getTopStories(limit = 12): Promise<Story[]> {
   if (errDate || !byDate) return [];
   return byDate.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
 }
+
+export type BrowseFilter = 'popular' | 'new' | 'free' | 'editor';
+
+/** Список рассказов для страницы каталога по выбранному фильтру. */
+export async function getStoriesForBrowse(filter: BrowseFilter): Promise<Story[]> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return [];
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  let query = supabase.from('stories').select('*');
+
+  switch (filter) {
+    case 'popular':
+      query = query
+        .order('listens_count', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false });
+      break;
+    case 'new':
+      query = query.order('created_at', { ascending: false });
+      break;
+    case 'free':
+      query = query.eq('is_premium', false).order('created_at', { ascending: false });
+      break;
+    case 'editor':
+      query = query.eq('is_editors_choice', true).order('created_at', { ascending: false });
+      break;
+    default:
+      query = query.order('created_at', { ascending: false });
+  }
+
+  const { data, error } = await query.limit(500);
+  if (error) return [];
+  return (data ?? []).map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
+}
+
+/** Инкремент счётчика прослушиваний у рассказа (при открытии страницы или при нажатии Play). */
+export async function incrementListensCount(storyId: number): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: row } = await supabase
+    .from('stories')
+    .select('listens_count')
+    .eq('id', storyId)
+    .single();
+  if (!row) return;
+  const next = (Number((row as { listens_count?: number }).listens_count) || 0) + 1;
+  await supabase.from('stories').update({ listens_count: next }).eq('id', storyId);
+}

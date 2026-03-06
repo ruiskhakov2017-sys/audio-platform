@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
@@ -8,6 +8,7 @@ import { Header } from '@/components/layout/Header';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory, getDisplayTags } from '@/lib/stories';
 import { fetchStoriesFromApi, fetchStoryByIdFromApi, fetchRelatedStoriesFromApi, useDjangoApi } from '@/lib/api';
+import { incrementListensCount } from '@/app/actions/catalog';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { useAuthStore } from '@/store/authStore';
@@ -44,6 +45,7 @@ export default function StoryPage() {
   const [reviewForm, setReviewForm] = useState({ rating: 5, text: '' });
   const [submittingReview, setSubmittingReview] = useState(false);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const hasIncrementedView = useRef(false);
 
   useEffect(() => {
     if (idParam === '') {
@@ -82,6 +84,12 @@ export default function StoryPage() {
         if (current) setSimilar(getSimilarStories(current, all, 8));
       });
   }, [idParam]);
+
+  useEffect(() => {
+    if (!story || typeof story.id !== 'number' || useDjangoApi() || hasIncrementedView.current) return;
+    hasIncrementedView.current = true;
+    incrementListensCount(story.id).catch(() => {});
+  }, [story?.id]);
 
   useEffect(() => {
     if (!story || typeof story.id !== 'number' || !useDjangoApi() || !process.env.NEXT_PUBLIC_API_URL) return;
@@ -127,6 +135,9 @@ export default function StoryPage() {
     if (isCurrentTrack) {
       togglePlay();
     } else {
+      if (!useDjangoApi() && typeof story.id === 'number') {
+        incrementListensCount(story.id).catch(() => {});
+      }
       const queue = [
         storyWithSrc,
         ...similar.map((s) => ({
