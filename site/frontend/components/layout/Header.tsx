@@ -60,7 +60,7 @@ export function Header() {
                             Premium
                         </Link>
                         <Link
-                            href="#about"
+                            href="/about"
                             className="text-lg md:text-xl text-zinc-400 hover:text-[#00B4D8] transition-colors"
                         >
                             О нас
@@ -154,7 +154,7 @@ export function Header() {
                                 Premium
                             </Link>
                             <Link
-                                href="#about"
+                                href="/about"
                                 className="text-sm uppercase tracking-wider text-zinc-400 hover:text-[#00B4D8]"
                                 onClick={() => setMobileMenuOpen(false)}
                             >
