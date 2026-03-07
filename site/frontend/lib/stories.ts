@@ -14,6 +14,7 @@ export type StoryRow = {
   tags?: string[] | null;
   content?: string | null;
   created_at?: string;
+  listens_count?: number | null;
 };
 
 function slugFromTitle(title: string): string {
@@ -40,6 +41,7 @@ export function mapRowToStory(row: StoryRow): Story {
     genres,
     tags: tagList,
     ...(row.content != null && { content: String(row.content) }),
+    ...(row.listens_count != null && { listensCount: Number(row.listens_count) || 0 }),
   };
 }
 

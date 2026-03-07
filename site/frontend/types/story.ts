@@ -14,4 +14,6 @@ export type Story = {
   tags: string[];
   /** Текст рассказа (если есть в БД) */
   content?: string;
-};
+  /** Количество прослушиваний (для Топ-100 и т.п.) */
+  listensCount?: number;
+}
