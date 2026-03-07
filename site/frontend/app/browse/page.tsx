@@ -20,7 +20,7 @@ const SORT_OPTIONS = [
   { key: 'new', label: 'Новинки', icon: '✨' },
   { key: 'editor', label: 'Выбор редакции', icon: '💎' },
   { key: 'trending', label: 'В тренде', icon: '📈' },
-  { key: 'premium', label: 'Премиум', icon: '⭐' },
+  { key: 'premium', label: 'Премиум', icon: '👑' },
   { key: 'free', label: 'Бесплатно', icon: '🎁' },
   { key: 'mine', label: 'Мои', icon: '❤️' },
 ] as const;
@@ -325,6 +325,9 @@ export default function BrowsePage() {
                   const isSidebarFilterActive = activeGenre !== ALL_GENRES || selectedTag !== null;
                   const isActive = viewMode === 'list' && !isSidebarFilterActive && activeSort === opt.key;
                   const isMine = opt.key === 'mine';
+                  const isPremium = opt.key === 'premium';
+                  const premiumActive = isPremium && isActive;
+                  const premiumInactive = isPremium && !isActive;
                   return (
                     <button
                       key={opt.key}
@@ -338,9 +341,13 @@ export default function BrowsePage() {
                         setActiveSort(opt.key);
                       }}
                       className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
-                        isActive
-                          ? 'bg-[#00B4D8] text-white'
-                          : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
+                        premiumActive
+                          ? 'bg-[#FFD700] text-black border border-[#FFD700] shadow-[0_0_12px_rgba(255,215,0,0.5)]'
+                          : premiumInactive
+                            ? 'bg-white/5 border border-[#FFD700]/60 text-[#FFD700] hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.3)]'
+                            : isActive
+                              ? 'bg-[#00B4D8] text-white'
+                              : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
                       }`}
                     >
                       <span aria-hidden>{opt.icon}</span>

@@ -105,10 +105,10 @@ export function MobileFilterDrawer({
                 type="button"
                 onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
                 className={`${tagBase} ${
-                  accessFilter === 'premium' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
+                  accessFilter === 'premium' ? 'bg-[#FFD700]/20 border-[#FFD700]/70 text-[#FFD700]' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#FFD700]/50'
                 }`}
               >
-                ⭐ Премиум
+                👑 Премиум
               </button>
             </div>
           </div>

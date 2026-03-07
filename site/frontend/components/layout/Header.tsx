@@ -62,8 +62,8 @@ export function Header() {
                         <div className="w-px h-4 bg-white/20 mx-2 xl:mx-4" aria-hidden />
                         {/* Услуги */}
                         <div className="flex items-center gap-5">
-                            <Link href="/premium" className="nav-link text-[12px] uppercase tracking-widest text-amber-400/95 border border-amber-400/50 rounded px-2.5 py-1 hover:bg-amber-400/10 hover:border-amber-400/70 transition-all relative pb-1 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-amber-400 hover:after:w-full after:transition-[width] after:duration-300">
-                                Премиум
+                            <Link href="/premium" className="nav-link inline-flex items-center gap-1.5 text-[12px] uppercase tracking-widest text-[#FFD700] border border-[#FFD700]/60 rounded px-2.5 py-1 hover:bg-[#FFD700]/10 hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.25)] transition-all relative pb-1 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-[#FFD700] hover:after:w-full after:transition-[width] after:duration-300">
+                                <span aria-hidden>👑</span> Премиум
                             </Link>
                             <Link href="/order" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
                                 Заказать историю
@@ -155,7 +155,7 @@ export function Header() {
                         <div className="px-6 py-6 flex flex-col gap-1 max-h-[70vh] overflow-y-auto">
                             <Link href="/catalog" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Каталог</Link>
                             <Link href="/top" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Топ-100</Link>
-                            <Link href="/premium" className="text-xs uppercase tracking-widest text-amber-400/95 py-3 border-b border-white/5 font-medium" onClick={() => setMobileMenuOpen(false)}>Премиум</Link>
+                            <Link href="/premium" className="text-xs uppercase tracking-widest text-[#FFD700] py-3 border-b border-white/5 font-medium inline-flex items-center gap-1.5" onClick={() => setMobileMenuOpen(false)}><span aria-hidden>👑</span> Премиум</Link>
                             <Link href="/order" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Заказать историю</Link>
                             <Link href="/reviews" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Отзывы</Link>
                             <Link href="/about" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>О проекте</Link>

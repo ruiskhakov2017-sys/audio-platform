@@ -93,11 +93,11 @@ export function FilterSidebar({
               onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
               className={`${tagBase} ${
                 accessFilter === 'premium'
-                  ? 'bg-white/10 border-white/20 text-white'
-                  : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+                  ? 'bg-[#FFD700]/15 border-[#FFD700]/70 text-[#FFD700]'
+                  : 'bg-transparent border-white/10 text-zinc-400 hover:border-[#FFD700]/40 hover:text-zinc-200'
               }`}
             >
-              ⭐ Премиум
+              👑 Премиум
             </button>
           </div>
         </div>
