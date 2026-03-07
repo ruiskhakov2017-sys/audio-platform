@@ -25,10 +25,9 @@ const SORT_OPTIONS = [
   { key: 'mine', label: 'Мои', icon: '❤️' },
 ] as const;
 
-/** Путь к обложке жанра: /genres/[название]/cover.jpg (расширение строго .jpg) */
+/** URL обложки жанра через API (обходит 404 на статике с кириллицей/пробелами) */
 function genreImagePath(genre: string): string {
-  const encoded = encodeURIComponent(genre);
-  return `/genres/${encoded}/cover.jpg`;
+  return `/api/genre-cover?genre=${encodeURIComponent(genre)}`;
 }
 
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
