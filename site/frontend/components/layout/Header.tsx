@@ -86,8 +86,8 @@ export function Header() {
                         </div>
                     </nav>
 
-                    {/* Мобилка: только кнопка Поиск (без бургера и меню) */}
-                    <div className="flex md:hidden items-center">
+                    {/* Мобилка (max-width: 768px): Поиск + Бургер, меню по клику */}
+                    <div className="flex md:hidden items-center gap-1">
                         <button
                             type="button"
                             onClick={() => setSearchOpen(true)}
@@ -95,6 +95,14 @@ export function Header() {
                             aria-label="Поиск"
                         >
                             <Search className="w-6 h-6 text-zinc-400" strokeWidth={1.5} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setMobileMenuOpen(true)}
+                            className="p-2.5 rounded-full hover:bg-white/5 transition-colors"
+                            aria-label="Открыть меню"
+                        >
+                            <Menu className="w-6 h-6 text-white" strokeWidth={1.5} />
                         </button>
                     </div>
 

@@ -392,7 +392,7 @@ export default function BrowsePage() {
               )}
 
               {viewMode === 'genres' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-0 sm:px-0">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {GENRES_LIST.map((genre) => (
                     <button
                       key={genre}
@@ -401,7 +401,7 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('list');
                       }}
-                      className="relative aspect-[3/4] sm:aspect-[4/3] min-h-[200px] sm:min-h-[140px] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
+                      className="relative aspect-[4/3] sm:aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
                     >
                       <img
                         src={genreImagePath(genre)}
@@ -409,8 +409,8 @@ export default function BrowsePage() {
                         className="absolute inset-0 w-full h-full object-cover"
                         aria-hidden
                       />
-                      <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
-                      <span className="absolute inset-0 flex items-center justify-center text-center px-4 text-white font-semibold text-lg sm:text-base drop-shadow-lg">
+                      <span className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/50 sm:from-black/90 sm:via-black/40 sm:to-transparent" aria-hidden />
+                      <span className="absolute inset-0 flex items-center justify-center text-center px-4 text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] sm:drop-shadow-lg sm:font-semibold">
                         {genre}
                       </span>
                     </button>
