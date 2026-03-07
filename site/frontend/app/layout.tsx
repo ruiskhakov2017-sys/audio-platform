@@ -53,9 +53,12 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <body
+        suppressHydrationWarning
         className={`${philosopher.variable} ${montserrat.variable} font-sans antialiased min-h-screen text-white flex flex-col`}
         style={{ backgroundColor: '#000814' }}
       >
+        {/* Debug: если в консоли мобилки не видно — скрипт падает до гидрации React */}
+        <script dangerouslySetInnerHTML={{ __html: 'console.log("App starting...");' }} />
         <AuthInitializer />
         <div className="flex flex-col flex-1 min-h-screen">
           <main className="flex-grow">

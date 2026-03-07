@@ -53,8 +53,10 @@ const useAudioEngine = () => {
       if (now - lastSavedRef.current > SAVE_INTERVAL_MS) {
         lastSavedRef.current = now;
         try {
-          localStorage.setItem(`progress:${track.id}`, Math.floor(audio.currentTime).toString());
-        } catch {}
+          if (typeof window !== "undefined" && window.localStorage) {
+            localStorage.setItem(`progress:${track.id}`, Math.floor(audio.currentTime).toString());
+          }
+        } catch (_) {}
       }
     };
 

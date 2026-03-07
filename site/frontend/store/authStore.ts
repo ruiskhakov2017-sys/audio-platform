@@ -7,7 +7,7 @@ import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 
 const AUTH_ACCESS_KEY = 'auth_access_token';
-const API_BASE = typeof window !== 'undefined' ? process.env.NEXT_PUBLIC_API_URL || '' : '';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 function useDjangoAuth(): boolean {
   return Boolean(API_BASE);
