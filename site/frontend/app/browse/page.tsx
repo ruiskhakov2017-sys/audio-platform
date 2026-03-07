@@ -25,18 +25,9 @@ const SORT_OPTIONS = [
   { key: 'mine', label: 'Мои', icon: '❤️' },
 ] as const;
 
-/** Путь к картинке жанра: есть готовые в public, остальные — заглушка */
+/** Путь к обложке жанра: public/genres/[название_жанра]/cover.jpg */
 function genreImagePath(genre: string): string {
-  const map: Record<string, string> = {
-    '18 лет': '18-plus',
-    'Группа': 'group',
-    'Подчинение': 'submission',
-    'Измена': 'betrayal',
-    'Фантазии': 'fantasies',
-    'Служебный роман': 'office',
-  };
-  const slug = map[genre] || '18-plus';
-  return `/images/genres/${slug}.jpg`;
+  return `/genres/${encodeURIComponent(genre)}/cover.jpg`;
 }
 
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
