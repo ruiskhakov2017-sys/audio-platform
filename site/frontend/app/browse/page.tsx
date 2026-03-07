@@ -9,17 +9,20 @@ import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
 import { StoryTile } from '@/components/browse/StoryTile';
 import { StoryTileSkeleton } from '@/components/browse/StoryTileSkeleton';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
-import { getStoriesForBrowse, type BrowseFilter } from '@/app/actions/catalog';
+import { getStoriesForBrowse, getStoriesForCatalog, type BrowseFilter } from '@/app/actions/catalog';
 import { getDisplayTags } from '@/lib/stories';
+import { useAuthStore } from '@/store/authStore';
+import { useFavoritesStore } from '@/store/favoritesStore';
 import type { Story } from '@/types/story';
 
 const SORT_OPTIONS = [
   { key: 'popular', label: 'Популярное', icon: '🔥' },
-  { key: 'new', label: 'Новинки', icon: '🆕' },
-  { key: 'free', label: 'Бесплатно', icon: '🎁' },
+  { key: 'new', label: 'Новинки', icon: '✨' },
   { key: 'editor', label: 'Выбор редакции', icon: '💎' },
+  { key: 'trending', label: 'В тренде', icon: '📈' },
   { key: 'premium', label: 'Премиум', icon: '⭐' },
-  { key: 'trending', label: 'В тренде', icon: '🔥' },
+  { key: 'free', label: 'Бесплатно', icon: '🎁' },
+  { key: 'mine', label: 'Мои', icon: '❤️' },
 ] as const;
 
 /** Путь к картинке жанра: есть готовые в public, остальные — заглушка */
@@ -84,6 +87,7 @@ function sortStoriesClient(list: Story[], sortKey: SortKey): Story[] {
     case 'editor':
     case 'new':
     case 'trending':
+    case 'mine':
       return arr.sort((a, b) => b.id - a.id);
     case 'free':
       return arr.filter((s) => !s.isPremium).sort((a, b) => b.id - a.id);
@@ -140,6 +144,10 @@ export default function BrowsePage() {
   const [list, setList] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showMineLoginModal, setShowMineLoginModal] = useState(false);
+
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const likedIds = useFavoritesStore((s) => s.likedIds);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -156,6 +164,24 @@ export default function BrowsePage() {
   useEffect(() => {
     setLoadError(null);
     setLoading(true);
+    if (activeSort === 'mine') {
+      if (!isAuthenticated) {
+        setList([]);
+        setLoading(false);
+        return;
+      }
+      if (useDjangoApi()) {
+        fetchStoriesFromApi()
+          .then((data) => setList(Array.isArray(data) ? data : []))
+          .finally(() => setLoading(false));
+        return;
+      }
+      getStoriesForCatalog()
+        .then((data) => setList(data ?? []))
+        .catch(() => setList([]))
+        .finally(() => setLoading(false));
+      return;
+    }
     if (useDjangoApi()) {
       fetchStoriesFromApi({
         search: searchQuery.trim() || undefined,
@@ -172,7 +198,7 @@ export default function BrowsePage() {
         setList([]);
       })
       .finally(() => setLoading(false));
-  }, [activeSort, searchQuery, activeGenre]);
+  }, [activeSort, searchQuery, activeGenre, isAuthenticated]);
 
   const genres = [ALL_GENRES, ...GENRES_LIST];
 
@@ -183,10 +209,13 @@ export default function BrowsePage() {
   }, [list.length]);
 
   const filteredStories = useMemo(() => {
-    const filtered = filterStories(list, activeGenre, selectedTag, searchQuery);
+    let filtered = filterStories(list, activeGenre, selectedTag, searchQuery);
+    if (activeSort === 'mine') {
+      filtered = filtered.filter((s) => likedIds.includes(String(s.id)));
+    }
     if (useDjangoApi()) return sortStoriesClient(filtered, activeSort);
     return filtered;
-  }, [list, activeGenre, selectedTag, searchQuery, activeSort]);
+  }, [list, activeGenre, selectedTag, searchQuery, activeSort, likedIds]);
 
   useEffect(() => {
     setVisibleCount(20);
@@ -264,11 +293,11 @@ export default function BrowsePage() {
                 <span>Фильтры и Жанры</span>
               </button>
 
-              <div className="flex flex-wrap gap-2 mb-4">
+              <div className="flex overflow-x-auto gap-2 pb-2 mb-4 lg:grid lg:grid-cols-8 lg:overflow-visible lg:pb-0 lg:gap-2 [&>button]:shrink-0">
                 <button
                   type="button"
                   onClick={() => setViewMode('genres')}
-                  className={`inline-flex items-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all shrink-0 ${
+                  className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
                     viewMode === 'genres'
                       ? 'bg-[#00B4D8] text-white'
                       : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
@@ -279,15 +308,20 @@ export default function BrowsePage() {
                 </button>
                 {SORT_OPTIONS.map((opt) => {
                   const isActive = viewMode === 'stories' && activeSort === opt.key;
+                  const isMine = opt.key === 'mine';
                   return (
                     <button
                       key={opt.key}
                       type="button"
                       onClick={() => {
+                        if (isMine && !isAuthenticated) {
+                          setShowMineLoginModal(true);
+                          return;
+                        }
                         setViewMode('stories');
                         setActiveSort(opt.key);
                       }}
-                      className={`inline-flex items-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all shrink-0 ${
+                      className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
                         isActive
                           ? 'bg-[#00B4D8] text-white'
                           : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
@@ -299,6 +333,40 @@ export default function BrowsePage() {
                   );
                 })}
               </div>
+
+              {showMineLoginModal && (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+                  onClick={() => setShowMineLoginModal(false)}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="mine-login-title"
+                >
+                  <div
+                    className="bg-zinc-900 border border-white/10 rounded-xl p-6 max-w-sm w-full shadow-xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <p id="mine-login-title" className="text-white text-lg font-medium mb-4">
+                      Войдите, чтобы сохранять любимые истории
+                    </p>
+                    <div className="flex gap-3">
+                      <a
+                        href="/profile"
+                        className="flex-1 py-2.5 text-center rounded-lg bg-[#00B4D8] text-white font-medium hover:bg-cyan-600 transition-colors"
+                      >
+                        Войти
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => setShowMineLoginModal(false)}
+                        className="px-4 py-2.5 rounded-lg border border-white/20 text-zinc-300 hover:bg-white/5 transition-colors"
+                      >
+                        Закрыть
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {viewMode === 'genres' ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4">
@@ -344,6 +412,10 @@ export default function BrowsePage() {
                       ) : list.length === 0 ? (
                         <p className="text-xl text-zinc-400 mb-2">
                           Каталог пуст. Загрузите рассказы в админке или проверьте переменные Supabase в Vercel.
+                        </p>
+                      ) : activeSort === 'mine' ? (
+                        <p className="text-xl text-zinc-400 mb-2">
+                          В избранном пока пусто. Отметьте истории сердечком в каталоге.
                         </p>
                       ) : (
                         <>

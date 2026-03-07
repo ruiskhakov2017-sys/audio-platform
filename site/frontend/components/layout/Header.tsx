@@ -46,24 +46,27 @@ export function Header() {
                     </Link>
 
                     {/* Desktop Navigation */}
-                    <nav className="hidden md:flex items-center gap-10 font-medium">
-                        <Link
-                            href="/browse"
-                            className="text-lg md:text-xl text-zinc-400 hover:text-[#00B4D8] transition-colors"
-                        >
+                    <nav className="hidden lg:flex items-center gap-4 xl:gap-5 flex-1 max-w-5xl mx-6 font-medium justify-center">
+                        <Link href="/catalog" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
                             Каталог
                         </Link>
-                        <Link
-                            href="/premium"
-                            className="text-lg md:text-xl text-zinc-400 hover:text-[#00B4D8] transition-colors"
-                        >
-                            Premium
+                        <Link href="/top" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
+                            Топ-100
                         </Link>
-                        <Link
-                            href="/about"
-                            className="text-lg md:text-xl text-zinc-400 hover:text-[#00B4D8] transition-colors"
-                        >
-                            О нас
+                        <Link href="/order" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
+                            Заказать историю
+                        </Link>
+                        <Link href="/reviews" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
+                            Отзывы
+                        </Link>
+                        <Link href="/premium" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
+                            Премиум
+                        </Link>
+                        <Link href="/faq" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
+                            Вопросы (FAQ)
+                        </Link>
+                        <Link href="/about" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
+                            О проекте
                         </Link>
                     </nav>
 
@@ -119,7 +122,7 @@ export function Header() {
 
                     {/* Mobile Menu Button */}
                     <button
-                        className="md:hidden p-2"
+                        className="lg:hidden p-2"
                         onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                     >
                         {mobileMenuOpen ? (
@@ -133,33 +136,19 @@ export function Header() {
                 {/* Mobile Menu */}
                 {mobileMenuOpen && (
                     <motion.div
-                        className="md:hidden glass-strong border-t border-white/10"
+                        className="lg:hidden glass-strong border-t border-white/10"
                         initial={{ opacity: 0, y: -20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
                     >
-                        <div className="px-6 py-6 flex flex-col gap-4">
-                            <Link
-                                href="/browse"
-                                className="text-sm uppercase tracking-wider text-zinc-400 hover:text-[#00B4D8]"
-                                onClick={() => setMobileMenuOpen(false)}
-                            >
-                                Каталог
-                            </Link>
-                            <Link
-                                href="/premium"
-                                className="text-sm uppercase tracking-wider text-zinc-400 hover:text-[#00B4D8]"
-                                onClick={() => setMobileMenuOpen(false)}
-                            >
-                                Premium
-                            </Link>
-                            <Link
-                                href="/about"
-                                className="text-sm uppercase tracking-wider text-zinc-400 hover:text-[#00B4D8]"
-                                onClick={() => setMobileMenuOpen(false)}
-                            >
-                                О нас
-                            </Link>
+                        <div className="px-6 py-6 flex flex-col gap-3 max-h-[70vh] overflow-y-auto">
+                            <Link href="/catalog" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Каталог</Link>
+                            <Link href="/top" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Топ-100</Link>
+                            <Link href="/order" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Заказать историю</Link>
+                            <Link href="/reviews" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Отзывы</Link>
+                            <Link href="/premium" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Премиум</Link>
+                            <Link href="/faq" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Вопросы (FAQ)</Link>
+                            <Link href="/about" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>О проекте</Link>
                             <div className="flex gap-4 pt-4 border-t border-white/10">
                                 <button
                                     type="button"
