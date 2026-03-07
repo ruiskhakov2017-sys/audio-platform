@@ -34,7 +34,7 @@ export function Header() {
     return (
         <motion.header
             className="fixed top-0 left-0 right-0 z-50 border-b border-white/0 transition-all"
-            style={{ backgroundColor: headerBg }}
+            style={mounted ? { backgroundColor: headerBg } : { backgroundColor: 'rgba(0,8,20,0.8)' }}
         >
             <div className="backdrop-blur-xl min-h-24 flex items-center">
                 <div className="max-w-[1800px] mx-auto px-6 py-4 w-full flex items-center justify-between">
@@ -48,8 +48,8 @@ export function Header() {
                         </motion.div>
                     </Link>
 
-                    {/* Desktop Navigation: 6 разделов, группировка Навигация | Услуги | О нас */}
-                    <nav className="hidden lg:flex items-center flex-1 max-w-5xl mx-6 font-medium justify-center">
+                    {/* Desktop Navigation: на md и выше; на мобилке — бургер */}
+                    <nav className="hidden md:flex items-center flex-1 max-w-5xl mx-6 font-medium justify-center">
                         {/* Навигация */}
                         <div className="flex items-center gap-5">
                             <Link href="/catalog" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
@@ -81,8 +81,8 @@ export function Header() {
                         </div>
                     </nav>
 
-                    {/* Right Icons */}
-                    <div className="hidden lg:flex items-center gap-4">
+                    {/* Right Icons (десктоп) */}
+                    <div className="hidden md:flex items-center gap-4">
                         <motion.button
                             type="button"
                             onClick={() => setSearchOpen(true)}
@@ -131,9 +131,11 @@ export function Header() {
                         )}
                     </div>
 
-                    {/* Mobile Menu Button */}
+                    {/* Бургер-меню (мобилка и планшет) */}
                     <button
-                        className="lg:hidden p-2"
+                        type="button"
+                        className="md:hidden p-2 rounded-lg hover:bg-white/5"
+                        aria-label={mobileMenuOpen ? 'Закрыть меню' : 'Открыть меню'}
                         onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                     >
                         {mobileMenuOpen ? (
@@ -144,10 +146,10 @@ export function Header() {
                     </button>
                 </div>
 
-                {/* Mobile Menu */}
+                {/* Выдвижное меню (мобилка и планшет) */}
                 {mobileMenuOpen && (
                     <motion.div
-                        className="lg:hidden glass-strong border-t border-white/10"
+                        className="md:hidden glass-strong border-t border-white/10"
                         initial={{ opacity: 0, y: -20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
