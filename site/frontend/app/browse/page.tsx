@@ -18,6 +18,8 @@ const SORT_OPTIONS = [
   { key: 'new', label: 'Новинки', icon: '🆕' },
   { key: 'free', label: 'Бесплатно', icon: '🎁' },
   { key: 'editor', label: 'Выбор редакции', icon: '💎' },
+  { key: 'premium', label: 'Премиум', icon: '⭐' },
+  { key: 'trending', label: 'В тренде', icon: '🔥' },
 ] as const;
 
 /** Путь к картинке жанра: есть готовые в public, остальные — заглушка */
@@ -81,9 +83,12 @@ function sortStoriesClient(list: Story[], sortKey: SortKey): Story[] {
     case 'popular':
     case 'editor':
     case 'new':
+    case 'trending':
       return arr.sort((a, b) => b.id - a.id);
     case 'free':
       return arr.filter((s) => !s.isPremium).sort((a, b) => b.id - a.id);
+    case 'premium':
+      return arr.filter((s) => s.isPremium).sort((a, b) => b.id - a.id);
     default:
       return arr;
   }
@@ -263,7 +268,7 @@ export default function BrowsePage() {
                 <button
                   type="button"
                   onClick={() => setViewMode('genres')}
-                  className={`inline-flex items-center gap-2 py-2 px-3.5 rounded-full text-sm font-medium transition-all ${
+                  className={`inline-flex items-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all shrink-0 ${
                     viewMode === 'genres'
                       ? 'bg-[#00B4D8] text-white'
                       : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
@@ -282,7 +287,7 @@ export default function BrowsePage() {
                         setViewMode('stories');
                         setActiveSort(opt.key);
                       }}
-                      className={`inline-flex items-center gap-2 py-2 px-3.5 rounded-full text-sm font-medium transition-all ${
+                      className={`inline-flex items-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all shrink-0 ${
                         isActive
                           ? 'bg-[#00B4D8] text-white'
                           : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
@@ -296,7 +301,7 @@ export default function BrowsePage() {
               </div>
 
               {viewMode === 'genres' ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4">
                   {GENRES_LIST.map((genre) => (
                     <button
                       key={genre}
@@ -305,17 +310,16 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('stories');
                       }}
-                      className="relative aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all group"
+                      className="relative aspect-[4/3] min-h-[140px] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all"
                     >
-                      <span
-                        className="absolute inset-0 bg-cover bg-center"
-                        style={{
-                          backgroundImage: `url(${genreImagePath(genre)})`,
-                        }}
+                      <img
+                        src={genreImagePath(genre)}
+                        alt=""
+                        className="absolute inset-0 w-full h-full object-cover"
                         aria-hidden
                       />
                       <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
-                      <span className="absolute inset-0 flex items-center justify-center text-center px-2 text-white font-medium text-sm sm:text-base drop-shadow-lg">
+                      <span className="absolute inset-0 flex items-center justify-center text-center px-3 text-white font-medium text-base sm:text-lg drop-shadow-lg">
                         {genre}
                       </span>
                     </button>

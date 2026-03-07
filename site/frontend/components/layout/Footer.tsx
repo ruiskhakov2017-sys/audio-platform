@@ -4,8 +4,8 @@ import Link from 'next/link';
 
 export function Footer() {
   return (
-    <footer className="relative z-10 border-t border-white/10 bg-black/40 backdrop-blur-sm mt-auto pb-24">
-      <div className="max-w-[1800px] mx-auto px-6 py-8">
+    <footer className="relative z-10 border-t border-white/10 bg-black/40 backdrop-blur-sm mt-auto pb-12">
+      <div className="max-w-[1800px] mx-auto px-6 py-4">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="font-heading text-xl text-white">
             Dirty Secrets
@@ -25,7 +25,7 @@ export function Footer() {
             </Link>
           </nav>
         </div>
-        <p className="mt-6 text-center text-zinc-500 text-xs">
+        <p className="mt-3 text-center text-zinc-500 text-xs">
           © 2026 Dirty Secrets. Все права защищены. 18+
         </p>
       </div>

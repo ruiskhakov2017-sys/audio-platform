@@ -26,7 +26,7 @@ function tagLabel(tag: string): string {
 }
 
 const tagBase =
-  'py-1.5 px-2.5 rounded-lg text-sm font-medium transition-colors border min-w-0';
+  'py-1 px-2 rounded-md text-[13px] font-medium transition-colors border min-w-0 flex-shrink-0';
 
 export function FilterSidebar({
   searchQuery,
@@ -64,7 +64,7 @@ export function FilterSidebar({
 
         <div className="mb-4">
           <h4 className="text-sm font-medium text-zinc-400 mb-2">Жанры</h4>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 content-start">
             {genres.map((genre) => {
               const isActive = activeGenre === genre;
               return (
@@ -87,7 +87,7 @@ export function FilterSidebar({
 
         <div className="mb-4">
           <h4 className="text-sm font-medium text-zinc-400 mb-2">Теги</h4>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 content-start">
             {allTags.map((tag) => {
               const isActive = selectedTag === tag;
               return (

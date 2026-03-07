@@ -42,7 +42,7 @@ export async function getTopStories(limit = 12): Promise<Story[]> {
   return byDate.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
 }
 
-export type BrowseFilter = 'popular' | 'new' | 'free' | 'editor';
+export type BrowseFilter = 'popular' | 'new' | 'free' | 'editor' | 'premium' | 'trending';
 
 /** Список рассказов для страницы каталога по выбранному фильтру. */
 export async function getStoriesForBrowse(filter: BrowseFilter): Promise<Story[]> {
@@ -65,6 +65,17 @@ export async function getStoriesForBrowse(filter: BrowseFilter): Promise<Story[]
     case 'editor':
       query = query.eq('is_editors_choice', true).order('created_at', { ascending: false });
       break;
+    case 'premium':
+      query = query.eq('is_premium', true).order('created_at', { ascending: false });
+      break;
+    case 'trending': {
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      query = query
+        .gte('created_at', ninetyDaysAgo)
+        .order('listens_count', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false });
+      break;
+    }
     default:
       query = query.order('created_at', { ascending: false });
   }
