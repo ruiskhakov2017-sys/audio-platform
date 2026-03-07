@@ -9,6 +9,7 @@ import { AuthToast } from '@/components/ui/AuthToast';
 import { AuthInitializer } from '@/components/auth/AuthInitializer';
 import { ToasterSonner } from '@/components/ui/ToasterSonner';
 import { Footer } from '@/components/layout/Footer';
+import { ClientErrorBoundary } from '@/components/ClientErrorBoundary';
 
 const philosopher = Philosopher({
   subsets: ['cyrillic', 'latin'],
@@ -58,7 +59,9 @@ export default function RootLayout({
         <AuthInitializer />
         <div className="flex flex-col flex-1 min-h-screen">
           <main className="flex-grow">
-            {children}
+            <ClientErrorBoundary>
+              {children}
+            </ClientErrorBoundary>
           </main>
           <Footer />
         </div>

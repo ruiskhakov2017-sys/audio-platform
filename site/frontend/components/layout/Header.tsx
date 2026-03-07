@@ -5,13 +5,14 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, User, Heart, Menu, X, LogOut } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { useAuthStore } from '@/store/authStore';
 import { SearchModal } from '@/components/layout/SearchModal';
 
 export function Header() {
     const router = useRouter();
+    const [mounted, setMounted] = useState(false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const likedIds = useFavoritesStore((s) => s.likedIds);
@@ -20,6 +21,8 @@ export function Header() {
     const profile = useAuthStore((s) => s.profile);
     const logout = useAuthStore((s) => s.logout);
     const { scrollY } = useScroll();
+
+    useEffect(() => setMounted(true), []);
 
     // Background blur appears on scroll
     const headerBg = useTransform(
@@ -97,7 +100,7 @@ export function Header() {
                             <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
                                 <Heart className="w-6 h-6 text-zinc-400" strokeWidth={1.5} />
                             </motion.div>
-                            {favoritesCount > 0 && (
+                            {mounted && favoritesCount > 0 && (
                                 <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
                                     {favoritesCount > 99 ? '99+' : favoritesCount}
                                 </span>
@@ -108,14 +111,14 @@ export function Header() {
                             className="p-0.5 rounded-full hover:bg-white/5 transition-colors inline-flex ring-0"
                         >
                             <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="rounded-full overflow-hidden w-9 h-9 flex items-center justify-center bg-[#00B4D8]/20 border border-[#00B4D8]/50">
-                                {profile?.avatar_url ? (
+                                {mounted && profile?.avatar_url ? (
                                     <Image src={profile.avatar_url} alt="" width={36} height={36} className="w-full h-full object-cover" unoptimized />
                                 ) : (
                                     <User className="w-5 h-5 text-zinc-400" strokeWidth={1.5} />
                                 )}
                             </motion.div>
                         </Link>
-                        {isAuthenticated && (
+                        {mounted && isAuthenticated && (
                             <button
                                 type="button"
                                 onClick={async () => { await logout(); router.push('/'); }}
@@ -171,24 +174,24 @@ export function Header() {
                                     onClick={() => setMobileMenuOpen(false)}
                                 >
                                     <Heart className="w-5 h-5 text-zinc-400" />
-                                    {favoritesCount > 0 && (
+                                    {mounted && favoritesCount > 0 && (
                                         <span className="absolute top-0 right-0 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
                                             {favoritesCount > 99 ? '99+' : favoritesCount}
                                         </span>
                                     )}
                                 </Link>
                                 <Link
-                                    href={isAuthenticated ? '/profile' : '/login'}
+                                    href={mounted && isAuthenticated ? '/profile' : '/login'}
                                     className="p-2 rounded-full overflow-hidden w-9 h-9 flex items-center justify-center bg-[#00B4D8]/20 border border-[#00B4D8]/50"
                                     onClick={() => setMobileMenuOpen(false)}
                                 >
-                                    {profile?.avatar_url ? (
+                                    {mounted && profile?.avatar_url ? (
                                         <Image src={profile.avatar_url} alt="" width={36} height={36} className="w-full h-full object-cover" unoptimized />
                                     ) : (
                                         <User className="w-5 h-5 text-zinc-400" />
                                     )}
                                 </Link>
-                                {isAuthenticated && (
+                                {mounted && isAuthenticated && (
                                     <button
                                         type="button"
                                         className="flex items-center gap-2 p-2 text-zinc-400 hover:text-white"

@@ -99,7 +99,7 @@ export function MobileFilterDrawer({
                   accessFilter === 'free' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
                 }`}
               >
-                🆓 Бесплатно
+                🎁 Бесплатно
               </button>
               <button
                 type="button"
@@ -108,7 +108,7 @@ export function MobileFilterDrawer({
                   accessFilter === 'premium' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
                 }`}
               >
-                💎 Премиум
+                ⭐ Премиум
               </button>
             </div>
           </div>

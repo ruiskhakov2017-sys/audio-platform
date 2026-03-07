@@ -86,7 +86,7 @@ export function FilterSidebar({
                   : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
               }`}
             >
-              🆓 Бесплатно
+              🎁 Бесплатно
             </button>
             <button
               type="button"
@@ -97,7 +97,7 @@ export function FilterSidebar({
                   : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
               }`}
             >
-              💎 Премиум
+              ⭐ Премиум
             </button>
           </div>
         </div>

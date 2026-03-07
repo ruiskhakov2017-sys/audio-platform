@@ -26,6 +26,10 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: 'images.unsplash.com' },
       { protocol: 'https', hostname: 'pub-c5fa586b79dc4640bcd67692b7422a37.r2.dev' },
+      { protocol: 'https', hostname: 'dirtysecrets.ru' },
+      { protocol: 'https', hostname: 'www.dirtysecrets.ru' },
+      { protocol: 'https', hostname: 'supabase.co' },
+      // Добавьте hostname вашего Supabase Storage при необходимости, например: xxx.supabase.co
     ],
   },
 };

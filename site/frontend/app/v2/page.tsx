@@ -22,16 +22,23 @@ export default function Home() {
   const [activeStory, setActiveStory] = useState<Story | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+  const storiesUrl = apiBase ? `${apiBase.replace(/\/$/, '')}/api/stories/` : '';
+
   // 1. Загрузка рассказов при старте
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/stories/')
+    if (!storiesUrl) {
+      setLoading(false);
+      return;
+    }
+    fetch(storiesUrl)
       .then((res) => res.json())
       .then((data) => {
         setStories(data);
         setLoading(false);
       })
       .catch((err) => console.error(err));
-  }, []);
+  }, [storiesUrl]);
 
   // 2. Автозапуск плеера при выборе рассказа
   useEffect(() => {

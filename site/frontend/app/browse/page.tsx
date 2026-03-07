@@ -313,7 +313,7 @@ export default function BrowsePage() {
                   type="button"
                   onClick={() => setViewMode('genres')}
                   className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
-                    viewMode === 'genres'
+                    viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
                       ? 'bg-[#00B4D8] text-white'
                       : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
                   }`}
@@ -322,7 +322,8 @@ export default function BrowsePage() {
                   Жанры
                 </button>
                 {SORT_OPTIONS.map((opt) => {
-                  const isActive = viewMode === 'list' && activeSort === opt.key;
+                  const isSidebarFilterActive = activeGenre !== ALL_GENRES || selectedTag !== null;
+                  const isActive = viewMode === 'list' && !isSidebarFilterActive && activeSort === opt.key;
                   const isMine = opt.key === 'mine';
                   return (
                     <button
