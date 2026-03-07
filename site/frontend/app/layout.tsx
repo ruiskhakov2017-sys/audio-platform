@@ -1,7 +1,7 @@
+import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from 'react';
 import { Philosopher, Montserrat } from "next/font/google";
-import "./globals.css";
 import { GlobalAudioPlayer } from '@/components/player/GlobalAudioPlayer';
 import { GlobalPlayerBar } from '@/components/player/GlobalPlayerBar';
 import { PaywallModal } from '@/components/ui/PaywallModal';
