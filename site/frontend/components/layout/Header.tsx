@@ -45,33 +45,41 @@ export function Header() {
                         </motion.div>
                     </Link>
 
-                    {/* Desktop Navigation */}
-                    <nav className="hidden lg:flex items-center gap-4 xl:gap-5 flex-1 max-w-5xl mx-6 font-medium justify-center">
-                        <Link href="/catalog" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            Каталог
-                        </Link>
-                        <Link href="/top" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            Топ-100
-                        </Link>
-                        <Link href="/order" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            Заказать историю
-                        </Link>
-                        <Link href="/reviews" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            Отзывы
-                        </Link>
-                        <Link href="/premium" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            Премиум
-                        </Link>
-                        <Link href="/faq" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            Вопросы (FAQ)
-                        </Link>
-                        <Link href="/about" className="nav-link text-sm text-zinc-400 tracking-wide hover:text-amber-200/90 transition-colors relative after:absolute after:left-0 after:bottom-0 after:h-px after:w-0 after:bg-amber-400/80 hover:after:w-full after:transition-all after:duration-200 py-1">
-                            О проекте
-                        </Link>
+                    {/* Desktop Navigation: 6 разделов, группировка Навигация | Услуги | О нас */}
+                    <nav className="hidden lg:flex items-center flex-1 max-w-5xl mx-6 font-medium justify-center">
+                        {/* Навигация */}
+                        <div className="flex items-center gap-5">
+                            <Link href="/catalog" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                                Каталог
+                            </Link>
+                            <Link href="/top" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                                Топ-100
+                            </Link>
+                        </div>
+                        <div className="w-px h-4 bg-white/20 mx-2 xl:mx-4" aria-hidden />
+                        {/* Услуги */}
+                        <div className="flex items-center gap-5">
+                            <Link href="/premium" className="nav-link text-[12px] uppercase tracking-widest text-amber-400/95 border border-amber-400/50 rounded px-2.5 py-1 hover:bg-amber-400/10 hover:border-amber-400/70 transition-all relative pb-1 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-amber-400 hover:after:w-full after:transition-[width] after:duration-300">
+                                Премиум
+                            </Link>
+                            <Link href="/order" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                                Заказать историю
+                            </Link>
+                            <Link href="/reviews" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                                Отзывы
+                            </Link>
+                        </div>
+                        <div className="w-px h-4 bg-white/20 mx-2 xl:mx-4" aria-hidden />
+                        {/* О нас */}
+                        <div className="flex items-center">
+                            <Link href="/about" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                                О проекте
+                            </Link>
+                        </div>
                     </nav>
 
                     {/* Right Icons */}
-                    <div className="hidden md:flex items-center gap-4">
+                    <div className="hidden lg:flex items-center gap-4">
                         <motion.button
                             type="button"
                             onClick={() => setSearchOpen(true)}
@@ -141,14 +149,13 @@ export function Header() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
                     >
-                        <div className="px-6 py-6 flex flex-col gap-3 max-h-[70vh] overflow-y-auto">
-                            <Link href="/catalog" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Каталог</Link>
-                            <Link href="/top" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Топ-100</Link>
-                            <Link href="/order" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Заказать историю</Link>
-                            <Link href="/reviews" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Отзывы</Link>
-                            <Link href="/premium" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Премиум</Link>
-                            <Link href="/faq" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>Вопросы (FAQ)</Link>
-                            <Link href="/about" className="text-sm tracking-wide text-zinc-400 hover:text-amber-200/90 py-2 border-b border-white/5" onClick={() => setMobileMenuOpen(false)}>О проекте</Link>
+                        <div className="px-6 py-6 flex flex-col gap-1 max-h-[70vh] overflow-y-auto">
+                            <Link href="/catalog" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Каталог</Link>
+                            <Link href="/top" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Топ-100</Link>
+                            <Link href="/premium" className="text-xs uppercase tracking-widest text-amber-400/95 py-3 border-b border-white/5 font-medium" onClick={() => setMobileMenuOpen(false)}>Премиум</Link>
+                            <Link href="/order" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Заказать историю</Link>
+                            <Link href="/reviews" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>Отзывы</Link>
+                            <Link href="/about" className="text-xs uppercase tracking-widest text-zinc-400 hover:text-white py-3 border-b border-white/5 transition-colors" onClick={() => setMobileMenuOpen(false)}>О проекте</Link>
                             <div className="flex gap-4 pt-4 border-t border-white/10">
                                 <button
                                     type="button"
