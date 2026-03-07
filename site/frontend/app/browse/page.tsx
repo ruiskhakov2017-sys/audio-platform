@@ -98,13 +98,18 @@ function sortStoriesClient(list: Story[], sortKey: SortKey): Story[] {
   }
 }
 
+export type AccessFilter = 'all' | 'free' | 'premium';
+
 function filterStories(
   allStories: Story[],
   activeGenre: string,
   selectedTag: string | null,
-  searchQuery: string
+  searchQuery: string,
+  accessFilter: AccessFilter
 ): Story[] {
   let list = allStories;
+  if (accessFilter === 'free') list = list.filter((s) => !s.isPremium);
+  if (accessFilter === 'premium') list = list.filter((s) => s.isPremium);
   if (activeGenre !== ALL_GENRES) {
     list = list.filter((s) => getDisplayTags(s).includes(activeGenre));
   }
@@ -122,13 +127,14 @@ const GENRE_PARAM = 'genre';
 const SEARCH_PARAM = 'search';
 const TAG_PARAM = 'tag';
 
-type ViewMode = 'genres' | 'stories';
+type ViewMode = 'genres' | 'list';
 
 export default function BrowsePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [viewMode, setViewMode] = useState<ViewMode>('genres');
+  const [accessFilter, setAccessFilter] = useState<AccessFilter>('all');
   const [activeGenre, setActiveGenre] = useState<string>(() =>
     searchParams.get(GENRE_PARAM) || ALL_GENRES
   );
@@ -209,22 +215,28 @@ export default function BrowsePage() {
   }, [list.length]);
 
   const filteredStories = useMemo(() => {
-    let filtered = filterStories(list, activeGenre, selectedTag, searchQuery);
+    let filtered = filterStories(list, activeGenre, selectedTag, searchQuery, accessFilter);
     if (activeSort === 'mine') {
       filtered = filtered.filter((s) => likedIds.includes(String(s.id)));
     }
     if (useDjangoApi()) return sortStoriesClient(filtered, activeSort);
     return filtered;
-  }, [list, activeGenre, selectedTag, searchQuery, activeSort, likedIds]);
+  }, [list, activeGenre, selectedTag, searchQuery, accessFilter, activeSort, likedIds]);
 
   useEffect(() => {
     setVisibleCount(20);
-  }, [activeGenre, selectedTag, searchQuery, activeSort]);
+  }, [activeGenre, selectedTag, searchQuery, activeSort, accessFilter]);
 
   const handleResetFilters = () => {
     setActiveGenre(ALL_GENRES);
     setSelectedTag(null);
     setSearchQuery('');
+    setAccessFilter('all');
+  };
+
+  const handleBackToGenres = () => {
+    setActiveGenre(ALL_GENRES);
+    setViewMode('genres');
   };
 
   const hasActiveFilters =
@@ -260,6 +272,8 @@ export default function BrowsePage() {
             <FilterSidebar
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
+              accessFilter={accessFilter}
+              setAccessFilter={setAccessFilter}
               activeGenre={activeGenre}
               setActiveGenre={setActiveGenre}
               genres={genres}
@@ -267,6 +281,7 @@ export default function BrowsePage() {
               selectedTag={selectedTag}
               setSelectedTag={setSelectedTag}
               onReset={handleResetFilters}
+              onGenreSelect={() => setViewMode('list')}
             />
 
             <div className="flex-1 min-w-0 w-full">
@@ -307,7 +322,7 @@ export default function BrowsePage() {
                   Жанры
                 </button>
                 {SORT_OPTIONS.map((opt) => {
-                  const isActive = viewMode === 'stories' && activeSort === opt.key;
+                  const isActive = viewMode === 'list' && activeSort === opt.key;
                   const isMine = opt.key === 'mine';
                   return (
                     <button
@@ -318,7 +333,7 @@ export default function BrowsePage() {
                           setShowMineLoginModal(true);
                           return;
                         }
-                        setViewMode('stories');
+                        setViewMode('list');
                         setActiveSort(opt.key);
                       }}
                       className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
@@ -376,7 +391,7 @@ export default function BrowsePage() {
                       type="button"
                       onClick={() => {
                         setActiveGenre(genre);
-                        setViewMode('stories');
+                        setViewMode('list');
                       }}
                       className="relative aspect-[4/3] min-h-[140px] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all"
                     >
@@ -395,6 +410,16 @@ export default function BrowsePage() {
                 </div>
               ) : (
                 <>
+                  {activeGenre !== ALL_GENRES && (
+                    <button
+                      type="button"
+                      onClick={handleBackToGenres}
+                      className="mb-4 inline-flex items-center gap-2 text-sm text-[#00B4D8] hover:text-cyan-300 transition-colors"
+                    >
+                      <span aria-hidden>←</span>
+                      Ко всем жанрам
+                    </button>
+                  )}
                   <div className="text-zinc-500 text-sm mb-4">
                     Показано {Math.min(visibleCount, filteredStories.length)} из {filteredStories.length} историй
                   </div>
@@ -462,6 +487,8 @@ export default function BrowsePage() {
       <MobileFilterDrawer
         isOpen={isFilterOpen}
         onClose={() => setIsFilterOpen(false)}
+        accessFilter={accessFilter}
+        setAccessFilter={setAccessFilter}
         activeGenre={activeGenre}
         setActiveGenre={setActiveGenre}
         genres={genres}
@@ -469,6 +496,7 @@ export default function BrowsePage() {
         selectedTag={selectedTag}
         setSelectedTag={setSelectedTag}
         onReset={handleResetFilters}
+        onGenreSelect={() => { setViewMode('list'); setIsFilterOpen(false); }}
       />
     </div>
   );

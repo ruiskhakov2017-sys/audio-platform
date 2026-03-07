@@ -1,5 +1,7 @@
 'use client';
 
+import type { AccessFilter } from '@/app/browse/page';
+
 const ALL_GENRES = 'All';
 
 function genreLabel(genre: string): string {
@@ -11,9 +13,13 @@ function tagLabel(tag: string): string {
   return tag.charAt(0).toUpperCase() + tag.slice(1).toLowerCase();
 }
 
+const tagBase = 'py-2 px-3 rounded-full text-sm font-medium transition-all';
+
 type MobileFilterDrawerProps = {
   isOpen: boolean;
   onClose: () => void;
+  accessFilter: AccessFilter;
+  setAccessFilter: (v: AccessFilter) => void;
   activeGenre: string;
   setActiveGenre: (v: string) => void;
   genres: string[];
@@ -21,11 +27,14 @@ type MobileFilterDrawerProps = {
   selectedTag: string | null;
   setSelectedTag: (v: string | null) => void;
   onReset: () => void;
+  onGenreSelect?: () => void;
 };
 
 export function MobileFilterDrawer({
   isOpen,
   onClose,
+  accessFilter,
+  setAccessFilter,
   activeGenre,
   setActiveGenre,
   genres,
@@ -33,11 +42,17 @@ export function MobileFilterDrawer({
   selectedTag,
   setSelectedTag,
   onReset,
+  onGenreSelect,
 }: MobileFilterDrawerProps) {
   if (!isOpen) return null;
 
   const handleTagClick = (tag: string) => {
     setSelectedTag(selectedTag === tag ? null : tag);
+  };
+
+  const handleGenreClick = (genre: string) => {
+    setActiveGenre(genre);
+    if (genre !== ALL_GENRES) onGenreSelect?.();
   };
 
   return (
@@ -75,6 +90,29 @@ export function MobileFilterDrawer({
           style={{ WebkitOverflowScrolling: 'touch' }}
         >
           <div className="mb-6">
+            <h3 className="text-sm font-semibold text-zinc-400 mb-2">Доступ</h3>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => setAccessFilter(accessFilter === 'free' ? 'all' : 'free')}
+                className={`${tagBase} ${
+                  accessFilter === 'free' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
+                }`}
+              >
+                🆓 Бесплатно
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
+                className={`${tagBase} ${
+                  accessFilter === 'premium' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
+                }`}
+              >
+                💎 Премиум
+              </button>
+            </div>
+          </div>
+          <div className="mb-6">
             <h3 className="text-sm font-semibold text-zinc-400 mb-2">Жанры</h3>
             <div className="flex flex-wrap gap-2">
               {genres.map((genre) => {
@@ -83,7 +121,7 @@ export function MobileFilterDrawer({
                   <button
                     key={genre}
                     type="button"
-                    onClick={() => setActiveGenre(genre)}
+                    onClick={() => handleGenreClick(genre)}
                     className={`py-2 px-3 rounded-full text-sm font-medium transition-all ${
                       isActive
                         ? 'bg-[#00B4D8] text-white'

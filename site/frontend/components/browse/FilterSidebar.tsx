@@ -1,10 +1,13 @@
 'use client';
 
 import { Search } from 'lucide-react';
+import type { AccessFilter } from '@/app/browse/page';
 
 type FilterSidebarProps = {
   searchQuery: string;
   setSearchQuery: (v: string) => void;
+  accessFilter: AccessFilter;
+  setAccessFilter: (v: AccessFilter) => void;
   activeGenre: string;
   setActiveGenre: (v: string) => void;
   genres: string[];
@@ -12,6 +15,7 @@ type FilterSidebarProps = {
   selectedTag: string | null;
   setSelectedTag: (v: string | null) => void;
   onReset: () => void;
+  onGenreSelect?: () => void;
 };
 
 const ALL_GENRES = 'All';
@@ -31,6 +35,8 @@ const tagBase =
 export function FilterSidebar({
   searchQuery,
   setSearchQuery,
+  accessFilter,
+  setAccessFilter,
   activeGenre,
   setActiveGenre,
   genres,
@@ -38,9 +44,15 @@ export function FilterSidebar({
   selectedTag,
   setSelectedTag,
   onReset,
+  onGenreSelect,
 }: FilterSidebarProps) {
   const handleTagClick = (tag: string) => {
     setSelectedTag(selectedTag === tag ? null : tag);
+  };
+
+  const handleGenreClick = (genre: string) => {
+    setActiveGenre(genre);
+    if (genre !== ALL_GENRES) onGenreSelect?.();
   };
 
   return (
@@ -63,6 +75,34 @@ export function FilterSidebar({
         </div>
 
         <div className="mb-4">
+          <h4 className="text-sm font-medium text-zinc-400 mb-2">Доступ</h4>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setAccessFilter(accessFilter === 'free' ? 'all' : 'free')}
+              className={`${tagBase} ${
+                accessFilter === 'free'
+                  ? 'bg-white/10 border-white/20 text-white'
+                  : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+              }`}
+            >
+              🆓 Бесплатно
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
+              className={`${tagBase} ${
+                accessFilter === 'premium'
+                  ? 'bg-white/10 border-white/20 text-white'
+                  : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+              }`}
+            >
+              💎 Премиум
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-4">
           <h4 className="text-sm font-medium text-zinc-400 mb-2">Жанры</h4>
           <div className="flex flex-wrap gap-2 content-start">
             {genres.map((genre) => {
@@ -71,7 +111,7 @@ export function FilterSidebar({
                 <button
                   key={genre}
                   type="button"
-                  onClick={() => setActiveGenre(genre)}
+                  onClick={() => handleGenreClick(genre)}
                   className={`${tagBase} ${
                     isActive
                       ? 'bg-white/10 border-white/20 text-white'
