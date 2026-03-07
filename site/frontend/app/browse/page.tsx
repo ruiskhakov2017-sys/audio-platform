@@ -401,7 +401,7 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('list');
                       }}
-                      className="relative aspect-[4/3] sm:aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
+                      className="relative aspect-[3/4] sm:aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
                     >
                       <img
                         src={genreImagePath(genre)}
@@ -409,9 +409,11 @@ export default function BrowsePage() {
                         className="absolute inset-0 w-full h-full object-cover"
                         aria-hidden
                       />
-                      <span className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/50 sm:from-black/90 sm:via-black/40 sm:to-transparent" aria-hidden />
-                      <span className="absolute inset-0 flex items-center justify-center text-center px-4 text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] sm:drop-shadow-lg sm:font-semibold">
-                        {genre}
+                      <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
+                      <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent">
+                        <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg">
+                          {genre}
+                        </span>
                       </span>
                     </button>
                   ))}
