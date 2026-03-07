@@ -126,9 +126,26 @@ export default function CatalogPage() {
             </div>
           </aside>
 
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
+            {/* Мобилка: горизонтальный свайп тегов над сеткой */}
+            <div className="md:hidden overflow-x-auto pb-3 -mx-4 px-4 scrollbar-hide flex gap-2 mb-4 [&>button]:shrink-0">
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => toggleTag(tag)}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    selectedTags.includes(tag)
+                      ? "bg-purple-500 text-white"
+                      : "bg-white/10 text-gray-300 hover:bg-white/20"
+                  }`}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
             {filteredStories.length > 0 ? (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filteredStories.map((story) => (
                   <StoryCard key={story.id} story={story} />
                 ))}

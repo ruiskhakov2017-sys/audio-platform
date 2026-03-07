@@ -109,10 +109,10 @@ export function Hero() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.8, delay: 0.4 }}
                 >
-                    <NeonButton variant="primary" size="large" href="/browse">
+                    <NeonButton variant="primary" size="large" href="/browse" className="w-full sm:w-auto min-h-[52px] sm:min-h-0 flex items-center justify-center px-8 py-4 text-lg sm:text-lg">
                         Слушать истории
                     </NeonButton>
-                    <NeonButton variant="glass" size="large" href="#genres">
+                    <NeonButton variant="glass" size="large" href="#genres" className="hidden sm:inline-flex">
                         Выбрать жанр
                     </NeonButton>
                 </motion.div>

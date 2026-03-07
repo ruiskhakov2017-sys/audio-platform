@@ -392,7 +392,7 @@ export default function BrowsePage() {
               )}
 
               {viewMode === 'genres' ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-0 sm:px-0">
                   {GENRES_LIST.map((genre) => (
                     <button
                       key={genre}
@@ -401,7 +401,7 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('list');
                       }}
-                      className="relative aspect-[4/3] min-h-[140px] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all"
+                      className="relative aspect-[3/4] sm:aspect-[4/3] min-h-[200px] sm:min-h-[140px] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
                     >
                       <img
                         src={genreImagePath(genre)}
@@ -410,7 +410,7 @@ export default function BrowsePage() {
                         aria-hidden
                       />
                       <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
-                      <span className="absolute inset-0 flex items-center justify-center text-center px-3 text-white font-medium text-base sm:text-lg drop-shadow-lg">
+                      <span className="absolute inset-0 flex items-center justify-center text-center px-4 text-white font-semibold text-lg sm:text-base drop-shadow-lg">
                         {genre}
                       </span>
                     </button>
