@@ -330,13 +330,13 @@ export default function BrowsePage() {
                 <button
                   type="button"
                   onClick={() => setViewMode('genres')}
-                  className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all ${viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
-                    ? 'text-[#FFD700]'
-                    : 'text-zinc-400 hover:text-zinc-200'
+                  className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all group ${viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
+                    ? 'text-cyan-400'
+                    : 'text-zinc-400 hover:text-cyan-400'
                     }`}
                 >
                   <span aria-hidden>📚</span>
-                  <span className={viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null)) ? 'relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 after:bg-[#FFD700] after:shadow-[0_0_8px_rgba(255,215,0,0.5)]' : ''}>
+                  <span className={viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null)) ? 'relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 after:bg-cyan-400 after:shadow-[0_0_8px_rgba(34,211,238,0.8)]' : ''}>
                     Жанры
                   </span>
                 </button>
@@ -345,8 +345,14 @@ export default function BrowsePage() {
                   const isActive = viewMode === 'list' && !isSidebarFilterActive && activeSort === opt.key;
                   const isMine = opt.key === 'mine';
                   const isPremium = opt.key === 'premium';
-                  const premiumActive = isPremium && isActive;
-                  const premiumInactive = isPremium && !isActive;
+
+                  // Dynamic styles based on tab type
+                  const activeColorClass = isPremium ? 'text-yellow-400' : 'text-cyan-400';
+                  const hoverColorClass = isPremium ? 'hover:text-yellow-400' : 'hover:text-cyan-400';
+                  const underlineClass = isPremium
+                    ? 'after:bg-yellow-400 after:shadow-[0_0_8px_rgba(250,204,21,0.8)]'
+                    : 'after:bg-cyan-400 after:shadow-[0_0_8px_rgba(34,211,238,0.8)]';
+
                   return (
                     <button
                       key={opt.key}
@@ -359,15 +365,13 @@ export default function BrowsePage() {
                         setViewMode('list');
                         setActiveSort(opt.key);
                       }}
-                      className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all ${isActive
-                        ? 'text-[#FFD700]'
-                        : isPremium
-                          ? 'text-[#FFD700]/70 hover:text-[#FFD700]'
-                          : 'text-zinc-400 hover:text-zinc-200'
+                      className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all group ${isActive
+                        ? activeColorClass
+                        : `text-zinc-400 ${hoverColorClass}`
                         }`}
                     >
                       <span aria-hidden>{opt.icon}</span>
-                      <span className={isActive ? 'relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 after:bg-[#FFD700] after:shadow-[0_0_8px_rgba(255,215,0,0.5)]' : ''}>
+                      <span className={isActive ? `relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 ${underlineClass}` : ''}>
                         {opt.label}
                       </span>
                     </button>
