@@ -29,12 +29,6 @@ function genreImagePath(genre: string): string {
   return `/genres/${encodeURIComponent(genre)}/cover.jpg`;
 }
 
-function genreImageFullUrl(genre: string): string {
-  const path = genreImagePath(genre);
-  if (typeof window === 'undefined') return path;
-  return new URL(path, window.location.origin).toString();
-}
-
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
 
 const ALL_GENRES = 'All';
@@ -47,9 +41,11 @@ const GENRES_LIST: string[] = [
   'В первый раз',
   'Ваши рассказы',
   'Гетеросексуалы',
+  'Группа',
   'Драма',
   'Жена шлюшка',
   'Зрелый возраст',
+  'Измена',
   'Инцест',
   'Классика',
   'Куколд',
@@ -67,8 +63,10 @@ const GENRES_LIST: string[] = [
   'Свингеры',
   'Секс-туризм',
   'Сексвайф',
+  'Служебный роман',
   'Случайный роман',
   'Студенты',
+  'Фантазии',
   'Фантастика',
 ];
 
@@ -220,13 +218,6 @@ export default function BrowsePage() {
     setVisibleCount(20);
   }, [activeGenre, selectedTag, searchQuery, activeSort, accessFilter]);
 
-  useEffect(() => {
-    if (viewMode === 'genres' && GENRES_LIST[0]) {
-      const path = genreImagePath(GENRES_LIST[0]);
-      console.log('[Genre cover path]', path);
-    }
-  }, [viewMode]);
-
   const handleResetFilters = () => {
     setActiveGenre(ALL_GENRES);
     setSelectedTag(null);
@@ -313,8 +304,8 @@ export default function BrowsePage() {
                   type="button"
                   onClick={() => setViewMode('genres')}
                   className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
-                      ? 'bg-[#00B4D8] text-white'
-                      : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
+                    ? 'bg-[#00B4D8] text-white'
+                    : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
                     }`}
                 >
                   <span aria-hidden>📚</span>
@@ -340,12 +331,12 @@ export default function BrowsePage() {
                         setActiveSort(opt.key);
                       }}
                       className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${premiumActive
-                          ? 'bg-[#FFD700] text-black border border-[#FFD700] shadow-[0_0_12px_rgba(255,215,0,0.5)]'
-                          : premiumInactive
-                            ? 'bg-white/5 border border-[#FFD700]/60 text-[#FFD700] hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.3)]'
-                            : isActive
-                              ? 'bg-[#00B4D8] text-white'
-                              : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
+                        ? 'bg-[#FFD700] text-black border border-[#FFD700] shadow-[0_0_12px_rgba(255,215,0,0.5)]'
+                        : premiumInactive
+                          ? 'bg-white/5 border border-[#FFD700]/60 text-[#FFD700] hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.3)]'
+                          : isActive
+                            ? 'bg-[#00B4D8] text-white'
+                            : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
                         }`}
                     >
                       <span aria-hidden>{opt.icon}</span>
@@ -391,45 +382,37 @@ export default function BrowsePage() {
 
               {viewMode === 'genres' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {GENRES_LIST.map((genre) => {
-                    const imagePath = genreImagePath(genre);
-                    const imageFullUrl = genreImageFullUrl(genre);
-                    return (
-                      <div key={genre} className="w-full">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveGenre(genre);
-                            setViewMode('list');
-                          }}
-                          className="relative aspect-[3/4] sm:aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
-                        >
-                          {failedGenreCovers.has(genre) ? (
-                            <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
-                              <span className="text-white font-bold text-xl sm:text-base text-center px-4">{genre}</span>
-                            </div>
-                          ) : (
-                            <img
-                              src={imagePath}
-                              alt=""
-                              className="absolute inset-0 w-full h-full object-cover"
-                              aria-hidden
-                              onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
-                            />
-                          )}
-                          <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
-                          <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent">
-                            <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg">
-                              {genre}
-                            </span>
-                          </span>
-                        </button>
-                        <p className="mt-2 text-[11px] leading-4 text-zinc-400 break-all">
-                          {imageFullUrl}
-                        </p>
-                      </div>
-                    );
-                  })}
+                  {GENRES_LIST.map((genre) => (
+                    <button
+                      key={genre}
+                      type="button"
+                      onClick={() => {
+                        setActiveGenre(genre);
+                        setViewMode('list');
+                      }}
+                      className="relative aspect-[3/4] sm:aspect-[4/3] md:aspect-[3/4] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
+                    >
+                      {failedGenreCovers.has(genre) ? (
+                        <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
+                          <span className="text-white font-bold text-xl sm:text-base text-center px-4">{genre}</span>
+                        </div>
+                      ) : (
+                        <img
+                          src={genreImagePath(genre)}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover"
+                          aria-hidden
+                          onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
+                        />
+                      )}
+                      <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
+                      <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent">
+                        <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg">
+                          {genre}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
                 </div>
               ) : (
                 <>
