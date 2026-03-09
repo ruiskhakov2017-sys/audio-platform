@@ -34,7 +34,7 @@ export function TopSales() {
                     </h2>
                 </motion.div>
 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     {stories.length === 0 && (
                         <div className="col-span-full py-12 text-center text-zinc-500">
                             Загрузка...

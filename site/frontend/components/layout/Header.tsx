@@ -58,13 +58,13 @@ export function Header() {
                     <nav className="hidden md:flex items-center flex-1 max-w-5xl mx-6 font-medium justify-center">
                         {/* Навигация */}
                         <div className="flex items-center gap-5">
-                            <Link href="/catalog" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg ${pathname === '/catalog' ? 'text-sky-400 bg-sky-500/10' : 'text-zinc-300 hover:text-white'}`}>
+                            <Link href="/catalog" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg group ${pathname === '/catalog' ? 'text-sky-400 bg-sky-500/5' : 'text-zinc-300 hover:text-white'}`}>
                                 Каталог
-                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-all duration-300 ${pathname === '/catalog' ? 'w-full scale-x-100' : 'w-0 hover:w-full hover:scale-x-100'}`} />
+                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-transform duration-300 ease-out origin-center ${pathname === '/catalog' ? 'w-full scale-x-100 opacity-80' : 'w-full scale-x-0 group-hover:scale-x-100'}`} />
                             </Link>
-                            <Link href="/top" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg ${pathname === '/top' ? 'text-sky-400 bg-sky-500/10' : 'text-zinc-300 hover:text-white'}`}>
+                            <Link href="/top" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg group ${pathname === '/top' ? 'text-sky-400 bg-sky-500/5' : 'text-zinc-300 hover:text-white'}`}>
                                 Топ-100
-                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-all duration-300 ${pathname === '/top' ? 'w-full scale-x-100' : 'w-0 hover:w-full hover:scale-x-100'}`} />
+                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-transform duration-300 ease-out origin-center ${pathname === '/top' ? 'w-full scale-x-100 opacity-80' : 'w-full scale-x-0 group-hover:scale-x-100'}`} />
                             </Link>
                         </div>
                         <div className="w-px h-4 bg-white/20 mx-2 xl:mx-4" aria-hidden />
@@ -73,21 +73,21 @@ export function Header() {
                             <Link href="/premium" className={`nav-link inline-flex items-center gap-1.5 text-[12px] uppercase tracking-widest text-[#FFD700] border border-[#FFD700]/60 rounded px-2.5 py-1 hover:bg-[#FFD700]/10 hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.25)] transition-all relative pb-1 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-[#FFD700] hover:after:w-full after:transition-[width] after:duration-300 ${pathname === '/premium' ? 'shadow-inner bg-[#FFD700]/5' : ''}`}>
                                 <span aria-hidden>👑</span> Премиум
                             </Link>
-                            <Link href="/order" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg ${pathname === '/order' ? 'text-sky-400 bg-sky-500/10' : 'text-zinc-300 hover:text-white'}`}>
+                            <Link href="/order" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg group ${pathname === '/order' ? 'text-sky-400 bg-sky-500/5' : 'text-zinc-300 hover:text-white'}`}>
                                 Заказать историю
-                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-all duration-300 ${pathname === '/order' ? 'w-full scale-x-100' : 'w-0 hover:w-full hover:scale-x-100'}`} />
+                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-transform duration-300 ease-out origin-center ${pathname === '/order' ? 'w-full scale-x-100 opacity-80' : 'w-full scale-x-0 group-hover:scale-x-100'}`} />
                             </Link>
-                            <Link href="/reviews" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg ${pathname === '/reviews' ? 'text-sky-400 bg-sky-500/10' : 'text-zinc-300 hover:text-white'}`}>
+                            <Link href="/reviews" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg group ${pathname === '/reviews' ? 'text-sky-400 bg-sky-500/5' : 'text-zinc-300 hover:text-white'}`}>
                                 Отзывы
-                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-all duration-300 ${pathname === '/reviews' ? 'w-full scale-x-100' : 'w-0 hover:w-full hover:scale-x-100'}`} />
+                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-transform duration-300 ease-out origin-center ${pathname === '/reviews' ? 'w-full scale-x-100 opacity-80' : 'w-full scale-x-0 group-hover:scale-x-100'}`} />
                             </Link>
                         </div>
                         <div className="w-px h-4 bg-white/20 mx-2 xl:mx-4" aria-hidden />
                         {/* О нас */}
                         <div className="flex items-center">
-                            <Link href="/about" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg ${pathname === '/about' ? 'text-sky-400 bg-sky-500/10' : 'text-zinc-300 hover:text-white'}`}>
+                            <Link href="/about" className={`nav-link text-[12px] uppercase tracking-widest transition-all duration-300 relative px-2.5 py-1.5 rounded-lg group ${pathname === '/about' ? 'text-sky-400 bg-sky-500/5' : 'text-zinc-300 hover:text-white'}`}>
                                 О проекте
-                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-all duration-300 ${pathname === '/about' ? 'w-full scale-x-100' : 'w-0 hover:w-full hover:scale-x-100'}`} />
+                                <span className={`absolute left-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent transition-transform duration-300 ease-out origin-center ${pathname === '/about' ? 'w-full scale-x-100 opacity-80' : 'w-full scale-x-0 group-hover:scale-x-100'}`} />
                             </Link>
                         </div>
                     </nav>

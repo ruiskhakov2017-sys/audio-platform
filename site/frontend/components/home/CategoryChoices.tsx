@@ -44,19 +44,27 @@ export function CategoryChoices() {
                             <Link href={category.href}>
                                 <motion.div
                                     className="relative aspect-[3/4] rounded-[2.5rem] overflow-hidden group cursor-pointer"
-                                    whileHover={{ scale: 1.02 }}
+                                    whileHover={{ scale: 1.05 }}
                                     transition={{ duration: 0.3 }}
                                 >
                                     {/* Image */}
                                     <div className="absolute inset-0">
-                                        <Image
-                                            src={category.image}
-                                            alt={category.title}
-                                            fill
-                                            className="object-cover transition-all duration-500 grayscale-0 md:grayscale md:group-hover:grayscale-0 group-hover:scale-110"
-                                            unoptimized
-                                            sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                                        />
+                                        <motion.div
+                                            className="w-full h-full"
+                                            initial={{ filter: 'grayscale(100%)' }}
+                                            whileInView={{ filter: 'grayscale(0%)' }}
+                                            viewport={{ margin: "-20%" }}
+                                            transition={{ duration: 0.5 }}
+                                        >
+                                            <Image
+                                                src={category.image}
+                                                alt={category.title}
+                                                fill
+                                                className="object-cover transition-transform duration-500 md:grayscale md:group-hover:grayscale-0 group-hover:scale-110"
+                                                unoptimized
+                                                sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                                            />
+                                        </motion.div>
                                     </div>
 
                                     {/* Gradient Overlay */}
@@ -71,9 +79,6 @@ export function CategoryChoices() {
                                             {category.description}
                                         </p>
                                     </div>
-
-                                    {/* Neon Border Glow on Hover */}
-                                    <div className="absolute inset-0 border-2 border-[#00B4D8]/0 group-hover:border-[#00B4D8]/50 rounded-[2.5rem] transition-all duration-300" />
                                 </motion.div>
                             </Link>
                         </motion.div>

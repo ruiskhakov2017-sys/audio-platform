@@ -33,7 +33,7 @@ export function FooterCTA() {
         >
           <Link
             href="/premium"
-            className="inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-black bg-[#FFD700] rounded-full hover:bg-[#F4C430] transition-colors shadow-[0_0_20px_rgba(255,215,0,0.3)] hover:shadow-[0_0_30px_rgba(255,215,0,0.5)]"
+            className="inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-zinc-950 bg-gradient-to-r from-amber-500 to-yellow-500 rounded-full hover:from-amber-400 hover:to-yellow-400 transition-all shadow-[0_0_20px_rgba(245,158,11,0.4)] hover:shadow-[0_0_30px_rgba(245,158,11,0.6)]"
           >
             Оформить Премиум
           </Link>
