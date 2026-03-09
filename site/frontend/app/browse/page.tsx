@@ -18,7 +18,7 @@ import type { Story } from '@/types/story';
 const SORT_OPTIONS = [
   { key: 'popular', label: 'Популярное', icon: '🔥' },
   { key: 'new', label: 'Новинки', icon: '✨' },
-  { key: 'editor', label: 'Выбор редакции', icon: '💎' },
+  { key: 'editor', label: 'Рекомендации', icon: '💎' },
   { key: 'trending', label: 'В тренде', icon: '📈' },
   { key: 'premium', label: 'Премиум', icon: '👑' },
   { key: 'free', label: 'Бесплатно', icon: '🎁' },
@@ -331,12 +331,14 @@ export default function BrowsePage() {
                   type="button"
                   onClick={() => setViewMode('genres')}
                   className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all ${viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
-                    ? 'text-[#FFD700] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-[#FFD700] after:shadow-[0_0_8px_rgba(255,215,0,0.5)]'
+                    ? 'text-[#FFD700]'
                     : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                 >
                   <span aria-hidden>📚</span>
-                  Жанры
+                  <span className={viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null)) ? 'relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 after:bg-[#FFD700] after:shadow-[0_0_8px_rgba(255,215,0,0.5)]' : ''}>
+                    Жанры
+                  </span>
                 </button>
                 {SORT_OPTIONS.map((opt) => {
                   const isSidebarFilterActive = activeGenre !== ALL_GENRES || selectedTag !== null;
@@ -358,14 +360,16 @@ export default function BrowsePage() {
                         setActiveSort(opt.key);
                       }}
                       className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all ${isActive
-                        ? 'text-[#FFD700] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-[#FFD700] after:shadow-[0_0_8px_rgba(255,215,0,0.5)]'
+                        ? 'text-[#FFD700]'
                         : isPremium
                           ? 'text-[#FFD700]/70 hover:text-[#FFD700]'
                           : 'text-zinc-400 hover:text-zinc-200'
                         }`}
                     >
                       <span aria-hidden>{opt.icon}</span>
-                      {opt.label}
+                      <span className={isActive ? 'relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 after:bg-[#FFD700] after:shadow-[0_0_8px_rgba(255,215,0,0.5)]' : ''}>
+                        {opt.label}
+                      </span>
                     </button>
                   );
                 })}
