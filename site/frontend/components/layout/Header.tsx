@@ -57,10 +57,10 @@ export function Header() {
                     <nav className="hidden md:flex items-center flex-1 max-w-5xl mx-6 font-medium justify-center">
                         {/* Навигация */}
                         <div className="flex items-center gap-5">
-                            <Link href="/catalog" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                            <Link href="/catalog" className="nav-link text-[12px] uppercase tracking-widest text-zinc-300 hover:text-white transition-all duration-300 relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-transparent after:via-sky-400 after:to-transparent hover:after:w-full hover:after:scale-x-100 after:transition-all after:duration-300">
                                 Каталог
                             </Link>
-                            <Link href="/top" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                            <Link href="/top" className="nav-link text-[12px] uppercase tracking-widest text-zinc-300 hover:text-white transition-all duration-300 relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-transparent after:via-sky-400 after:to-transparent hover:after:w-full hover:after:scale-x-100 after:transition-all after:duration-300">
                                 Топ-100
                             </Link>
                         </div>
@@ -70,17 +70,17 @@ export function Header() {
                             <Link href="/premium" className="nav-link inline-flex items-center gap-1.5 text-[12px] uppercase tracking-widest text-[#FFD700] border border-[#FFD700]/60 rounded px-2.5 py-1 hover:bg-[#FFD700]/10 hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.25)] transition-all relative pb-1 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-[#FFD700] hover:after:w-full after:transition-[width] after:duration-300">
                                 <span aria-hidden>👑</span> Премиум
                             </Link>
-                            <Link href="/order" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                            <Link href="/order" className="nav-link text-[12px] uppercase tracking-widest text-zinc-300 hover:text-white transition-all duration-300 relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-transparent after:via-sky-400 after:to-transparent hover:after:w-full hover:after:scale-x-100 after:transition-all after:duration-300">
                                 Заказать историю
                             </Link>
-                            <Link href="/reviews" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                            <Link href="/reviews" className="nav-link text-[12px] uppercase tracking-widest text-zinc-300 hover:text-white transition-all duration-300 relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-transparent after:via-sky-400 after:to-transparent hover:after:w-full hover:after:scale-x-100 after:transition-all after:duration-300">
                                 Отзывы
                             </Link>
                         </div>
                         <div className="w-px h-4 bg-white/20 mx-2 xl:mx-4" aria-hidden />
                         {/* О нас */}
                         <div className="flex items-center">
-                            <Link href="/about" className="nav-link text-[12px] uppercase tracking-widest text-zinc-400 hover:text-white transition-colors relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-white/80 hover:after:w-full after:transition-[width] after:duration-300">
+                            <Link href="/about" className="nav-link text-[12px] uppercase tracking-widest text-zinc-300 hover:text-white transition-all duration-300 relative pb-0.5 after:absolute after:left-0 after:bottom-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-transparent after:via-sky-400 after:to-transparent hover:after:w-full hover:after:scale-x-100 after:transition-all after:duration-300">
                                 О проекте
                             </Link>
                         </div>
