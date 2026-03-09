@@ -25,9 +25,14 @@ const SORT_OPTIONS = [
   { key: 'mine', label: 'Мои', icon: '❤️' },
 ] as const;
 
-/** URL обложки жанра через API (обходит 404 на статике с кириллицей/пробелами) */
 function genreImagePath(genre: string): string {
-  return `/api/genre-cover?genre=${encodeURIComponent(genre)}`;
+  return `/genres/${encodeURIComponent(genre)}/cover.jpg`;
+}
+
+function genreImageFullUrl(genre: string): string {
+  const path = genreImagePath(genre);
+  if (typeof window === 'undefined') return path;
+  return new URL(path, window.location.origin).toString();
 }
 
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
@@ -307,11 +312,10 @@ export default function BrowsePage() {
                 <button
                   type="button"
                   onClick={() => setViewMode('genres')}
-                  className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
-                    viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
+                  className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${viewMode === 'genres' || (viewMode === 'list' && (activeGenre !== ALL_GENRES || selectedTag !== null))
                       ? 'bg-[#00B4D8] text-white'
                       : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
-                  }`}
+                    }`}
                 >
                   <span aria-hidden>📚</span>
                   Жанры
@@ -335,15 +339,14 @@ export default function BrowsePage() {
                         setViewMode('list');
                         setActiveSort(opt.key);
                       }}
-                      className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${
-                        premiumActive
+                      className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 py-1.5 px-2.5 sm:py-2 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium transition-all ${premiumActive
                           ? 'bg-[#FFD700] text-black border border-[#FFD700] shadow-[0_0_12px_rgba(255,215,0,0.5)]'
                           : premiumInactive
                             ? 'bg-white/5 border border-[#FFD700]/60 text-[#FFD700] hover:border-[#FFD700] hover:shadow-[0_0_10px_rgba(255,215,0,0.3)]'
                             : isActive
                               ? 'bg-[#00B4D8] text-white'
                               : 'bg-white/5 border border-white/10 text-zinc-400 hover:border-[#00B4D8]/40 hover:text-zinc-200'
-                      }`}
+                        }`}
                     >
                       <span aria-hidden>{opt.icon}</span>
                       {opt.label}
@@ -388,37 +391,45 @@ export default function BrowsePage() {
 
               {viewMode === 'genres' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {GENRES_LIST.map((genre) => (
-                    <button
-                      key={genre}
-                      type="button"
-                      onClick={() => {
-                        setActiveGenre(genre);
-                        setViewMode('list');
-                      }}
-                      className="relative aspect-[3/4] sm:aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
-                    >
-                      {failedGenreCovers.has(genre) ? (
-                        <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
-                          <span className="text-white font-bold text-xl sm:text-base text-center px-4">{genre}</span>
-                        </div>
-                      ) : (
-                        <img
-                          src={genreImagePath(genre)}
-                          alt=""
-                          className="absolute inset-0 w-full h-full object-cover"
-                          aria-hidden
-                          onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
-                        />
-                      )}
-                      <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
-                      <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent">
-                        <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg">
-                          {genre}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
+                  {GENRES_LIST.map((genre) => {
+                    const imagePath = genreImagePath(genre);
+                    const imageFullUrl = genreImageFullUrl(genre);
+                    return (
+                      <div key={genre} className="w-full">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveGenre(genre);
+                            setViewMode('list');
+                          }}
+                          className="relative aspect-[3/4] sm:aspect-[4/3] rounded-xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
+                        >
+                          {failedGenreCovers.has(genre) ? (
+                            <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
+                              <span className="text-white font-bold text-xl sm:text-base text-center px-4">{genre}</span>
+                            </div>
+                          ) : (
+                            <img
+                              src={imagePath}
+                              alt=""
+                              className="absolute inset-0 w-full h-full object-cover"
+                              aria-hidden
+                              onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
+                            />
+                          )}
+                          <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" aria-hidden />
+                          <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent">
+                            <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg">
+                              {genre}
+                            </span>
+                          </span>
+                        </button>
+                        <p className="mt-2 text-[11px] leading-4 text-zinc-400 break-all">
+                          {imageFullUrl}
+                        </p>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <>
