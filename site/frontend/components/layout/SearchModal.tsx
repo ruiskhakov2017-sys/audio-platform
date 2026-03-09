@@ -1,14 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type FormEvent } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { mapRowToStory } from '@/lib/stories';
+import { rankStoryMatch, storyMatchesQuery } from '@/lib/search';
 import type { Story } from '@/types/story';
 
 const DEBOUNCE_MS = 300;
+const MIN_QUERY_LENGTH = 3;
+const MAX_RESULTS = 8;
+const PRELOAD_LIMIT = 250;
 
 type SearchModalProps = {
   isOpen: boolean;
@@ -20,10 +24,12 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Story[]>([]);
   const [loading, setLoading] = useState(false);
+  const storyCacheRef = useRef<Story[] | null>(null);
+  const hasEnoughChars = query.trim().length >= MIN_QUERY_LENGTH;
 
   const runSearch = useCallback(async (q: string) => {
     const term = q.trim();
-    if (!term) {
+    if (term.length < MIN_QUERY_LENGTH) {
       setResults([]);
       return;
     }
@@ -31,26 +37,39 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
       setResults([]);
       return;
     }
+
     setLoading(true);
-    const escaped = term.replace(/'/g, "''");
-    const pattern = `'%${escaped}%'`;
-    const { data, error } = await supabase
-      .from('stories')
-      .select('*')
-      .or(`title.ilike.${pattern},description.ilike.${pattern}`)
-      .order('created_at', { ascending: false })
-      .limit(8);
-    setLoading(false);
-    if (error) {
-      setResults([]);
-      return;
+    if (!storyCacheRef.current) {
+      const { data, error } = await supabase
+        .from('stories')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(PRELOAD_LIMIT);
+      if (error) {
+        setLoading(false);
+        setResults([]);
+        return;
+      }
+      storyCacheRef.current = (data ?? []).map((row) =>
+        mapRowToStory(row as Parameters<typeof mapRowToStory>[0])
+      );
     }
-    setResults((data ?? []).map((row) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0])));
+
+    const ranked = (storyCacheRef.current ?? [])
+      .filter((story) => storyMatchesQuery(story, term))
+      .map((story) => ({ story, score: rankStoryMatch(story, term) }))
+      .sort((a, b) => b.score - a.score || b.story.id - a.story.id)
+      .slice(0, MAX_RESULTS)
+      .map((item) => item.story);
+    setResults(ranked);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-    const t = setTimeout(() => runSearch(query), DEBOUNCE_MS);
+    const t = setTimeout(() => {
+      void runSearch(query);
+    }, DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query, isOpen, runSearch]);
 
@@ -59,6 +78,23 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     setQuery('');
     router.push(`/story/${story.id}`);
   };
+
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const term = query.trim();
+    if (term.length < MIN_QUERY_LENGTH) return;
+    onClose();
+    setQuery('');
+    router.push(`/browse?search=${encodeURIComponent(term)}`);
+  };
+
+  const statusText = useMemo(() => {
+    if (!query.trim()) return 'Введите минимум 3 символа';
+    if (!hasEnoughChars) return 'Введите еще символы для поиска';
+    if (loading) return 'Поиск...';
+    if (results.length === 0) return 'Ничего не найдено';
+    return '';
+  }, [query, hasEnoughChars, loading, results.length]);
 
   if (!isOpen) return null;
 
@@ -76,12 +112,12 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         aria-label="Закрыть"
       />
       <div className="relative w-full max-w-xl rounded-2xl border border-white/10 bg-[#000814]/95 backdrop-blur-xl shadow-2xl overflow-hidden">
-        <div className="flex items-center gap-2 p-3 border-b border-white/10">
+        <form onSubmit={handleSubmit} className="flex items-center gap-2 p-3 border-b border-white/10">
           <input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Поиск по названию или описанию..."
+            placeholder="Поиск по названию, тегам и описанию..."
             className="flex-1 bg-transparent text-white placeholder-zinc-500 px-3 py-2 focus:outline-none focus:ring-0"
             autoFocus
             aria-label="Поиск"
@@ -94,12 +130,10 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
           >
             <X className="w-5 h-5" strokeWidth={2} />
           </button>
-        </div>
+        </form>
         <div className="max-h-[60vh] overflow-y-auto">
-          {loading ? (
-            <p className="p-4 text-zinc-500 text-sm text-center">Поиск...</p>
-          ) : results.length === 0 && query.trim() ? (
-            <p className="p-4 text-zinc-500 text-sm text-center">Ничего не найдено.</p>
+          {statusText ? (
+            <p className="p-4 text-zinc-500 text-sm text-center">{statusText}</p>
           ) : (
             <ul className="py-2">
               {results.map((story) => (

@@ -12,6 +12,7 @@ import { Crown, Camera, Heart } from 'lucide-react';
 import { usePlayerStore } from '@/store/playerStore';
 import { uploadAvatarWithDjango } from '@/lib/authApi';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
+import { PREMIUM_PLANS, formatRub } from '@/config/pricing';
 import { StoryTile } from '@/components/browse/StoryTile';
 import type { Story } from '@/types/story';
 
@@ -234,7 +235,7 @@ export default function ProfilePage() {
                     href="/pricing"
                     className="inline-block px-6 py-3 rounded-full bg-gradient-to-r from-[#00B4D8] to-cyan-600 text-white font-semibold hover:opacity-90 transition-opacity shadow-[0_0_20px_rgba(0,180,216,0.4)] animate-pulse"
                   >
-                    Оформить Premium за 299₽
+                    Оформить Premium за {formatRub(PREMIUM_PLANS.gryaznyi.priceRub)}
                   </Link>
                 </>
               )}

@@ -124,8 +124,8 @@ export function MobileFilterDrawer({
                     onClick={() => handleGenreClick(genre)}
                     className={`py-2 px-3 rounded-full text-sm font-medium transition-all ${
                       isActive
-                        ? 'bg-[#00B4D8] text-white'
-                        : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50 hover:text-white'
+                        ? 'bg-blue-900/50 border border-blue-700 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+                        : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-blue-600/50 hover:text-blue-300'
                     }`}
                   >
                     {genreLabel(genre)}
@@ -147,8 +147,8 @@ export function MobileFilterDrawer({
                     onClick={() => handleTagClick(tag)}
                     className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
                       isActive
-                        ? 'bg-cyan-500/10 border-cyan-500 text-cyan-400'
-                        : 'bg-transparent border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-white'
+                        ? 'bg-emerald-900/40 border-emerald-600 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                        : 'bg-transparent border-zinc-800 text-zinc-400 hover:border-emerald-600/50 hover:text-emerald-300'
                     }`}
                   >
                     {tagLabel(tag)}

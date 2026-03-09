@@ -11,6 +11,7 @@ import { StoryTileSkeleton } from '@/components/browse/StoryTileSkeleton';
 import { fetchStoriesFromApi, useDjangoApi } from '@/lib/api';
 import { getStoriesForBrowse, getStoriesForCatalog, type BrowseFilter } from '@/app/actions/catalog';
 import { getDisplayTags } from '@/lib/stories';
+import { storyMatchesQuery } from '@/lib/search';
 import { useAuthStore } from '@/store/authStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import type { Story } from '@/types/story';
@@ -108,7 +109,7 @@ function filterStories(
   }
   const q = searchQuery.trim().toLowerCase();
   if (q) {
-    list = list.filter((s) => s.title.toLowerCase().includes(q));
+    list = list.filter((s) => storyMatchesQuery(s, q));
   }
   return list;
 }
@@ -123,7 +124,11 @@ export default function BrowsePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [viewMode, setViewMode] = useState<ViewMode>('genres');
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    searchParams.get(SEARCH_PARAM)?.trim() || searchParams.get(GENRE_PARAM) || searchParams.get(TAG_PARAM)
+      ? 'list'
+      : 'genres'
+  );
   const [accessFilter, setAccessFilter] = useState<AccessFilter>('all');
   const [activeGenre, setActiveGenre] = useState<string>(() =>
     searchParams.get(GENRE_PARAM) || ALL_GENRES

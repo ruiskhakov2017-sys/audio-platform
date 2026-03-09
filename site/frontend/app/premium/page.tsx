@@ -1,7 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { useRouter } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
+import { useAuthStore } from '@/store/authStore';
+import { PREMIUM_PLAN_LIST, formatRub, type PremiumPlanId } from '@/config/pricing';
 import {
   Sparkles,
   Headphones,
@@ -16,6 +20,7 @@ const GOLD = '#D4AF37';
 const GOLD_LIGHT = '#F4E4BC';
 const PURPLE = '#6B21A8';
 const PURPLE_LIGHT = '#9333EA';
+const BLUE_LIGHT = '#60A5FA';
 
 const benefits = [
   {
@@ -43,42 +48,89 @@ const benefits = [
 const plans = [
   {
     id: 'tainyi',
-    name: 'Тайный',
-    period: '1 месяц',
-    desc: 'Базовый доступ',
-    price: 490,
     popular: false,
     features: ['Доступ к эксклюзивным историям', 'Базовое качество звука'],
   },
   {
     id: 'gryaznyi',
-    name: 'Грязный',
-    period: '3 месяца',
-    desc: 'Доступ + HD звук',
-    price: 1290,
     popular: true,
     features: ['Всё из тарифа «Тайный»', 'HD озвучка', 'Экономия 17%'],
   },
   {
     id: 'oderzhimyi',
-    name: 'Одержимый',
-    period: '1 год',
-    desc: 'Максимальное качество + скидка 50% на озвучку личных сценариев',
-    price: 3490,
     popular: false,
     features: ['Всё из тарифа «Грязный»', 'Скидка 50% на озвучку сценариев', 'Максимальный приоритет поддержки'],
   },
-];
+].map((plan) => {
+  const config = PREMIUM_PLAN_LIST.find((p) => p.id === plan.id as PremiumPlanId)!;
+  return {
+    ...plan,
+    name: config.name,
+    period: config.period,
+    desc: config.description,
+    priceRub: config.priceRub,
+  };
+});
 
-function handleSubscribe(planId: string) {
-  // Пока без оплаты — можно позже привязать страницу оплаты
-  if (typeof window !== 'undefined') {
-    console.log('Subscribe:', planId);
+const PLAN_THEME: Record<
+  string,
+  {
+    cardClass: string;
+    glow?: string;
+    iconBg: string;
+    iconColor: string;
+    checkColor: string;
+    buttonClass: string;
   }
-  // В будущем: router.push(`/payment?plan=${planId}`);
-}
+> = {
+  tainyi: {
+    cardClass: 'border border-zinc-800 bg-gradient-to-b from-indigo-950/60 to-purple-950/40',
+    iconBg: 'rgba(107,33,168,0.25)',
+    iconColor: PURPLE_LIGHT,
+    checkColor: PURPLE_LIGHT,
+    buttonClass: 'bg-indigo-700 hover:bg-indigo-600 text-white',
+  },
+  gryaznyi: {
+    cardClass: 'border-2 border-yellow-500 bg-gradient-to-b from-amber-950/60 to-yellow-950/30',
+    glow: '0 0 42px rgba(212,175,55,0.35)',
+    iconBg: 'rgba(212,175,55,0.25)',
+    iconColor: GOLD,
+    checkColor: GOLD,
+    buttonClass: 'bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-zinc-950',
+  },
+  oderzhimyi: {
+    cardClass: 'border border-blue-700 bg-gradient-to-b from-blue-900/75 to-blue-950/40',
+    glow: '0 0 28px rgba(59,130,246,0.25)',
+    iconBg: 'rgba(37,99,235,0.25)',
+    iconColor: BLUE_LIGHT,
+    checkColor: '#3B82F6',
+    buttonClass: 'bg-blue-900 hover:bg-blue-800 text-white',
+  },
+};
 
 export default function PremiumPage() {
+  const router = useRouter();
+  const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const [payingPlanId, setPayingPlanId] = useState<string | null>(null);
+
+  const handleSubscribe = async (planId: string) => {
+    if (!isAuthenticated || !user?.id) {
+      router.push('/login');
+      return;
+    }
+    setPayingPlanId(planId);
+    const res = await fetch('/api/payments/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId, userId: user.id }),
+    });
+    const payload = await res.json().catch(() => ({} as { confirmationUrl?: string }));
+    setPayingPlanId(null);
+    if (!res.ok || !payload.confirmationUrl) return;
+    window.location.href = payload.confirmationUrl;
+  };
+
   return (
     <div className="min-h-screen bg-[#000000] text-white relative overflow-hidden">
       <Header />
@@ -184,68 +236,65 @@ export default function PremiumPage() {
             <p className="text-zinc-500 text-center mb-16">Выбери подходящий период и начни слушать без ограничений</p>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-stretch">
-              {plans.map((plan, i) => (
-                <motion.div
-                  key={plan.id}
-                  className="relative rounded-3xl p-8 flex flex-col border bg-black/60 backdrop-blur-md transition-all hover:scale-[1.02]"
-                  initial={{ opacity: 0, y: 40 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.5, delay: i * 0.15 }}
-                  style={{
-                    borderColor: plan.popular ? GOLD : 'rgba(255,255,255,0.1)',
-                    boxShadow: plan.popular ? `0 0 40px ${GOLD}30` : undefined,
-                  }}
-                >
-                  {plan.popular && (
-                    <div
-                      className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-sm font-bold text-black"
-                      style={{ backgroundColor: GOLD }}
-                    >
-                      Хит
-                    </div>
-                  )}
-                  <div className="flex items-center gap-3 mb-6">
-                    <div
-                      className="w-12 h-12 rounded-xl flex items-center justify-center"
-                      style={{ backgroundColor: plan.popular ? `${GOLD}25` : `${PURPLE}25` }}
-                    >
-                      {plan.popular ? (
-                        <Crown className="w-6 h-6" style={{ color: GOLD }} strokeWidth={1.5} />
-                      ) : (
-                        <Zap className="w-6 h-6" style={{ color: PURPLE_LIGHT }} strokeWidth={1.5} />
-                      )}
-                    </div>
-                    <div>
-                      <h3 className="text-2xl font-bold text-white">{plan.name}</h3>
-                      <p className="text-zinc-500 text-sm">{plan.period}</p>
-                    </div>
-                  </div>
-                  <p className="text-zinc-400 text-sm mb-6">{plan.desc}</p>
-                  <div className="mb-8">
-                    <span className="text-4xl font-black text-white">{plan.price}₽</span>
-                  </div>
-                  <ul className="space-y-3 mb-8 flex-1">
-                    {plan.features.map((f) => (
-                      <li key={f} className="flex items-start gap-3 text-zinc-300 text-sm">
-                        <Check className="w-5 h-5 shrink-0 mt-0.5" style={{ color: GOLD }} strokeWidth={2.5} />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                  <button
-                    type="button"
-                    onClick={() => handleSubscribe(plan.id)}
-                    className="block w-full py-4 rounded-2xl font-semibold text-center transition-all hover:opacity-90"
-                    style={{
-                      backgroundColor: plan.popular ? GOLD : PURPLE,
-                      color: plan.popular ? '#000' : '#fff',
-                    }}
+              {plans.map((plan, i) => {
+                const theme = PLAN_THEME[plan.id];
+                return (
+                  <motion.div
+                    key={plan.id}
+                    className={`relative rounded-3xl p-8 flex flex-col backdrop-blur-md transition-all hover:scale-[1.02] ${theme.cardClass}`}
+                    initial={{ opacity: 0, y: 40 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.5, delay: i * 0.15 }}
+                    style={{ boxShadow: theme.glow }}
                   >
-                    Оформить подписку
-                  </button>
-                </motion.div>
-              ))}
+                    {plan.popular && (
+                      <div
+                        className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-sm font-bold text-black"
+                        style={{ backgroundColor: GOLD }}
+                      >
+                        Хит
+                      </div>
+                    )}
+                    <div className="flex items-center gap-3 mb-6">
+                      <div
+                        className="w-12 h-12 rounded-xl flex items-center justify-center"
+                        style={{ backgroundColor: theme.iconBg }}
+                      >
+                        {plan.popular ? (
+                          <Crown className="w-6 h-6" style={{ color: theme.iconColor }} strokeWidth={1.5} />
+                        ) : (
+                          <Zap className="w-6 h-6" style={{ color: theme.iconColor }} strokeWidth={1.5} />
+                        )}
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-white">{plan.name}</h3>
+                        <p className="text-zinc-500 text-sm">{plan.period}</p>
+                      </div>
+                    </div>
+                    <p className="text-zinc-400 text-sm mb-6">{plan.desc}</p>
+                    <div className="mb-8">
+                      <span className="text-4xl font-black text-white">{formatRub(plan.priceRub)}</span>
+                    </div>
+                    <ul className="space-y-3 mb-8 flex-1">
+                      {plan.features.map((f) => (
+                        <li key={f} className="flex items-start gap-3 text-zinc-300 text-sm">
+                          <Check className="w-5 h-5 shrink-0 mt-0.5" style={{ color: theme.checkColor }} strokeWidth={2.5} />
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={() => handleSubscribe(plan.id)}
+                      disabled={payingPlanId === plan.id}
+                      className={`block w-full py-4 rounded-2xl font-semibold text-center transition-all disabled:opacity-70 ${theme.buttonClass}`}
+                    >
+                      {payingPlanId === plan.id ? 'Переход к оплате...' : 'Оформить подписку'}
+                    </button>
+                  </motion.div>
+                );
+              })}
             </div>
           </div>
         </section>

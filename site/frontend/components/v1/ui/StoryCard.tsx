@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Story } from '@/types/story';
 import { getDisplayTags } from '@/lib/stories';
+import { PREMIUM_STORY_FROM_PRICE_RUB, formatRub } from '@/config/pricing';
 import { Play, Crown, ChevronRight, Flame, Sparkles } from 'lucide-react';
 import { usePlayerStore } from '@/store/playerStore';
 
@@ -135,7 +136,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
             {story.title}
           </Link>
           <p className="mt-2 font-bold text-white">
-            {story.isPremium ? 'от 530₽' : 'Бесплатно'}
+            {story.isPremium ? `от ${formatRub(PREMIUM_STORY_FROM_PRICE_RUB)}` : 'Бесплатно'}
           </p>
           <Link
             href={`/story/${story.id}`}
