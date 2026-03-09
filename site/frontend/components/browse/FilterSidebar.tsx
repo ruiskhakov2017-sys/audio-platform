@@ -114,8 +114,8 @@ export function FilterSidebar({
                   onClick={() => handleGenreClick(genre)}
                   className={`${tagBase} ${
                     isActive
-                      ? 'bg-zinc-800 border-cyan-500 text-cyan-400'
-                      : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-400 hover:text-cyan-400 hover:drop-shadow-[0_0_2px_rgba(34,211,238,0.5)]'
+                      ? 'bg-blue-700 border-transparent text-white'
+                      : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-400 hover:text-cyan-400'
                   }`}
                 >
                   {genreLabel(genre)}
@@ -137,8 +137,8 @@ export function FilterSidebar({
                   onClick={() => handleTagClick(tag)}
                   className={`${tagBase} ${
                     isActive
-                      ? 'bg-zinc-800 border-emerald-500 text-emerald-400'
-                      : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-emerald-400 hover:drop-shadow-[0_0_2px_rgba(52,211,153,0.5)]'
+                      ? 'bg-emerald-800 border-transparent text-white'
+                      : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-emerald-400'
                   }`}
                 >
                   {tagLabel(tag)}

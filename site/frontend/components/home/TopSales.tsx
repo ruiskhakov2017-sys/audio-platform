@@ -47,8 +47,6 @@ export function TopSales() {
                             whileInView={{ opacity: 1, y: 0 }}
                             viewport={{ once: true }}
                             transition={{ duration: 0.4, delay: index * 0.05 }}
-                            onMouseEnter={() => setHoveredId(story.id)}
-                            onMouseLeave={() => setHoveredId(null)}
                         >
                             <Link href={`/story/${story.id}`}>
                                 <div className="relative aspect-[3/4] rounded-[2rem] overflow-hidden glass-premium hover:border-[#00B4D8]/50 transition-all duration-500 group">
@@ -56,7 +54,7 @@ export function TopSales() {
                                         src={story.coverImage || DEFAULT_COVER}
                                         alt={story.title}
                                         fill
-                                        className="object-cover transition-transform duration-700 group-hover:scale-110 opacity-80 group-hover:opacity-100"
+                                        className="object-cover transition-transform duration-700 group-hover:scale-110 opacity-90 group-hover:opacity-100"
                                         unoptimized
                                         sizes="(max-width: 1024px) 50vw, 25vw"
                                         onError={(e) => {
@@ -65,12 +63,10 @@ export function TopSales() {
                                         }}
                                     />
                                     <div className="absolute inset-0 bg-gradient-to-t from-[#000814] via-transparent to-transparent opacity-90" />
-                                    <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${hoveredId === story.id ? 'opacity-100' : 'opacity-0'}`}>
+                                    <div className="absolute inset-0 flex items-center justify-center transition-opacity duration-300 opacity-0 group-hover:opacity-100">
                                         <div className="absolute inset-0 bg-black/20 backdrop-blur-[2px]" />
                                         <motion.div
                                             className="relative z-10 w-16 h-16 rounded-full bg-[#00B4D8] flex items-center justify-center shadow-[0_0_40px_rgba(0,180,216,0.8)]"
-                                            initial={{ scale: 0.8 }}
-                                            animate={{ scale: hoveredId === story.id ? 1 : 0.8 }}
                                             whileHover={{ scale: 1.1 }}
                                         >
                                             <Play className="w-8 h-8 text-white ml-1" strokeWidth={2} fill="white" />

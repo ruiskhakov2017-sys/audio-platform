@@ -69,13 +69,15 @@ export function CategoryChoices() {
 
                                     {/* Gradient Overlay */}
                                     <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent opacity-80 group-hover:opacity-60 transition-opacity duration-300" />
+                                    {/* Bottom Overlay for Readability */}
+                                    <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none" />
 
                                     {/* Content */}
-                                    <div className="absolute bottom-0 left-0 right-0 p-8">
-                                        <h3 className="text-2xl font-bold text-white mb-2">
+                                    <div className="absolute bottom-0 left-0 right-0 p-8 pb-6 transform transition-transform duration-300 group-hover:scale-105 origin-bottom-left">
+                                        <h3 className="text-xl md:text-2xl font-bold text-white mb-2 drop-shadow-lg">
                                             {category.title}
                                         </h3>
-                                        <p className="text-zinc-300 text-sm">
+                                        <p className="text-zinc-200 text-sm font-medium drop-shadow-md">
                                             {category.description}
                                         </p>
                                     </div>
