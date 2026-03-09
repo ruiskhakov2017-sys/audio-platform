@@ -1,7 +1,6 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import Image from 'next/image';
 import { Headphones, Lock, Sparkles } from 'lucide-react';
 import { GlassCard } from '../ui/GlassCard';
 
@@ -26,17 +25,6 @@ const features = [
 export function Features() {
     return (
         <section className="relative py-20 px-6 overflow-hidden">
-            <div className="absolute inset-0 z-0">
-                <Image
-                    src="/bg1.jpg"
-                    alt="background"
-                    fill
-                    className="object-cover w-full h-full opacity-10 grayscale"
-                    quality={50}
-                    unoptimized
-                />
-                <div className="absolute inset-0 bg-gradient-to-b from-black via-transparent to-black pointer-events-none" />
-            </div>
             <div className="relative z-10 max-w-7xl mx-auto">
                 <motion.div
                     className="text-center mb-16"

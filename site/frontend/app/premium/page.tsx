@@ -85,16 +85,6 @@ export default function PremiumPage() {
 
       {/* Hero */}
       <section className="relative pt-32 pb-24 px-6 overflow-hidden">
-        <div
-          className="absolute inset-0 z-0 opacity-30"
-          style={{
-            background: `radial-gradient(ellipse 80% 50% at 50% 0%, ${PURPLE}40, transparent 70%)`,
-          }}
-        />
-        <div
-          className="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full blur-[120px] z-0 opacity-20"
-          style={{ backgroundColor: GOLD }}
-        />
         <div className="relative z-10 max-w-4xl mx-auto text-center">
           <motion.h1
             className="font-heading text-4xl md:text-6xl lg:text-7xl font-bold mb-6 leading-tight"
@@ -154,12 +144,6 @@ export default function PremiumPage() {
 
       {/* Pricing cards */}
       <section className="relative py-24 px-6">
-        <div
-          className="absolute inset-0 z-0 opacity-20"
-          style={{
-            background: `radial-gradient(ellipse 60% 40% at 50% 100%, ${PURPLE}60, transparent 60%)`,
-          }}
-        />
         <div className="relative z-10 max-w-6xl mx-auto">
           <motion.h2
             className="font-heading text-3xl md:text-4xl font-bold text-center mb-4"

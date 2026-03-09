@@ -21,16 +21,6 @@ export function TopSales() {
 
     return (
         <section className="relative py-20 px-6 overflow-hidden">
-            <div className="absolute inset-0 z-0">
-                <Image
-                    src="/bg4.jpg"
-                    alt=""
-                    fill
-                    className="object-cover w-full h-full opacity-5 grayscale"
-                    quality={50}
-                    unoptimized
-                />
-            </div>
             <div className="relative z-10 max-w-7xl mx-auto">
                 <motion.div
                     className="text-center mb-16"

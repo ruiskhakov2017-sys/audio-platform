@@ -33,8 +33,6 @@ export default function TopPage() {
 
   return (
     <div className="min-h-screen bg-[#000814] text-white">
-      <div className="fixed inset-0 z-0 pointer-events-none opacity-[0.03]" style={{ backgroundImage: pageStyles.grain }} />
-      <div className="fixed inset-0 z-0 pointer-events-none" style={{ background: pageStyles.gradient }} />
       <Header />
       <main className="relative z-10 pt-28 pb-24 px-4 md:px-6">
         <div className="max-w-5xl mx-auto">
