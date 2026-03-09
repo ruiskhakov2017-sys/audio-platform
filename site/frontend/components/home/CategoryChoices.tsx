@@ -53,7 +53,7 @@ export function CategoryChoices() {
                                             src={category.image}
                                             alt={category.title}
                                             fill
-                                            className="object-cover transition-all duration-500 grayscale group-hover:grayscale-0 group-hover:scale-110"
+                                            className="object-cover transition-all duration-500 grayscale-0 md:grayscale md:group-hover:grayscale-0 group-hover:scale-110"
                                             unoptimized
                                             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                                         />
