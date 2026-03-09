@@ -30,7 +30,7 @@ function tagLabel(tag: string): string {
 }
 
 const tagBase =
-  'py-1 px-2 rounded-md text-[13px] font-medium transition-colors border min-w-0 flex-shrink-0';
+  'py-1 px-2 rounded-md text-[13px] font-medium transition-all duration-300 border min-w-0 flex-shrink-0';
 
 export function FilterSidebar({
   searchQuery,
@@ -82,8 +82,8 @@ export function FilterSidebar({
               onClick={() => setAccessFilter(accessFilter === 'free' ? 'all' : 'free')}
               className={`${tagBase} ${
                 accessFilter === 'free'
-                  ? 'bg-white/10 border-white/20 text-white'
-                  : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+                  ? 'bg-cyan-950/30 border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)]'
+                  : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-cyan-500/50 hover:text-cyan-400 hover:shadow-[0_0_8px_rgba(34,211,238,0.3)]'
               }`}
             >
               🎁 Бесплатно
@@ -93,8 +93,8 @@ export function FilterSidebar({
               onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
               className={`${tagBase} ${
                 accessFilter === 'premium'
-                  ? 'bg-[#FFD700]/15 border-[#FFD700]/70 text-[#FFD700]'
-                  : 'bg-transparent border-white/10 text-zinc-400 hover:border-[#FFD700]/40 hover:text-zinc-200'
+                  ? 'bg-yellow-950/30 border-yellow-400 text-yellow-400 shadow-[0_0_12px_rgba(250,204,21,0.6)]'
+                  : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-yellow-500/50 hover:text-yellow-400 hover:shadow-[0_0_8px_rgba(250,204,21,0.3)]'
               }`}
             >
               👑 Премиум
@@ -114,8 +114,8 @@ export function FilterSidebar({
                   onClick={() => handleGenreClick(genre)}
                   className={`${tagBase} ${
                     isActive
-                      ? 'bg-white/10 border-white/20 text-white'
-                      : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+                      ? 'bg-cyan-950/30 border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)]'
+                      : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-cyan-500/50 hover:text-cyan-400 hover:shadow-[0_0_8px_rgba(34,211,238,0.3)]'
                   }`}
                 >
                   {genreLabel(genre)}
@@ -137,8 +137,8 @@ export function FilterSidebar({
                   onClick={() => handleTagClick(tag)}
                   className={`${tagBase} ${
                     isActive
-                      ? 'bg-white/10 border-white/20 text-white'
-                      : 'bg-transparent border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+                      ? 'bg-cyan-950/30 border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)]'
+                      : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-cyan-500/50 hover:text-cyan-400 hover:shadow-[0_0_8px_rgba(34,211,238,0.3)]'
                   }`}
                 >
                   {tagLabel(tag)}

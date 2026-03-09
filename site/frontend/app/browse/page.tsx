@@ -423,7 +423,7 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('list');
                       }}
-                      className="relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 border border-white/10 hover:border-[#00B4D8]/50 transition-all w-full"
+                      className="group relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 transition-all duration-300 ease-in-out hover:scale-105 hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] will-change-transform w-full"
                     >
                       {failedGenreCovers.has(genre) ? (
                         <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
@@ -433,14 +433,14 @@ export default function BrowsePage() {
                         <img
                           src={genreImagePath(genre)}
                           alt=""
-                          className="genre-card-image absolute inset-0 w-full h-full object-cover grayscale transition-all duration-700 ease-in-out"
+                          className="genre-card-image absolute inset-0 w-full h-full object-cover grayscale transition-all duration-700 ease-in-out group-hover:grayscale-0"
                           aria-hidden
                           onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
                         />
                       )}
                       <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none" aria-hidden />
                       <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent pointer-events-none">
-                        <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg">
+                        <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg transition-colors duration-300 group-hover:text-white group-hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.5)]">
                           {genre}
                         </span>
                       </span>
