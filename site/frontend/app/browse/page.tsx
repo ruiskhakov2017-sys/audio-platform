@@ -121,33 +121,8 @@ const TAG_PARAM = 'tag';
 type ViewMode = 'genres' | 'list';
 
 function getGenreTestStyle(index: number): string {
-  if (index > 8) {
-    // Default white style
-    return 'text-white/70 md:group-hover:text-white md:group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.8)]';
-  }
-
-  const styles = [
-    // 0: White (Default)
-    'text-white/70 md:group-hover:text-white md:group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.8)]',
-    // 1: Dark
-    'text-black/40 md:group-hover:text-black/90 md:group-hover:[text-shadow:0_0_15px_rgba(0,0,0,0.6)]',
-    // 2: Neon Pink
-    'text-fuchsia-100/70 md:group-hover:text-fuchsia-400 md:group-hover:[text-shadow:0_0_20px_rgba(232,121,249,0.8)]',
-    // 3: Orange/Fire
-    'text-orange-100/70 md:group-hover:text-orange-500 md:group-hover:[text-shadow:0_0_20px_rgba(249,115,22,0.8)]',
-    // 4: Cyan
-    'text-cyan-100/70 md:group-hover:text-cyan-400 md:group-hover:[text-shadow:0_0_20px_rgba(34,211,238,0.8)]',
-    // 5: Gold
-    'text-yellow-100/70 md:group-hover:text-yellow-400 md:group-hover:[text-shadow:0_0_20px_rgba(250,204,21,0.8)]',
-    // 6: Red
-    'text-red-100/70 md:group-hover:text-red-500 md:group-hover:[text-shadow:0_0_20px_rgba(239,68,68,0.8)]',
-    // 7: Green
-    'text-green-100/70 md:group-hover:text-green-400 md:group-hover:[text-shadow:0_0_20px_rgba(74,222,128,0.8)]',
-    // 8: Purple
-    'text-purple-100/70 md:group-hover:text-purple-400 md:group-hover:[text-shadow:0_0_20px_rgba(192,132,252,0.8)]',
-  ];
-
-  return styles[index];
+  // Always return classic white style
+  return 'text-white md:text-white/70 md:group-hover:text-white [text-shadow:0_0_15px_rgba(255,255,255,0.8)] md:[text-shadow:none] md:group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.8)]';
 }
 
 export default function BrowsePage() {

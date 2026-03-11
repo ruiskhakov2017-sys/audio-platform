@@ -77,7 +77,7 @@ export default function TopPage() {
                     <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
 
                     {/* Ranking Badge - Glassmorphism */}
-                    <span className="absolute top-4 left-4 w-10 h-10 flex items-center justify-center rounded-full bg-black/80 backdrop-blur-md border border-[#00B4D8]/50 text-[#00B4D8] font-black text-lg shadow-lg shadow-black/50 z-10">
+                    <span className="absolute top-4 left-4 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-md text-white font-black text-lg drop-shadow-[0_0_10px_rgba(255,255,255,0.9)] z-10">
                       {index + 1}
                     </span>
 
