@@ -430,29 +430,22 @@ export default function BrowsePage() {
                       }}
                       className="group relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 transition-all duration-300 ease-in-out hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] w-full"
                     >
-                      {failedGenreCovers.has(genre) ? (
-                        <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
-                          <span className="text-white font-bold text-xl sm:text-base text-center px-4">{genre}</span>
-                        </div>
-                      ) : (
-                        <div className="absolute inset-0 overflow-hidden">
+                      <div className="absolute inset-0 overflow-hidden">
+                        {failedGenreCovers.has(genre) ? (
+                          <div className="w-full h-full bg-zinc-600" aria-hidden />
+                        ) : (
                           <img
                             src={genreImagePath(genre)}
                             alt=""
-                            className="genre-card-image w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-110 grayscale group-hover:grayscale-0"
+                            className="genre-card-image w-full h-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
                             aria-hidden
                             onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
                           />
-                        </div>
-                      )}
-                      {/* Dark overlay for text readability */}
-                      <span className="absolute inset-0 bg-black/40 transition-colors duration-300 group-hover:bg-black/60 pointer-events-none" aria-hidden />
-                      
-                      {/* Centered Title */}
-                      <span className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
-                        <span className="text-white font-black text-2xl md:text-3xl uppercase tracking-wider text-center drop-shadow-lg transform transition-transform duration-300 group-hover:scale-105">
-                          {genre}
-                        </span>
+                        )}
+                      </div>
+                      <span className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/80 via-black/40 to-transparent transition-all duration-300 group-hover:from-black/90 group-hover:via-black/60 pointer-events-none" aria-hidden />
+                      <span className="absolute bottom-3 left-4 right-4 text-white text-lg font-medium capitalize text-center pointer-events-none">
+                        {genre}
                       </span>
                     </button>
                   ))}
