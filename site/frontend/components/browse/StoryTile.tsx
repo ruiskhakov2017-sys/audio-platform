@@ -119,7 +119,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             >
                                 <Play className="w-8 h-8 text-white ml-1" strokeWidth={2.5} fill="white" />
                             </motion.button>
-                            <span className="px-6 py-2 rounded-full border border-white/20 bg-white/10 text-sm font-medium text-white backdrop-blur-md hover:bg-white/20 transition-all shadow-lg">
+                            <span className="text-white/70 hover:text-white text-sm uppercase tracking-widest transition-colors mt-2">
                                 Подробнее
                             </span>
                         </motion.div>
@@ -129,25 +129,12 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                         <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block">
                             {title}
                         </h3>
-                        {/* Marquee tags container */}
-                        <div className="relative w-full overflow-hidden h-[24px]">
-                            {/* Animated marquee on hover */}
-                            <div className="flex gap-2 absolute whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 group-hover:animate-marquee will-change-transform">
-                                {[...displayTags, ...displayTags, ...displayTags, ...displayTags].map((tag, index) => (
+                        <div className="relative w-full overflow-hidden">
+                            <div className="flex flex-nowrap w-max gap-2 will-change-transform group-hover:animate-scroll">
+                                {[...displayTags, ...displayTags].map((tag, index) => (
                                     <span
-                                        key={`marquee-${tag}-${index}`}
-                                        className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap inline-block"
-                                    >
-                                        {tag}
-                                    </span>
-                                ))}
-                            </div>
-                            {/* Static list for no-hover state */}
-                            <div className="flex gap-2 w-full overflow-hidden whitespace-nowrap opacity-100 group-hover:opacity-0 transition-opacity duration-300">
-                                {displayTags.map((tag, index) => (
-                                    <span
-                                        key={`static-${index}`}
-                                        className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap inline-block"
+                                        key={`scroll-${tag}-${index}`}
+                                        className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] whitespace-nowrap inline-block"
                                     >
                                         {tag}
                                     </span>

@@ -111,6 +111,20 @@ a {
   animation: marquee 15s linear infinite;
 }
 
+@keyframes scroll {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.animate-scroll {
+  animation: scroll 12s linear infinite;
+}
+
 /* Glassmorphism utility class */
 .glass {
   background: rgba(255, 255, 255, 0.05);
