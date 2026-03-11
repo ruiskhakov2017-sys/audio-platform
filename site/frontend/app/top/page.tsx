@@ -52,12 +52,12 @@ export default function TopPage() {
           ) : list.length === 0 ? (
             <p className="text-zinc-400 text-center py-12">Пока нет данных для топа.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {list.map((story, index) => (
                 <Link
                   key={`${story.id}-${story.slug}-${index}`}
                   href={`/story/${story.id}`}
-                  className="group relative block rounded-xl overflow-hidden bg-zinc-900/80 border border-white/10 hover:border-[#00B4D8]/40 transition-all"
+                  className="group relative block rounded-2xl overflow-hidden transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_15px_30px_rgba(0,180,216,0.2)] bg-zinc-900"
                 >
                   <div className="aspect-[3/4] relative">
                     {story.coverImage ? (
@@ -65,20 +65,30 @@ export default function TopPage() {
                         src={story.coverImage}
                         alt=""
                         fill
-                        className="object-cover transition-transform group-hover:scale-105"
+                        className="object-cover transition-transform duration-500 group-hover:scale-105"
                         sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
                         unoptimized={story.coverImage.startsWith('http')}
                       />
                     ) : (
                       <div className="absolute inset-0 bg-zinc-800 flex items-center justify-center text-zinc-500 text-sm">Нет обложки</div>
                     )}
-                    <span className="absolute top-3 left-3 w-10 h-10 rounded-full bg-black/70 border border-white/20 flex items-center justify-center text-lg font-bold text-white">
+                    
+                    {/* Gradient Overlay for Readability */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
+                    
+                    {/* Ranking Badge - Glassmorphism */}
+                    <span className="absolute top-4 left-4 w-10 h-10 flex items-center justify-center rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white font-bold text-lg shadow-lg z-10">
                       {index + 1}
                     </span>
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-80" />
-                    <div className="absolute bottom-0 left-0 right-0 p-4">
-                      <h2 className="font-semibold text-white line-clamp-2">{story.title}</h2>
-                      <p className="text-xs text-zinc-400 mt-1">{getDisplayTags(story)[0] || 'Аудио'}</p>
+                    
+                    {/* Content Group: Genre + Title */}
+                    <div className="absolute bottom-0 left-0 right-0 p-5 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1 z-10">
+                      <span className="inline-block w-max px-3 py-1 rounded-full bg-[#00B4D8]/20 text-[#00B4D8] border border-[#00B4D8]/30 text-xs uppercase tracking-wider font-semibold">
+                        {getDisplayTags(story)[0] || 'Аудио'}
+                      </span>
+                      <h2 className="text-xl md:text-2xl font-bold text-white leading-tight line-clamp-2">
+                        {story.title}
+                      </h2>
                     </div>
                   </div>
                 </Link>
