@@ -437,15 +437,16 @@ export default function BrowsePage() {
                           <img
                             src={genreImagePath(genre)}
                             alt=""
-                            className="genre-card-image w-full h-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
+                            className="genre-card-image w-full h-full object-cover grayscale transition-all duration-300 ease-out group-hover:scale-105 group-hover:grayscale-0"
                             aria-hidden
                             onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
                           />
                         )}
                       </div>
-                      <span className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/80 via-black/40 to-transparent transition-all duration-300 group-hover:from-black/90 group-hover:via-black/60 pointer-events-none" aria-hidden />
-                      <span className="absolute bottom-3 left-4 right-4 text-white text-lg font-medium capitalize text-center pointer-events-none">
-                        {genre}
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-all duration-500 ease-in-out pointer-events-none">
+                        <span className="text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-widest text-center text-white/80 opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-500 group-hover:[text-shadow:0_0_20px_rgba(255,255,255,0.6)]">
+                          {genre}
+                        </span>
                       </span>
                     </button>
                   ))}
