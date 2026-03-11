@@ -55,8 +55,8 @@ export default function TopPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
               {list.map((story, index) => (
                 <Link
-                  key={story.id}
-                  href={`/story/${story.id}`}
+                  key={`${story.id}-${story.slug}-${index}`}
+                  href={`/story/${story.slug || story.id}`}
                   className="group relative block rounded-xl overflow-hidden bg-zinc-900/80 border border-white/10 hover:border-[#00B4D8]/40 transition-all"
                 >
                   <div className="aspect-[3/4] relative">

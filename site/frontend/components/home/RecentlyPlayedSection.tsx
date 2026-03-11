@@ -62,7 +62,7 @@ export function RecentlyPlayedSection() {
             return (
               <Link
                 key={`${story.id}-${story.slug}`}
-                href={`/story/${story.id}`}
+                href={`/story/${story.slug || story.id}`}
                 className="group shrink-0 w-[140px] sm:w-[160px]"
               >
                 <div className="relative aspect-[3/4] rounded-2xl overflow-hidden border border-white/10 group-hover:border-[#00B4D8]/40 transition-colors">

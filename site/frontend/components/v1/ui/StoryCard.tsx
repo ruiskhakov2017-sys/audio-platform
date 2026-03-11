@@ -16,19 +16,9 @@ interface StoryCardProps {
   variant?: StoryCardVariant;
 }
 
-function getCategoryLabel(story: Story): string {
-  const tags = getDisplayTags(story);
-  if (tags.some((t) => ['asmr', 'hypnosis'].includes(t.toLowerCase())))
-    return 'Гипнозы';
-  if (tags.some((t) => ['romance', 'voice', 'roleplay'].includes(t.toLowerCase())))
-    return 'Ролевые игры';
-  if (tags.some((t) => ['drama', 'mystery'].includes(t.toLowerCase())))
-    return 'Спектакли';
-  return 'Аудио-сессия';
-}
-
 export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
   const { setTrack, setIsPlaying, currentTrack, isPlaying } = usePlayerStore();
+  const storyHref = `/story/${story.slug || story.id}`;
 
   const isCurrentTrack = currentTrack?.id === story.id;
   const isPlayingCurrent = isCurrentTrack && isPlaying;
@@ -48,8 +38,6 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
     }
   };
 
-  const categoryLabel = getCategoryLabel(story);
-
   if (variant === 'catalog') {
     const displayTags = story.tags || [];
 
@@ -59,7 +47,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         style={{ backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       >
         <Link
-          href={`/story/${story.id}`}
+          href={storyHref}
           className="relative block overflow-hidden rounded-t-3xl"
           style={{ textDecoration: 'none' }}
         >
@@ -131,7 +119,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
 
         <div className="flex flex-1 flex-col p-5 gap-4">
           <Link
-            href={`/story/${story.id}`}
+            href={storyHref}
             className="truncate text-3xl font-bold leading-tight text-white text-center transition-colors hover:text-[#c4b5fd] no-underline block"
           >
             {story.title}
@@ -153,7 +141,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
               {story.isPremium ? `от ${formatRub(PREMIUM_STORY_FROM_PRICE_RUB)}` : 'Бесплатно'}
             </p>
             <Link
-              href={`/story/${story.id}`}
+              href={storyHref}
               className="flex items-center gap-1 text-sm font-medium text-[#c4b5fd] no-underline transition-colors hover:text-[#a78bfa]"
             >
               Подробнее
@@ -176,7 +164,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
       }}
     >
       <Link
-        href={`/story/${story.id}`}
+        href={storyHref}
         className="relative flex flex-col overflow-hidden transition-all duration-300 hover:scale-[1.02]"
         style={{ textDecoration: 'none' }}
       >
@@ -254,7 +242,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
 
         <div className="flex flex-1 flex-col p-4 gap-3">
           <Link
-            href={`/story/${story.id}`}
+            href={storyHref}
             className="truncate text-2xl font-bold leading-tight text-white text-center transition-colors hover:text-[#c4b5fd] no-underline block"
           >
             {story.title}

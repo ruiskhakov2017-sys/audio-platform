@@ -8,20 +8,18 @@ import { useState } from 'react';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { usePlayerStore } from '@/store/playerStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
-import { getDisplayTags } from '@/lib/stories';
 import type { Story } from '@/types/story';
 
 interface StoryTileProps {
     id: number;
     title: string;
     coverImage: string;
-    category: string;
     price?: number;
     isPremium: boolean;
     story?: Story;
 }
 
-export function StoryTile({ id, title, coverImage, category, price, isPremium, story }: StoryTileProps) {
+export function StoryTile({ id, title, coverImage, price, isPremium, story }: StoryTileProps) {
     const [isHovered, setIsHovered] = useState(false);
     const isFree = !isPremium && (price === undefined || price === 0);
     const { toggleLike, isLiked } = useFavoritesStore();
@@ -51,6 +49,7 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
     };
 
     const displayTags = story?.tags || [];
+    const storyHref = `/story/${story?.slug || id}`;
 
     return (
         <motion.div
@@ -60,7 +59,7 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
         >
-            <Link href={`/story/${id}`}>
+            <Link href={storyHref}>
                 <div className="relative aspect-[3/4] rounded-xl overflow-hidden group cursor-pointer">
                     <div className="absolute inset-0">
                         <Image
@@ -128,8 +127,8 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                         </h3>
                         <div className="flex flex-nowrap overflow-hidden justify-center gap-[8px]">
                             {displayTags.map((tag, index) => (
-                                <span 
-                                    key={index} 
+                                <span
+                                    key={index}
                                     className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap"
                                 >
                                     {tag}

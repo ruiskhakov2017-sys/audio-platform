@@ -76,7 +76,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const handleSelect = (story: Story) => {
     onClose();
     setQuery('');
-    router.push(`/story/${story.id}`);
+    router.push(`/story/${story.slug || story.id}`);
   };
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -137,7 +137,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
           ) : (
             <ul className="py-2">
               {results.map((story) => (
-                <li key={story.id}>
+                <li key={`${story.id}-${story.slug}`}>
                   <button
                     type="button"
                     onClick={() => handleSelect(story)}

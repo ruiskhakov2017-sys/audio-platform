@@ -79,7 +79,7 @@ export default function StoryPage() {
           return;
         }
         const all = data.map(mapRowToStory);
-        const current = all.find((s) => String(s.id) === String(idParam)) ?? null;
+        const current = all.find((s) => String(s.id) === String(idParam) || String(s.slug) === String(idParam)) ?? null;
         setPageStory(current);
         if (current) setSimilar(getSimilarStories(current, all, 8));
       });

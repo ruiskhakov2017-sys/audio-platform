@@ -12,6 +12,7 @@ type HeroStoryOfDayProps = {
 
 export default function HeroStoryOfDay({ story }: HeroStoryOfDayProps) {
   const { setTrack, setIsPlaying, currentTrack, isPlaying } = usePlayerStore();
+  const storyHref = `/story/${story.slug || story.id}`;
   const isCurrent = currentTrack?.id === story.id;
   const isPlayingCurrent = isCurrent && isPlaying;
 
@@ -27,7 +28,7 @@ export default function HeroStoryOfDay({ story }: HeroStoryOfDayProps) {
 
   return (
     <Link
-      href={`/story/${story.id}`}
+      href={storyHref}
       className="group relative block overflow-hidden rounded-2xl"
       style={{
         minHeight: 320,

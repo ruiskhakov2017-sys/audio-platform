@@ -73,7 +73,8 @@ export async function fetchStoryBySlugFromApi(slug: string): Promise<Story | nul
 export async function fetchStoryByIdFromApi(id: number | string): Promise<Story | null> {
   if (!API_BASE) return null;
   const list = await fetchStoriesFromApi();
-  const story = list.find((s) => String(s.id) === String(id));
+  const idOrSlug = String(id);
+  const story = list.find((s) => String(s.id) === idOrSlug || String(s.slug) === idOrSlug);
   return story ?? null;
 }
 
