@@ -80,22 +80,20 @@ export function FilterSidebar({
             <button
               type="button"
               onClick={() => setAccessFilter(accessFilter === 'free' ? 'all' : 'free')}
-              className={`${tagBase} ${
-                accessFilter === 'free'
+              className={`${tagBase} ${accessFilter === 'free'
                   ? 'bg-cyan-950/30 border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)]'
                   : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-cyan-500/50 hover:text-cyan-400 hover:shadow-[0_0_8px_rgba(34,211,238,0.3)]'
-              }`}
+                }`}
             >
               🎁 Бесплатно
             </button>
             <button
               type="button"
               onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
-              className={`${tagBase} ${
-                accessFilter === 'premium'
+              className={`${tagBase} ${accessFilter === 'premium'
                   ? 'bg-yellow-950/30 border-yellow-400 text-yellow-400 shadow-[0_0_12px_rgba(250,204,21,0.6)]'
                   : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-yellow-500/50 hover:text-yellow-400 hover:shadow-[0_0_8px_rgba(250,204,21,0.3)]'
-              }`}
+                }`}
             >
               👑 Премиум
             </button>
@@ -112,11 +110,10 @@ export function FilterSidebar({
                   key={genre}
                   type="button"
                   onClick={() => handleGenreClick(genre)}
-                  className={`${tagBase} ${
-                    isActive
-                      ? 'bg-indigo-950/60 border-blue-800/50 text-blue-300'
+                  className={`${tagBase} ${isActive
+                      ? 'bg-blue-900/40 border-blue-800/50 text-blue-300'
                       : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-400 hover:text-cyan-400'
-                  }`}
+                    }`}
                 >
                   {genreLabel(genre)}
                 </button>
@@ -135,11 +132,10 @@ export function FilterSidebar({
                   key={tag}
                   type="button"
                   onClick={() => handleTagClick(tag)}
-                  className={`${tagBase} ${
-                    isActive
+                  className={`${tagBase} ${isActive
                       ? 'bg-emerald-800 border-transparent text-white'
                       : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-emerald-400'
-                  }`}
+                    }`}
                 >
                   {tagLabel(tag)}
                 </button>

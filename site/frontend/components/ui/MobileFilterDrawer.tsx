@@ -95,18 +95,16 @@ export function MobileFilterDrawer({
               <button
                 type="button"
                 onClick={() => setAccessFilter(accessFilter === 'free' ? 'all' : 'free')}
-                className={`${tagBase} ${
-                  accessFilter === 'free' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
-                }`}
+                className={`${tagBase} ${accessFilter === 'free' ? 'bg-[#00B4D8] text-white' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#00B4D8]/50'
+                  }`}
               >
                 🎁 Бесплатно
               </button>
               <button
                 type="button"
                 onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
-                className={`${tagBase} ${
-                  accessFilter === 'premium' ? 'bg-[#FFD700]/20 border-[#FFD700]/70 text-[#FFD700]' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#FFD700]/50'
-                }`}
+                className={`${tagBase} ${accessFilter === 'premium' ? 'bg-[#FFD700]/20 border-[#FFD700]/70 text-[#FFD700]' : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-[#FFD700]/50'
+                  }`}
               >
                 👑 Премиум
               </button>
@@ -122,11 +120,10 @@ export function MobileFilterDrawer({
                     key={genre}
                     type="button"
                     onClick={() => handleGenreClick(genre)}
-                    className={`py-2 px-3 rounded-full text-sm font-medium transition-all ${
-                      isActive
-                        ? 'bg-blue-900/50 border border-blue-700 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+                    className={`py-2 px-3 rounded-full text-sm font-medium transition-all ${isActive
+                        ? 'bg-blue-900/40 border border-blue-800/50 text-blue-300'
                         : 'bg-white/5 border border-white/10 text-zinc-300 hover:border-blue-600/50 hover:text-blue-300'
-                    }`}
+                      }`}
                   >
                     {genreLabel(genre)}
                   </button>
@@ -145,11 +142,10 @@ export function MobileFilterDrawer({
                     key={tag}
                     type="button"
                     onClick={() => handleTagClick(tag)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-                      isActive
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${isActive
                         ? 'bg-emerald-900/40 border-emerald-600 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
                         : 'bg-transparent border-zinc-800 text-zinc-400 hover:border-emerald-600/50 hover:text-emerald-300'
-                    }`}
+                      }`}
                   >
                     {tagLabel(tag)}
                   </button>

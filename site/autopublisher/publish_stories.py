@@ -47,6 +47,7 @@ except ModuleNotFoundError:
 from botocore.config import Config
 import boto3
 from tinytag import TinyTag
+from utils.constants import ALLOWED_TAGS_SET
 
 # Загружаем .env из папки скрипта и/или из родителя (site/.env.local)
 _load_dir = Path(__file__).resolve().parent
@@ -81,6 +82,28 @@ INFO_KEYS = {
     "автор": "author", "author": "author",
     "премиум": "is_premium", "premium": "is_premium", "is_premium": "is_premium",
 }
+
+
+def normalize_tag(tag: str) -> str:
+    return tag.strip().lower()
+
+
+def to_display_tag(tag: str) -> str:
+    return tag[:1].upper() + tag[1:] if tag else tag
+
+
+def filter_allowed_tags(tags: list[str]) -> list[str]:
+    allowed: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        tag_clean = normalize_tag(tag)
+        if not tag_clean or tag_clean not in ALLOWED_TAGS_SET:
+            continue
+        if tag_clean in seen:
+            continue
+        seen.add(tag_clean)
+        allowed.append(to_display_tag(tag_clean))
+    return allowed
 
 
 def _log_line(prefix: str, message: str) -> None:
@@ -122,7 +145,7 @@ def parse_info_txt(path: Path) -> dict:
             elif key == "genres":
                 result["genres"] = [s.strip() for s in value.split(",") if s.strip()]
             elif key == "tags":
-                result["tags"] = [s.strip() for s in value.split(",") if s.strip()]
+                result["tags"] = filter_allowed_tags([s for s in value.split(",") if s.strip()])
             elif key == "author":
                 result["author"] = value
             elif key == "is_premium":
@@ -282,7 +305,7 @@ def publish_one(
 
     duration = get_audio_duration_seconds(audio_path)
     genres = meta["genres"] or ["Без жанра"]
-    tags = meta["tags"] or []
+    tags = filter_allowed_tags(meta["tags"] or [])
     report(f"  Длительность: {duration} сек, жанры: {genres}")
 
     row = {

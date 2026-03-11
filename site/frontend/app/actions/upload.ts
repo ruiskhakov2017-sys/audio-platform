@@ -4,6 +4,7 @@ import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createClient } from '@supabase/supabase-js';
 import { r2, R2_BUCKET, R2_PUBLIC_URL } from '@/lib/r2';
+import { filterAllowedTags } from '@/config/tags';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_KEY =
@@ -68,7 +69,8 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
   row.author = '';
   row.genre = payload.genres?.[0] ?? null;
   if (payload.description != null) row.description = payload.description;
-  if (payload.tags != null) row.tags = payload.tags;
+  const allowedTags = filterAllowedTags(payload.tags);
+  if (allowedTags.length > 0) row.tags = allowedTags;
   const { data, error } = await supabase.from('stories').insert(row).select('id').single();
   if (error) {
     return { success: false, error: error.message };
@@ -104,7 +106,7 @@ export async function updateStory(id: number, payload: UpdateStoryPayload): Prom
   if (payload.duration !== undefined) updates.duration = payload.duration;
   if (payload.is_premium !== undefined) updates.is_premium = payload.is_premium;
   if (payload.genres !== undefined) updates.genres = payload.genres;
-  if (payload.tags !== undefined) updates.tags = payload.tags;
+  if (payload.tags !== undefined) updates.tags = filterAllowedTags(payload.tags);
   if (Object.keys(updates).length === 0) return { success: true };
   const { error } = await supabase.from('stories').update(updates).eq('id', id);
   if (error) return { success: false, error: error.message };
