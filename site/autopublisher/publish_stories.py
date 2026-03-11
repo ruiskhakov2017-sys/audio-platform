@@ -88,10 +88,6 @@ def normalize_tag(tag: str) -> str:
     return tag.strip().lower()
 
 
-def to_display_tag(tag: str) -> str:
-    return tag[:1].upper() + tag[1:] if tag else tag
-
-
 def filter_allowed_tags(tags: list[str]) -> list[str]:
     allowed: list[str] = []
     seen: set[str] = set()
@@ -102,7 +98,7 @@ def filter_allowed_tags(tags: list[str]) -> list[str]:
         if tag_clean in seen:
             continue
         seen.add(tag_clean)
-        allowed.append(to_display_tag(tag_clean))
+        allowed.append(tag_clean)
     return allowed
 
 
