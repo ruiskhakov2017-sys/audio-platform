@@ -46,6 +46,21 @@ export function FilterSidebar({
   onReset,
   onGenreSelect,
 }: FilterSidebarProps) {
+  const genreNames = new Set(
+    genres
+      .filter((genre) => genre !== ALL_GENRES)
+      .map((genre) => genre.trim().toLowerCase())
+  );
+  const seenTags = new Set<string>();
+  const uniqueTags = allTags.filter((tag) => {
+    const normalized = tag.trim().toLowerCase();
+    if (!normalized) return false;
+    if (genreNames.has(normalized)) return false;
+    if (seenTags.has(normalized)) return false;
+    seenTags.add(normalized);
+    return true;
+  });
+
   const handleTagClick = (tag: string) => {
     setSelectedTag(selectedTag === tag ? null : tag);
   };
@@ -125,7 +140,7 @@ export function FilterSidebar({
         <div className="mb-4">
           <h4 className="text-sm font-medium text-zinc-400 mb-2">Теги</h4>
           <div className="flex flex-wrap gap-2 content-start">
-            {allTags.map((tag) => {
+            {uniqueTags.map((tag) => {
               const isActive = selectedTag === tag;
               return (
                 <button
