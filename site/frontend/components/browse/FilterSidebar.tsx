@@ -51,11 +51,18 @@ export function FilterSidebar({
       .filter((genre) => genre !== ALL_GENRES)
       .map((genre) => genre.trim().toLowerCase())
   );
-  const seenTags = new Set<string>();
-  const uniqueTags = allTags.filter((tag) => {
+
+  const cleanTags = allTags.filter((tag) => {
     const normalized = tag.trim().toLowerCase();
     if (!normalized) return false;
+    // Exclude tags that match genre names
     if (genreNames.has(normalized)) return false;
+    return true;
+  });
+
+  const seenTags = new Set<string>();
+  const uniqueTags = cleanTags.filter((tag) => {
+    const normalized = tag.trim().toLowerCase();
     if (seenTags.has(normalized)) return false;
     seenTags.add(normalized);
     return true;
@@ -96,8 +103,8 @@ export function FilterSidebar({
               type="button"
               onClick={() => setAccessFilter(accessFilter === 'free' ? 'all' : 'free')}
               className={`${tagBase} ${accessFilter === 'free'
-                  ? 'bg-cyan-950/30 border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)]'
-                  : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-cyan-500/50 hover:text-cyan-400 hover:shadow-[0_0_8px_rgba(34,211,238,0.3)]'
+                ? 'bg-cyan-950/30 border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)]'
+                : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-cyan-500/50 hover:text-cyan-400 hover:shadow-[0_0_8px_rgba(34,211,238,0.3)]'
                 }`}
             >
               🎁 Бесплатно
@@ -106,8 +113,8 @@ export function FilterSidebar({
               type="button"
               onClick={() => setAccessFilter(accessFilter === 'premium' ? 'all' : 'premium')}
               className={`${tagBase} ${accessFilter === 'premium'
-                  ? 'bg-yellow-950/30 border-yellow-400 text-yellow-400 shadow-[0_0_12px_rgba(250,204,21,0.6)]'
-                  : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-yellow-500/50 hover:text-yellow-400 hover:shadow-[0_0_8px_rgba(250,204,21,0.3)]'
+                ? 'bg-yellow-950/30 border-yellow-400 text-yellow-400 shadow-[0_0_12px_rgba(250,204,21,0.6)]'
+                : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 hover:border-yellow-500/50 hover:text-yellow-400 hover:shadow-[0_0_8px_rgba(250,204,21,0.3)]'
                 }`}
             >
               👑 Премиум
@@ -126,8 +133,8 @@ export function FilterSidebar({
                   type="button"
                   onClick={() => handleGenreClick(genre)}
                   className={`${tagBase} text-sm uppercase tracking-wide py-2 px-3 ${isActive
-                      ? 'bg-blue-900/40 border-blue-800/50 text-blue-300 shadow-[0_0_10px_rgba(147,197,253,0.3)]'
-                      : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-300 hover:text-cyan-400 hover:border-zinc-600'
+                    ? 'bg-blue-900/40 border-blue-800/50 text-blue-300 shadow-[0_0_10px_rgba(147,197,253,0.3)]'
+                    : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-300 hover:text-cyan-400 hover:border-zinc-600'
                     }`}
                 >
                   {genreLabel(genre)}
@@ -148,8 +155,8 @@ export function FilterSidebar({
                   type="button"
                   onClick={() => handleTagClick(tag)}
                   className={`${tagBase} ${isActive
-                      ? 'bg-emerald-800 border-transparent text-white'
-                      : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-emerald-400'
+                    ? 'bg-emerald-800 border-transparent text-white'
+                    : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-emerald-400'
                     }`}
                 >
                   {tagLabel(tag)}
