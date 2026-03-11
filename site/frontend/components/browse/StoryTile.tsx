@@ -103,7 +103,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
 
                     {isHovered && (
                         <motion.div
-                            className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px]"
+                            className="absolute inset-0 flex flex-col items-center justify-center bg-black/30"
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
@@ -119,14 +119,14 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             >
                                 <Play className="w-8 h-8 text-white ml-1" strokeWidth={2.5} fill="white" />
                             </motion.button>
-                            <span className="px-3 py-1.5 rounded-full border border-white/30 bg-black/40 text-xs font-medium text-white backdrop-blur-md">
+                            <span className="px-4 py-1.5 rounded-full border border-white/50 bg-black/40 text-xs uppercase font-bold tracking-wider text-white">
                                 Подробнее
                             </span>
                         </motion.div>
                     )}
 
                     <div className="absolute bottom-0 left-0 right-0 p-4 pb-4 flex flex-col gap-2 z-20">
-                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block group-hover:text-[#00B4D8] transition-colors">
+                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block">
                             {title}
                         </h3>
                         {/* Marquee tags container */}
