@@ -120,6 +120,36 @@ const TAG_PARAM = 'tag';
 
 type ViewMode = 'genres' | 'list';
 
+function getGenreTestStyle(index: number): string {
+  if (index > 8) {
+    // Default white style
+    return 'text-white/70 md:group-hover:text-white md:group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.8)]';
+  }
+
+  const styles = [
+    // 0: White (Default)
+    'text-white/70 md:group-hover:text-white md:group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.8)]',
+    // 1: Dark
+    'text-black/40 md:group-hover:text-black/90 md:group-hover:[text-shadow:0_0_15px_rgba(0,0,0,0.6)]',
+    // 2: Neon Pink
+    'text-fuchsia-100/70 md:group-hover:text-fuchsia-400 md:group-hover:[text-shadow:0_0_20px_rgba(232,121,249,0.8)]',
+    // 3: Orange/Fire
+    'text-orange-100/70 md:group-hover:text-orange-500 md:group-hover:[text-shadow:0_0_20px_rgba(249,115,22,0.8)]',
+    // 4: Cyan
+    'text-cyan-100/70 md:group-hover:text-cyan-400 md:group-hover:[text-shadow:0_0_20px_rgba(34,211,238,0.8)]',
+    // 5: Gold
+    'text-yellow-100/70 md:group-hover:text-yellow-400 md:group-hover:[text-shadow:0_0_20px_rgba(250,204,21,0.8)]',
+    // 6: Red
+    'text-red-100/70 md:group-hover:text-red-500 md:group-hover:[text-shadow:0_0_20px_rgba(239,68,68,0.8)]',
+    // 7: Green
+    'text-green-100/70 md:group-hover:text-green-400 md:group-hover:[text-shadow:0_0_20px_rgba(74,222,128,0.8)]',
+    // 8: Purple
+    'text-purple-100/70 md:group-hover:text-purple-400 md:group-hover:[text-shadow:0_0_20px_rgba(192,132,252,0.8)]',
+  ];
+
+  return styles[index];
+}
+
 export default function BrowsePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -420,7 +450,7 @@ export default function BrowsePage() {
 
               {viewMode === 'genres' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {GENRES_LIST.map((genre) => (
+                  {GENRES_LIST.map((genre, index) => (
                     <button
                       key={genre}
                       type="button"
@@ -444,7 +474,7 @@ export default function BrowsePage() {
                         )}
                       </div>
                       <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-[.in-view]:bg-black/20 group-hover:bg-black/20 transition-all duration-500 ease-in-out pointer-events-none">
-                        <span className="text-4xl font-bold uppercase tracking-wider text-center text-white/70 transition-all duration-[1500ms] ease-out delay-[100ms] opacity-0 group-[.in-view]:opacity-100 group-[.in-view]:[text-shadow:0_0_15px_rgba(255,255,255,0.8)] md:group-[.in-view]:opacity-70 md:group-[.in-view]:[text-shadow:none] md:group-hover:opacity-100 md:group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.8)] md:group-hover:duration-300 md:group-hover:delay-0">
+                        <span className={`text-4xl font-bold uppercase tracking-wider text-center transition-all duration-[1500ms] ease-out delay-[100ms] opacity-0 group-[.in-view]:opacity-100 md:group-[.in-view]:opacity-70 md:group-hover:opacity-100 md:group-hover:duration-300 md:group-hover:delay-0 ${getGenreTestStyle(index)}`}>
                           {genre}
                         </span>
                       </span>
