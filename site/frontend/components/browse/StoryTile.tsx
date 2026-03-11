@@ -103,7 +103,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
 
                     {isHovered && (
                         <motion.div
-                            className="absolute inset-0 flex flex-col items-center justify-center bg-black/30"
+                            className="absolute inset-0 flex items-center justify-center bg-black/30"
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
@@ -119,9 +119,6 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             >
                                 <Play className="w-8 h-8 text-white ml-1" strokeWidth={2.5} fill="white" />
                             </motion.button>
-                            <span className="text-white/70 hover:text-white text-sm uppercase tracking-widest transition-colors mt-2">
-                                Подробнее
-                            </span>
                         </motion.div>
                     )}
 
