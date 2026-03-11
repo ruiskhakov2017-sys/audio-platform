@@ -127,7 +127,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             {title}
                         </h3>
                         <div className="relative w-full overflow-hidden">
-                            <div className="flex flex-nowrap w-max gap-2 will-change-transform group-hover:animate-scroll">
+                            <div className="flex flex-nowrap w-max gap-2 will-change-transform group-hover:[animation:scroll_12s_linear_infinite]">
                                 {[...displayTags, ...displayTags].map((tag, index) => (
                                     <span
                                         key={`scroll-${tag}-${index}`}
