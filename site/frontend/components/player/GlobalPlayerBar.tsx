@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -8,7 +8,6 @@ import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart, Info } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
 
 export function GlobalPlayerBar() {
   const router = useRouter();
