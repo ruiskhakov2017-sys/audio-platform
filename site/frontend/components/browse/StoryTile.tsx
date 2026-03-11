@@ -123,7 +123,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                     )}
 
                     <div className="absolute bottom-0 left-0 right-0 p-4 pb-4 flex flex-col gap-2 z-20">
-                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block">
+                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:[text-shadow:0_0_10px_rgba(255,255,255,0.6)]">
                             {title}
                         </h3>
                         <div className="relative w-full overflow-hidden">
