@@ -51,7 +51,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
   const categoryLabel = getCategoryLabel(story);
 
   if (variant === 'catalog') {
-    const displayTags = getDisplayTags(story);
+    const displayTags = story.tags || [];
 
     return (
       <div
@@ -132,16 +132,16 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         <div className="flex flex-1 flex-col p-5 gap-4">
           <Link
             href={`/story/${story.id}`}
-            className="line-clamp-2 text-2xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
+            className="line-clamp-2 text-3xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
           >
             {story.title}
           </Link>
 
-          <div className="flex flex-wrap gap-2">
-            {displayTags.slice(0, 6).map((tag, index) => (
+          <div className="flex flex-nowrap overflow-hidden gap-[8px]">
+            {displayTags.map((tag, index) => (
               <span
                 key={index}
-                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-1 rounded shadow-sm backdrop-blur-sm"
+                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-1 rounded shadow-sm backdrop-blur-sm whitespace-nowrap"
               >
                 {tag}
               </span>
@@ -255,16 +255,16 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         <div className="flex flex-1 flex-col p-4 gap-3">
           <Link
             href={`/story/${story.id}`}
-            className="line-clamp-2 text-xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
+            className="line-clamp-2 text-2xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
           >
             {story.title}
           </Link>
 
-          <div className="flex flex-wrap gap-2">
-            {getDisplayTags(story).slice(0, 4).map((tag, index) => (
+          <div className="flex flex-nowrap overflow-hidden gap-[8px]">
+            {(story.tags || []).map((tag, index) => (
               <span
                 key={index}
-                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-0.5 rounded shadow-sm backdrop-blur-sm"
+                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-0.5 rounded shadow-sm backdrop-blur-sm whitespace-nowrap"
               >
                 {tag}
               </span>
