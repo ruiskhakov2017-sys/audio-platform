@@ -29,11 +29,11 @@ export default function AboutPage() {
     <div className="min-h-screen bg-[#000814] text-white">
       <Header />
 
-      <main className="relative z-10 pt-28 pb-24 px-6">
-        <div className="max-w-4xl mx-auto">
-          {/* Title */}
+      <main className="relative z-10 pt-28 pb-24 px-4 md:px-6">
+        <div className="max-w-4xl mx-auto py-16 flex flex-col gap-10">
+          {/* Главный заголовок (Слоган) */}
           <motion.h1
-            className="font-heading text-4xl md:text-5xl lg:text-6xl font-bold text-white text-center leading-tight mb-16"
+            className="text-4xl md:text-5xl lg:text-6xl font-black text-center bg-clip-text text-transparent bg-gradient-to-r from-[#00B4D8] to-blue-600 mb-8 leading-tight"
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6 }}
@@ -42,89 +42,81 @@ export default function AboutPage() {
           </motion.h1>
 
           {/* Вступление */}
-          <motion.section
-            className="mb-16 text-center"
+          <motion.div
+            className="relative overflow-hidden bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-3xl p-8 md:p-12 group transition-all duration-500 hover:border-[#00B4D8]/30 hover:shadow-[0_0_40px_rgba(0,180,216,0.1)]"
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, margin: '-50px' }}
             transition={{ duration: 0.5 }}
           >
-            <h2 className="font-heading text-xl font-semibold text-[#00B4D8] uppercase tracking-wider mb-4">
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-[#00B4D8] to-transparent opacity-50" />
+            <span className="text-[#00B4D8] text-sm md:text-base font-bold uppercase tracking-[0.2em] mb-6 block text-left">
               Вступление
-            </h2>
-            <p className="text-zinc-300 text-lg leading-relaxed max-w-2xl mx-auto">
+            </span>
+            <p className="text-white/80 text-lg leading-relaxed font-light text-left">
               Мы создали Dirty Secrets для тех, кто понимает: самое мощное воображение — у нас в голове. В мире, перенасыщенном визуальным шумом, мы решили вернуть интимность. Звук не диктует тебе, что видеть. Он лишь направляет, позволяя твоему разуму дорисовывать самые сокровенные детали.
             </p>
-          </motion.section>
+          </motion.div>
 
           {/* Наша философия */}
-          <motion.section
-            className="mb-16 text-center"
+          <motion.div
+            className="relative overflow-hidden bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-3xl p-8 md:p-12 group transition-all duration-500 hover:border-[#00B4D8]/30 hover:shadow-[0_0_40px_rgba(0,180,216,0.1)]"
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, margin: '-50px' }}
             transition={{ duration: 0.5 }}
           >
-            <h2 className="font-heading text-xl font-semibold text-[#00B4D8] uppercase tracking-wider mb-4">
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-[#00B4D8] to-transparent opacity-50" />
+            <span className="text-[#00B4D8] text-sm md:text-base font-bold uppercase tracking-[0.2em] mb-6 block text-left">
               Наша философия
-            </h2>
-            <p className="text-zinc-300 text-lg leading-relaxed max-w-2xl mx-auto">
+            </span>
+            <p className="text-white/80 text-lg leading-relaxed font-light text-left">
               Dirty Secrets — это территория свободы от стереотипов. Мы верим, что каждый заслуживает качественный контент, который заставляет сердце биться чаще. Здесь нет места дешевым приемам — только эстетика, атмосфера и честные эмоции.
             </p>
-          </motion.section>
+          </motion.div>
 
-          {/* Почему именно мы — grid with icons */}
-          <motion.section
-            className="mb-16"
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-50px' }}
-            transition={{ duration: 0.5 }}
-          >
-            <h2 className="font-heading text-xl font-semibold text-[#00B4D8] uppercase tracking-wider mb-10 text-center">
-              Почему именно мы
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl mx-auto">
-              {whyUs.map((item, i) => (
-                <motion.div
-                  key={item.title}
-                  className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm hover:border-[#00B4D8]/30 transition-colors flex flex-col"
-                  initial={{ opacity: 0, y: 24 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.5, delay: i * 0.1 }}
+          {/* Почему именно мы */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {whyUs.map((item, i) => (
+              <motion.div
+                key={item.title}
+                className="relative overflow-hidden bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-3xl p-8 group transition-all duration-500 hover:border-[#00B4D8]/30 hover:shadow-[0_0_40px_rgba(0,180,216,0.1)] flex flex-col"
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5, delay: i * 0.1 }}
+              >
+                <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-[#00B4D8] to-transparent opacity-50" />
+                <div
+                  className="w-12 h-12 rounded-xl flex items-center justify-center mb-6 shrink-0 bg-[#00B4D8]/10 border border-[#00B4D8]/20"
                 >
-                  <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 shrink-0"
-                    style={{ backgroundColor: `${ACCENT}20`, border: `1px solid ${ACCENT}40` }}
-                  >
-                    <item.icon className="w-6 h-6" style={{ color: ACCENT }} strokeWidth={1.5} />
-                  </div>
-                  <h3 className="text-lg font-bold text-white mb-2">{item.title}</h3>
-                  <p className="text-zinc-400 text-sm leading-relaxed flex-1">{item.text}</p>
-                </motion.div>
-              ))}
-            </div>
-          </motion.section>
+                  <item.icon className="w-6 h-6 text-[#00B4D8]" strokeWidth={1.5} />
+                </div>
+                <h3 className="text-lg font-bold text-white mb-4 text-left">{item.title}</h3>
+                <p className="text-white/80 text-sm leading-relaxed font-light text-left flex-1">{item.text}</p>
+              </motion.div>
+            ))}
+          </div>
 
           {/* Наш подход */}
-          <motion.section
-            className="mb-16 text-center"
+          <motion.div
+            className="relative overflow-hidden bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-3xl p-8 md:p-12 group transition-all duration-500 hover:border-[#00B4D8]/30 hover:shadow-[0_0_40px_rgba(0,180,216,0.1)]"
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, margin: '-50px' }}
             transition={{ duration: 0.5 }}
           >
-            <h2 className="font-heading text-xl font-semibold text-[#00B4D8] uppercase tracking-wider mb-4">
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-[#00B4D8] to-transparent opacity-50" />
+            <span className="text-[#00B4D8] text-sm md:text-base font-bold uppercase tracking-[0.2em] mb-6 block text-left">
               Наш подход
-            </h2>
-            <p className="text-zinc-300 text-lg leading-relaxed max-w-2xl mx-auto mb-6">
+            </span>
+            <p className="text-white/80 text-lg leading-relaxed font-light text-left mb-6">
               Мы ценим твое время и твой выбор. Dirty Secrets — это полностью независимый проект. Мы развиваемся вместе с нашими слушателями и всегда открыты к вашим идеям. Здесь ты не просто пользователь, ты — часть закрытого клуба любителей качественной аудио-литературы.
             </p>
-            <p className="text-zinc-400 text-lg leading-relaxed italic max-w-2xl mx-auto">
+            <p className="text-zinc-400 text-lg leading-relaxed italic text-left">
               Закрой глаза. Нажми на Play. Позволь себе услышать то, о чем другие только шепчутся.
             </p>
-          </motion.section>
+          </motion.div>
         </div>
       </main>
     </div>

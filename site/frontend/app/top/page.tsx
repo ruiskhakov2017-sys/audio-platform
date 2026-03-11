@@ -72,18 +72,18 @@ export default function TopPage() {
                     ) : (
                       <div className="absolute inset-0 bg-zinc-800 flex items-center justify-center text-zinc-500 text-sm">Нет обложки</div>
                     )}
-                    
+
                     {/* Gradient Overlay for Readability */}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
-                    
+
                     {/* Ranking Badge - Glassmorphism */}
-                    <span className="absolute top-4 left-4 w-10 h-10 flex items-center justify-center rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white font-bold text-lg shadow-lg z-10">
+                    <span className="absolute top-4 left-4 w-10 h-10 flex items-center justify-center rounded-full bg-black/80 backdrop-blur-md border border-[#00B4D8]/50 text-[#00B4D8] font-black text-lg shadow-lg shadow-black/50 z-10">
                       {index + 1}
                     </span>
-                    
+
                     {/* Content Group: Genre + Title */}
                     <div className="absolute bottom-0 left-0 right-0 p-5 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1 z-10">
-                      <span className="inline-block w-max px-3 py-1 rounded-full bg-[#00B4D8]/20 text-[#00B4D8] border border-[#00B4D8]/30 text-xs uppercase tracking-wider font-semibold">
+                      <span className="inline-block w-max px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md border border-[#00B4D8]/60 text-[#00B4D8] font-bold text-xs uppercase tracking-widest shadow-[0_0_15px_rgba(0,180,216,0.25)] [text-shadow:0_0_8px_rgba(0,180,216,0.6)]">
                         {getDisplayTags(story)[0] || 'Аудио'}
                       </span>
                       <h2 className="text-xl md:text-2xl font-bold text-white leading-tight line-clamp-2">

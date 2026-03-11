@@ -95,7 +95,7 @@ export function GlobalPlayerBar() {
 
       <div className="h-full flex items-center justify-between gap-4 px-4 md:px-6 max-w-7xl mx-auto">
         {/* Слева: обложка + название + автор */}
-        <div className="flex items-center gap-3 min-w-0 flex-1 max-w-[40%]">
+        <div className="flex items-center gap-3 min-w-0 flex-1 md:max-w-[40%]">
           <Link
             href={currentTrack ? `/story/${currentTrack.id}` : '#'}
             className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block hover:ring-2 hover:ring-cyan-500/50 transition-all"
@@ -112,11 +112,11 @@ export function GlobalPlayerBar() {
             )}
           </Link>
 
-          <div className="min-w-0 flex-1 flex flex-col justify-center overflow-hidden">
+          <div className="min-w-0 flex-1 flex flex-col justify-center overflow-hidden gap-1">
             <div className="flex items-center gap-2 mb-0.5">
               <Link
                 href={currentTrack ? `/story/${currentTrack.id}` : '#'}
-                className="text-sm font-medium text-white truncate hover:text-cyan-400 transition-colors"
+                className="text-lg md:text-xl font-bold text-white truncate hover:text-cyan-400 transition-colors"
               >
                 {currentTrack.title}
               </Link>
@@ -132,23 +132,23 @@ export function GlobalPlayerBar() {
               </Link>
             </div>
 
-            <div className="relative w-full overflow-hidden h-4 flex items-center">
+            <div className="relative w-full overflow-hidden h-5 flex items-center">
               {isLocked ? (
                 <span className="text-xs text-amber-400 inline-flex items-center gap-1">
                   <Lock className="w-3 h-3" />
                   Доступно по подписке
                 </span>
               ) : currentTrack.description ? (
-                <div className="whitespace-nowrap animate-marquee flex">
-                  <span className="text-xs text-white/50 mr-8">
+                <div className="whitespace-nowrap animate-marquee flex [animation-duration:40s]">
+                  <span className="text-sm text-white/70 mr-8">
                     {currentTrack.description}
                   </span>
-                  <span className="text-xs text-white/50 mr-8">
+                  <span className="text-sm text-white/70 mr-8">
                     {currentTrack.description}
                   </span>
                 </div>
               ) : (
-                <p className="text-xs text-zinc-400 truncate">
+                <p className="text-sm text-zinc-400 truncate">
                   {currentTrack.authorName || 'Неизвестный автор'}
                 </p>
               )}

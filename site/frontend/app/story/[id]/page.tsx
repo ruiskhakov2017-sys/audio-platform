@@ -233,8 +233,8 @@ export default function StoryPage() {
         <div className="max-w-[95%] mx-auto mt-8 md:mt-0">
           {/* Split: слева фото, справа текст + Play. Чистый минимализм. */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
-            {/* Колонка слева — обложка, острые углы */}
-            <div className="w-full max-w-[550px] md:max-w-[650px] mx-auto lg:max-w-none lg:mx-0 sticky top-32">
+            {/* Колонка слева — обложка, острые углы (Hidden on mobile to fix layout order) */}
+            <div className="hidden lg:block w-full max-w-[550px] md:max-w-[650px] mx-auto lg:max-w-none lg:mx-0 sticky top-32">
               <div className="relative w-full aspect-[3/4] rounded-sm overflow-hidden shadow-2xl">
                 <Image
                   src={story.coverImage}
@@ -281,6 +281,21 @@ export default function StoryPage() {
                       #{tag}
                     </Link>
                   ))}
+                </div>
+              </div>
+
+              {/* Mobile Image: Visible only on mobile, inserted here to match requested order */}
+              <div className="block lg:hidden w-full max-w-[550px] mx-auto mb-2">
+                <div className="relative w-full aspect-[3/4] rounded-sm overflow-hidden shadow-2xl">
+                  <Image
+                    src={story.coverImage}
+                    alt={story.title}
+                    fill
+                    className="object-cover"
+                    priority
+                    unoptimized
+                    sizes="(max-width: 1024px) 100vw, 50vw"
+                  />
                 </div>
               </div>
 
