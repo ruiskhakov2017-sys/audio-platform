@@ -467,7 +467,7 @@ export default function StoryPage() {
             </Link>
           </div>
         </section>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

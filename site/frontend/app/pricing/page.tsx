@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
 import { useAuthStore } from '@/store/authStore';
 import { PREMIUM_PLAN_LIST, formatRub } from '@/config/pricing';
-import { Check, Zap, Crown, Infinity } from 'lucide-react';
+import { Check, Zap, Crown, Flame } from 'lucide-react';
 
 const PLAN_FEATURES: Record<string, string[]> = {
   tainyi: ['Доступ к эксклюзивным историям', 'Базовое качество звука'],
@@ -16,7 +16,7 @@ const PLAN_FEATURES: Record<string, string[]> = {
 const PLAN_ICONS = {
   tainyi: Zap,
   gryaznyi: Crown,
-  oderzhimyi: Infinity,
+  oderzhimyi: Flame,
 } as const;
 
 const PLANS = PREMIUM_PLAN_LIST.map((plan) => ({
@@ -72,20 +72,28 @@ export default function PricingPage() {
               return (
                 <div
                   key={plan.id}
-                  className={`relative rounded-2xl border p-6 md:p-8 flex flex-col transition-all ${plan.highlighted
-                      ? 'border-[#00B4D8]/60 bg-[#00B4D8]/5 shadow-[0_0_40px_rgba(0,180,216,0.15)] scale-[1.02]'
-                      : 'border-white/10 bg-white/5 hover:border-white/20'
-                    }`}
+                  className={`relative rounded-2xl border p-6 md:p-8 flex flex-col transition-all duration-300 ${
+                    plan.id === 'tainyi'
+                      ? 'border border-purple-500/30 bg-purple-500/[0.04] shadow-[0_0_30px_rgba(168,85,247,0.15)] hover:shadow-[0_0_40px_rgba(168,85,247,0.28)]'
+                      : plan.id === 'gryaznyi'
+                        ? 'border border-orange-500/50 bg-orange-500/[0.06] shadow-[0_0_40px_rgba(249,115,22,0.3)] hover:shadow-[0_0_50px_rgba(249,115,22,0.45)] scale-[1.02]'
+                        : 'border border-blue-500/40 bg-blue-500/[0.05] shadow-[0_0_40px_rgba(59,130,246,0.3)] hover:shadow-[0_0_50px_rgba(59,130,246,0.5)]'
+                  }`}
                 >
                   {plan.highlighted && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-[#00B4D8] text-black text-xs font-semibold">
-                      Популярный
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-orange-500 text-white text-xs font-semibold">
+                      Хит
                     </span>
                   )}
                   <div className="flex items-center gap-3 mb-6">
                     <span
-                      className={`flex h-10 w-10 items-center justify-center rounded-xl ${plan.highlighted ? 'bg-[#00B4D8]/20 text-[#00B4D8]' : 'bg-white/10 text-zinc-400'
-                        }`}
+                      className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                        plan.id === 'tainyi'
+                          ? 'bg-purple-500/20 text-purple-300'
+                          : plan.id === 'gryaznyi'
+                            ? 'bg-orange-500/20 text-orange-300'
+                            : 'bg-blue-500/20 text-blue-300'
+                      }`}
                     >
                       <Icon className="w-5 h-5" strokeWidth={2} />
                     </span>
@@ -99,8 +107,13 @@ export default function PricingPage() {
                     {plan.features.map((f) => (
                       <li key={f} className="flex items-start gap-2 text-sm text-zinc-300">
                         <Check
-                          className={`w-5 h-5 shrink-0 mt-0.5 ${plan.highlighted ? 'text-[#00B4D8]' : 'text-zinc-500'
-                            }`}
+                          className={`w-5 h-5 shrink-0 mt-0.5 ${
+                            plan.id === 'tainyi'
+                              ? 'text-purple-300'
+                              : plan.id === 'gryaznyi'
+                                ? 'text-orange-300'
+                                : 'text-blue-300'
+                          }`}
                           strokeWidth={2}
                         />
                         <span>{f}</span>
@@ -111,10 +124,13 @@ export default function PricingPage() {
                     type="button"
                     onClick={() => handleBuyClick(plan.id)}
                     disabled={!!payingPlanId}
-                    className={`block w-full py-3.5 px-4 rounded-full font-semibold text-center transition-colors disabled:opacity-50 ${plan.highlighted
-                        ? 'bg-[#00B4D8] text-black hover:bg-[#00B4D8]/90'
-                        : 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                      }`}
+                    className={`block w-full py-3.5 px-4 rounded-full font-semibold text-center transition-colors disabled:opacity-50 ${
+                      plan.id === 'tainyi'
+                        ? 'bg-purple-500 text-white hover:bg-purple-400'
+                        : plan.id === 'gryaznyi'
+                          ? 'bg-orange-500 text-white hover:bg-orange-400'
+                          : 'bg-blue-500 text-white hover:bg-blue-400'
+                    }`}
                   >
                     {payingPlanId === plan.id ? 'Обработка платежа...' : plan.cta}
                   </button>

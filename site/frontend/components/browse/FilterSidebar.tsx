@@ -133,7 +133,7 @@ export function FilterSidebar({
                   type="button"
                   onClick={() => handleGenreClick(genre)}
                   className={`${tagBase} ${isActive
-                    ? 'bg-blue-900/40 border-blue-800/50 text-blue-300'
+                    ? 'bg-blue-600 border-blue-600 text-white'
                     : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-400 hover:text-cyan-400'
                     }`}
                 >
