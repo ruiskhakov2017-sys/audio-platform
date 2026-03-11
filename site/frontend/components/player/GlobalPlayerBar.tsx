@@ -84,7 +84,7 @@ export function GlobalPlayerBar() {
         {/* Слева: обложка + название + автор */}
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <Link
-            href={currentTrack ? `/story/${currentTrack.slug || currentTrack.id}` : '#'}
+            href={currentTrack ? `/story/${currentTrack.id}` : '#'}
             className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block"
           >
             {currentTrack.coverImage && (

@@ -18,7 +18,7 @@ interface StoryCardProps {
 
 export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
   const { setTrack, setIsPlaying, currentTrack, isPlaying } = usePlayerStore();
-  const storyHref = `/story/${story.slug || story.id}`;
+  const storyHref = `/story/${story.id}`;
 
   const isCurrentTrack = currentTrack?.id === story.id;
   const isPlayingCurrent = isCurrentTrack && isPlaying;

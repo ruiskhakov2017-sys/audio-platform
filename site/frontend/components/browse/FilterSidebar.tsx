@@ -125,9 +125,9 @@ export function FilterSidebar({
                   key={genre}
                   type="button"
                   onClick={() => handleGenreClick(genre)}
-                  className={`${tagBase} ${isActive
-                      ? 'bg-blue-900/40 border-blue-800/50 text-blue-300'
-                      : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-400 hover:text-cyan-400'
+                  className={`${tagBase} text-sm uppercase tracking-wide py-2 px-3 ${isActive
+                      ? 'bg-blue-900/40 border-blue-800/50 text-blue-300 shadow-[0_0_10px_rgba(147,197,253,0.3)]'
+                      : 'bg-zinc-900/50 border-zinc-700/50 text-zinc-300 hover:text-cyan-400 hover:border-zinc-600'
                     }`}
                 >
                   {genreLabel(genre)}

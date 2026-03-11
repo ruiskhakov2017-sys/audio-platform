@@ -76,7 +76,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const handleSelect = (story: Story) => {
     onClose();
     setQuery('');
-    router.push(`/story/${story.slug || story.id}`);
+    router.push(`/story/${story.id}`);
   };
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {

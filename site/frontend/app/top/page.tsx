@@ -56,7 +56,7 @@ export default function TopPage() {
               {list.map((story, index) => (
                 <Link
                   key={`${story.id}-${story.slug}-${index}`}
-                  href={`/story/${story.slug || story.id}`}
+                  href={`/story/${story.id}`}
                   className="group relative block rounded-xl overflow-hidden bg-zinc-900/80 border border-white/10 hover:border-[#00B4D8]/40 transition-all"
                 >
                   <div className="aspect-[3/4] relative">

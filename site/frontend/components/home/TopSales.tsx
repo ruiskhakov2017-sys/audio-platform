@@ -46,7 +46,7 @@ export function TopSales() {
                             viewport={{ once: true }}
                             transition={{ duration: 0.4, delay: index * 0.05 }}
                         >
-                            <Link href={`/story/${story.slug || story.id}`}>
+                            <Link href={`/story/${story.id}`}>
                                 <div className="relative aspect-[3/4] rounded-[2rem] overflow-hidden glass-premium transition-transform duration-300 ease-in-out hover:scale-105 hover:z-10">
                                     <Image
                                         src={story.coverImage || DEFAULT_COVER}

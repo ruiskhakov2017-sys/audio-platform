@@ -12,7 +12,7 @@ type HeroStoryOfDayProps = {
 
 export default function HeroStoryOfDay({ story }: HeroStoryOfDayProps) {
   const { setTrack, setIsPlaying, currentTrack, isPlaying } = usePlayerStore();
-  const storyHref = `/story/${story.slug || story.id}`;
+  const storyHref = `/story/${story.id}`;
   const isCurrent = currentTrack?.id === story.id;
   const isPlayingCurrent = isCurrent && isPlaying;
 

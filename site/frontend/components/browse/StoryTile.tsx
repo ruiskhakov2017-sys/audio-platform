@@ -50,7 +50,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
     };
 
     const displayTags = story?.tags || [];
-    const storyHref = `/story/${story?.slug || id}`;
+    const storyHref = `/story/${id}`;
 
     return (
         <motion.div
@@ -103,7 +103,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
 
                     {isHovered && (
                         <motion.div
-                            className="absolute inset-0 flex items-center justify-center bg-black/30"
+                            className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px]"
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
@@ -111,30 +111,48 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             <motion.button
                                 type="button"
                                 onClick={handlePlayClick}
-                                className="w-20 h-20 rounded-full bg-[#00B4D8] flex items-center justify-center shadow-[0_0_40px_rgba(0,180,216,0.7)] border-0 cursor-pointer"
+                                className="w-16 h-16 rounded-full bg-[#00B4D8] flex items-center justify-center shadow-[0_0_20px_rgba(0,180,216,0.6)] border-0 cursor-pointer hover:scale-110 transition-transform mb-3"
                                 initial={{ scale: 0.8 }}
                                 animate={{ scale: 1 }}
                                 whileHover={{ scale: 1.1 }}
                                 aria-label="Слушать"
                             >
-                                <Play className="w-10 h-10 text-white ml-1" strokeWidth={2} fill="white" />
+                                <Play className="w-8 h-8 text-white ml-1" strokeWidth={2.5} fill="white" />
                             </motion.button>
+                            <span className="px-3 py-1.5 rounded-full border border-white/30 bg-black/40 text-xs font-medium text-white backdrop-blur-md">
+                                Подробнее
+                            </span>
                         </motion.div>
                     )}
 
-                    <div className="absolute bottom-0 left-0 right-0 p-4 pb-4 flex flex-col gap-2">
-                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block">
+                    <div className="absolute bottom-0 left-0 right-0 p-4 pb-4 flex flex-col gap-2 z-20">
+                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block group-hover:text-[#00B4D8] transition-colors">
                             {title}
                         </h3>
-                        <div className="flex flex-nowrap overflow-hidden justify-center gap-[8px]">
-                            {displayTags.map((tag, index) => (
-                                <span
-                                    key={index}
-                                    className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap"
-                                >
-                                    {tag}
-                                </span>
-                            ))}
+                        {/* Marquee tags container */}
+                        <div className="relative w-full overflow-hidden h-[24px]">
+                            {/* Animated marquee on hover */}
+                            <div className="flex gap-2 absolute whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 group-hover:animate-marquee">
+                                {[...displayTags, ...displayTags, ...displayTags].map((tag, index) => (
+                                    <span
+                                        key={`marquee-${tag}-${index}`}
+                                        className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap inline-block"
+                                    >
+                                        {tag}
+                                    </span>
+                                ))}
+                            </div>
+                            {/* Static list for no-hover state */}
+                            <div className="flex gap-2 w-full overflow-hidden whitespace-nowrap opacity-100 group-hover:opacity-0 transition-opacity duration-300">
+                                {displayTags.map((tag, index) => (
+                                    <span
+                                        key={`static-${index}`}
+                                        className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap inline-block"
+                                    >
+                                        {tag}
+                                    </span>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </div>
