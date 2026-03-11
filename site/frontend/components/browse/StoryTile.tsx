@@ -122,14 +122,14 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                         </motion.div>
                     )}
 
-                    <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-2">
-                        <h3 className="text-xl font-bold text-white line-clamp-2 leading-tight drop-shadow-sm">
+                    <div className="absolute bottom-0 left-0 right-0 p-4 pb-4 flex flex-col gap-2">
+                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block">
                             {title}
                         </h3>
-                        <div className="flex flex-nowrap overflow-hidden gap-[8px]">
+                        <div className="flex flex-nowrap overflow-hidden justify-center gap-[8px]">
                             {displayTags.map((tag, index) => (
-                                <span
-                                    key={index}
+                                <span 
+                                    key={index} 
                                     className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm whitespace-nowrap"
                                 >
                                     {tag}

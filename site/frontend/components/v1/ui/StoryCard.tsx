@@ -132,12 +132,12 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         <div className="flex flex-1 flex-col p-5 gap-4">
           <Link
             href={`/story/${story.id}`}
-            className="line-clamp-2 text-3xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
+            className="truncate text-3xl font-bold leading-tight text-white text-center transition-colors hover:text-[#c4b5fd] no-underline block"
           >
             {story.title}
           </Link>
 
-          <div className="flex flex-nowrap overflow-hidden gap-[8px]">
+          <div className="flex flex-nowrap overflow-hidden justify-center gap-[8px] pb-4">
             {displayTags.map((tag, index) => (
               <span
                 key={index}
@@ -255,12 +255,12 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         <div className="flex flex-1 flex-col p-4 gap-3">
           <Link
             href={`/story/${story.id}`}
-            className="line-clamp-2 text-2xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
+            className="truncate text-2xl font-bold leading-tight text-white text-center transition-colors hover:text-[#c4b5fd] no-underline block"
           >
             {story.title}
           </Link>
 
-          <div className="flex flex-nowrap overflow-hidden gap-[8px]">
+          <div className="flex flex-nowrap overflow-hidden justify-center gap-[8px] pb-4">
             {(story.tags || []).map((tag, index) => (
               <span
                 key={index}
