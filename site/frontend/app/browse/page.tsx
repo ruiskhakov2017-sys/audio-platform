@@ -266,9 +266,9 @@ export default function BrowsePage() {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            entry.target.classList.remove('grayscale');
+            entry.target.classList.add('in-view');
           } else {
-            entry.target.classList.add('grayscale');
+            entry.target.classList.remove('in-view');
           }
         });
       },
@@ -279,7 +279,7 @@ export default function BrowsePage() {
       }
     );
 
-    const cards = document.querySelectorAll('.genre-card-image');
+    const cards = document.querySelectorAll('.genre-card-container');
     cards.forEach((card) => observer.observe(card));
 
     return () => observer.disconnect();
@@ -428,7 +428,7 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('list');
                       }}
-                      className="group relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 transition-all duration-300 ease-in-out hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] w-full"
+                      className="genre-card-container group relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 transition-all duration-300 ease-in-out hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] w-full"
                     >
                       <div className="absolute inset-0 overflow-hidden">
                         {failedGenreCovers.has(genre) ? (
@@ -437,14 +437,14 @@ export default function BrowsePage() {
                           <img
                             src={genreImagePath(genre)}
                             alt=""
-                            className="genre-card-image w-full h-full object-cover grayscale transition-all duration-300 ease-out group-hover:scale-105 group-hover:grayscale-0"
+                            className="w-full h-full object-cover grayscale transition-all duration-1000 ease-out group-[.in-view]:grayscale-0 group-hover:scale-110 group-hover:grayscale-0"
                             aria-hidden
                             onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
                           />
                         )}
                       </div>
-                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-all duration-500 ease-in-out pointer-events-none">
-                        <span className="text-3xl md:text-4xl lg:text-5xl font-bold uppercase tracking-widest text-center text-white/30 group-hover:text-white transition-colors duration-700 group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.7)]">
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-all duration-500 ease-in-out pointer-events-none">
+                        <span className="text-3xl md:text-4xl lg:text-5xl font-light uppercase tracking-[0.3em] text-center text-blue-50/10 transition-all duration-1000 group-[.in-view]:text-blue-50/40 group-[.in-view]:[text-shadow:0_0_10px_rgba(0,180,216,0.3)] group-hover:text-white group-hover:[text-shadow:0_0_25px_rgba(255,255,255,0.8),0_0_10px_rgba(0,180,216,0.5)]">
                           {genre}
                         </span>
                       </span>
