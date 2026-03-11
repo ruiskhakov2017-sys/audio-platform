@@ -15,7 +15,7 @@ import { useAuthStore } from '@/store/authStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
 import { fetchReviewsByStoryId, submitReviewApi, type ReviewItem } from '@/lib/reviewsApi';
 import { toast } from 'sonner';
-import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star } from 'lucide-react';
+import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star, ArrowLeft } from 'lucide-react';
 import type { Story } from '@/types/story';
 
 const formatDuration = (sec: number) => {
@@ -88,7 +88,7 @@ export default function StoryPage() {
   useEffect(() => {
     if (!story || typeof story.id !== 'number' || useDjangoApi() || hasIncrementedView.current) return;
     hasIncrementedView.current = true;
-    incrementListensCount(story.id).catch(() => {});
+    incrementListensCount(story.id).catch(() => { });
   }, [story?.id]);
 
   useEffect(() => {
@@ -136,7 +136,7 @@ export default function StoryPage() {
       togglePlay();
     } else {
       if (!useDjangoApi() && typeof story.id === 'number') {
-        incrementListensCount(story.id).catch(() => {});
+        incrementListensCount(story.id).catch(() => { });
       }
       const queue = [
         storyWithSrc,
@@ -219,12 +219,23 @@ export default function StoryPage() {
       </div>
 
       <main className="relative z-10 pt-24 pb-20 px-4 sm:px-6">
-        <div className="max-w-[95%] mx-auto">
+        <button
+          type="button"
+          onClick={() => router.back()}
+          className="absolute top-6 left-6 md:top-24 md:left-8 z-50 flex items-center gap-2 text-zinc-400 hover:text-white transition-colors group"
+        >
+          <div className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center border border-white/10 group-hover:border-white/30 transition-all">
+            <ArrowLeft className="w-5 h-5" />
+          </div>
+          <span className="text-sm font-medium hidden md:inline-block opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all duration-300">Назад</span>
+        </button>
+
+        <div className="max-w-[95%] mx-auto mt-8 md:mt-0">
           {/* Split: слева фото, справа текст + Play. Чистый минимализм. */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
             {/* Колонка слева — обложка, острые углы */}
-            <div className="w-full max-w-[550px] md:max-w-[650px] mx-auto lg:max-w-none lg:mx-0">
-              <div className="relative w-full aspect-[3/4] rounded-sm overflow-hidden">
+            <div className="w-full max-w-[550px] md:max-w-[650px] mx-auto lg:max-w-none lg:mx-0 sticky top-32">
+              <div className="relative w-full aspect-[3/4] rounded-sm overflow-hidden shadow-2xl">
                 <Image
                   src={story.coverImage}
                   alt={story.title}
@@ -238,12 +249,43 @@ export default function StoryPage() {
             </div>
 
             {/* Колонка справа — на чёрном фоне, без карточек */}
-            <div>
+            <div className="flex flex-col gap-6 pt-4">
+              {/* 1. Заголовок (H1) - Самый главный элемент */}
+              <h1 className="font-heading text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight">
+                {story.title}
+              </h1>
+
+              {/* 2. Жанры и Теги */}
+              <div className="flex flex-col gap-3">
+                {/* Жанры - Яркие плашки */}
+                <div className="flex flex-wrap gap-2">
+                  {getDisplayTags(story).slice(0, 3).map((tag) => (
+                    <Link
+                      key={tag}
+                      href={`/browse?genre=${encodeURIComponent(tag)}`}
+                      className="bg-blue-600/20 text-blue-400 border border-blue-500/30 px-3 py-1 rounded-full uppercase text-xs tracking-wider font-semibold hover:bg-blue-600/30 transition-colors"
+                    >
+                      {tag}
+                    </Link>
+                  ))}
+                </div>
+
+                {/* Теги - Хештеги */}
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {getDisplayTags(story).slice(3).map((tag) => (
+                    <Link
+                      key={tag}
+                      href={`/browse?tag=${encodeURIComponent(tag)}`}
+                      className="text-white/60 hover:text-white transition-colors text-sm"
+                    >
+                      #{tag}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+
               <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
                 <div>
-                  <h1 className="font-heading text-3xl md:text-4xl font-bold text-white leading-tight">
-                    {story.title}
-                  </h1>
                   {reviews.length > 0 && (
                     <div className="flex items-center gap-1.5 mt-2" aria-label={`Рейтинг: ${avgRating.toFixed(1)} из 5`}>
                       {[1, 2, 3, 4, 5].map((i) => (
@@ -290,194 +332,143 @@ export default function StoryPage() {
                   </button>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2 mb-8">
-                {getDisplayTags(story).slice(0, 5).map((tag) => (
-                  <Link
-                    key={tag}
-                    href={`/browse?tag=${encodeURIComponent(tag)}`}
-                    className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1 text-sm text-zinc-400 no-underline hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
-                  >
-                    #{tag}
-                  </Link>
-                ))}
-              </div>
-
-              {/* Плеер: глобальный стор (continuous playback при навигации) */}
-              <div className="flex justify-between text-xs text-zinc-500 tabular-nums mb-1">
-                <span>{formatDuration(Math.floor(position))}</span>
-                <span>{formatDuration(displayDuration)}</span>
-              </div>
-              <div className="relative h-2 w-full rounded-full bg-white/10 overflow-hidden mb-6">
-                <div
-                  className="absolute inset-y-0 left-0 rounded-full bg-white/60 transition-all duration-150 pointer-events-none"
-                  style={{ width: `${progress}%` }}
-                />
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={progress}
-                  onChange={handleSeekRange}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  aria-label="Перемотка"
-                />
-              </div>
-              <div className="flex items-center justify-center gap-4">
+              {/* Кнопка Play - Большая и заметная */}
+              <div className="flex gap-4 mt-2">
                 <button
-                  type="button"
-                  onClick={() => previous()}
-                  className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-500 hover:text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                  aria-label="Предыдущий трек"
-                  disabled={!currentTrack}
-                >
-                  <SkipBack className="w-5 h-5" strokeWidth={1.5} />
-                </button>
-                <button
-                  type="button"
                   onClick={handlePlay}
-                  disabled={!story}
-                  className={`flex h-16 w-16 items-center justify-center rounded-full border shadow-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isCurrentStoryPlaying ? 'animate-pulse' : ''} ${
-                    isPremiumLocked
-                      ? 'border-amber-500/50 bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
-                      : 'border-white/20 bg-white/10 text-white hover:bg-white/20'
-                  }`}
-                  aria-label={isPremiumLocked ? 'Premium — получить доступ' : isCurrentStoryPlaying ? 'Пауза' : 'Воспроизведение'}
+                  className="flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-cyan-500 hover:bg-cyan-400 text-white shadow-[0_0_40px_rgba(6,182,212,0.4)] hover:shadow-[0_0_60px_rgba(6,182,212,0.6)] hover:scale-105 transition-all duration-300 group"
                 >
-                  {isPremiumLocked ? (
-                    <Lock className="w-8 h-8" strokeWidth={2} />
-                  ) : isCurrentStoryPlaying ? (
-                    <Pause className="w-8 h-8" strokeWidth={2} />
+                  {isCurrentStoryPlaying ? (
+                    <Pause className="w-8 h-8 md:w-10 md:h-10 fill-current" />
                   ) : (
-                    <Play className="w-8 h-8 ml-0.5" strokeWidth={2} fill="currentColor" />
+                    <Play className="w-8 h-8 md:w-10 md:h-10 fill-current ml-1" />
                   )}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => next()}
-                  className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-500 hover:text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                  aria-label="Следующий трек"
-                  disabled={!currentTrack}
-                >
-                  <SkipForward className="w-5 h-5" strokeWidth={1.5} />
-                </button>
+                <div className="flex flex-col justify-center">
+                  <span className="text-sm text-zinc-400 font-medium uppercase tracking-wider">Слушать рассказ</span>
+                  <span className="text-white font-bold text-lg">{formatDuration(story.durationSec || 0)}</span>
+                </div>
               </div>
 
-              {/* Описание — Montserrat, отступ сверху */}
-              <div className="mt-12">
-                <p
-                  className={`font-sans text-zinc-400 text-lg leading-relaxed ${showExpandButton ? 'line-clamp-4' : ''}`}
-                >
-                  {story.description}
-                </p>
+              {/* Разделитель */}
+              <div className="h-px bg-white/10 my-8" />
+
+              {/* Описание */}
+              <div className="prose prose-invert max-w-none text-zinc-300 leading-relaxed text-lg">
+                {descriptionExpanded ? (
+                  <p className="whitespace-pre-wrap">{story.description}</p>
+                ) : (
+                  <p className="whitespace-pre-wrap line-clamp-4">{story.description}</p>
+                )}
                 {showExpandButton && (
                   <button
-                    type="button"
                     onClick={() => setDescriptionExpanded(true)}
-                    className="mt-2 text-sm text-zinc-500 hover:text-white transition-colors"
+                    className="mt-2 text-[#00B4D8] hover:text-cyan-300 font-medium text-sm flex items-center gap-1"
                   >
-                    Развернуть
+                    Читать полностью
                   </button>
                 )}
               </div>
+            </div>
 
-              {/* Отзывы — только при наличии API */}
-              {process.env.NEXT_PUBLIC_API_URL && (
-                <section className="mt-12">
-                  <h2 className="font-heading text-xl font-bold text-white mb-4">Отзывы</h2>
-                  {isAuthenticated && (
-                    <form onSubmit={handleSubmitReview} className="mb-8">
-                      <div className="flex flex-wrap gap-4 items-center mb-3">
-                        <label className="text-zinc-400 text-sm">Оценка:</label>
-                        <div className="flex gap-1">
-                          {[1, 2, 3, 4, 5].map((i) => (
-                            <button
-                              key={i}
-                              type="button"
-                              onClick={() => setReviewForm((f) => ({ ...f, rating: i }))}
-                              className={`p-1 rounded ${reviewForm.rating >= i ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`}
-                              aria-label={`Оценка ${i}`}
-                            >
-                              <Star className="w-5 h-5" strokeWidth={1.5} fill={reviewForm.rating >= i ? 'currentColor' : 'none'} />
-                            </button>
-                          ))}
-                        </div>
+            {/* Отзывы — только при наличии API */}
+            {process.env.NEXT_PUBLIC_API_URL && (
+              <section className="mt-12">
+                <h2 className="font-heading text-xl font-bold text-white mb-4">Отзывы</h2>
+                {isAuthenticated && (
+                  <form onSubmit={handleSubmitReview} className="mb-8">
+                    <div className="flex flex-wrap gap-4 items-center mb-3">
+                      <label className="text-zinc-400 text-sm">Оценка:</label>
+                      <div className="flex gap-1">
+                        {[1, 2, 3, 4, 5].map((i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setReviewForm((f) => ({ ...f, rating: i }))}
+                            className={`p-1 rounded ${reviewForm.rating >= i ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`}
+                            aria-label={`Оценка ${i}`}
+                          >
+                            <Star className="w-5 h-5" strokeWidth={1.5} fill={reviewForm.rating >= i ? 'currentColor' : 'none'} />
+                          </button>
+                        ))}
                       </div>
-                      <textarea
-                        value={reviewForm.text}
-                        onChange={(e) => setReviewForm((f) => ({ ...f, text: e.target.value }))}
-                        placeholder="Текст отзыва (необязательно)"
-                        className="w-full max-w-md rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-zinc-500 focus:border-[#00B4D8]/50 focus:outline-none resize-y min-h-[80px]"
-                        rows={3}
-                      />
-                      <button
-                        type="submit"
-                        disabled={submittingReview}
-                        className="mt-3 px-5 py-2.5 rounded-full bg-[#00B4D8] text-black font-medium hover:bg-[#00B4D8]/90 disabled:opacity-50"
-                      >
-                        {submittingReview ? 'Отправка...' : 'Отправить отзыв'}
-                      </button>
-                    </form>
-                  )}
-                  <ul className="space-y-4">
-                    {reviews.map((r) => (
-                      <li key={r.id} className="border-b border-white/10 pb-4 last:border-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-zinc-400 text-sm">{r.user_email}</span>
-                          <span className="flex gap-0.5">
-                            {[1, 2, 3, 4, 5].map((i) => (
-                              <Star key={i} className={`w-4 h-4 ${i <= r.rating ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`} strokeWidth={1.5} />
-                            ))}
-                          </span>
-                          <span className="text-zinc-500 text-xs">{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>
-                        </div>
-                        {r.text && <p className="text-zinc-300 text-sm">{r.text}</p>}
-                      </li>
-                    ))}
-                  </ul>
-                  {reviews.length === 0 && <p className="text-zinc-500 text-sm">Пока нет отзывов.</p>}
-                </section>
-              )}
-            </div>
-          </div>
-
-          {/* Похожие истории — на всю ширину под гридом */}
-          <section className="mt-32 px-4 md:px-8 lg:px-12 xl:px-16">
-            <h2 className="font-heading text-3xl md:text-4xl text-white text-center mb-12">
-              Вам может понравиться
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-              {similar.map((s) => (
-                <Link key={s.id} href={`/story/${s.id}`} className="block group w-full">
-                  <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-white/10 group-hover:border-[#00B4D8]/40 transition-colors bg-black">
-                    <Image
-                      src={s.coverImage}
-                      alt={s.title}
-                      fill
-                      className="object-cover group-hover:scale-105 transition-transform duration-300"
-                      unoptimized
-                      sizes="(max-width: 768px) 50vw, 25vw"
+                    </div>
+                    <textarea
+                      value={reviewForm.text}
+                      onChange={(e) => setReviewForm((f) => ({ ...f, text: e.target.value }))}
+                      placeholder="Текст отзыва (необязательно)"
+                      className="w-full max-w-md rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-zinc-500 focus:border-[#00B4D8]/50 focus:outline-none resize-y min-h-[80px]"
+                      rows={3}
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
-                    <p className="absolute bottom-2 left-2 right-2 text-white text-sm font-medium line-clamp-2">
-                      {s.title}
-                    </p>
-                  </div>
-                </Link>
-              ))}
-            </div>
-            <div className="mt-16 mb-24 flex flex-col items-center justify-center text-center">
-              <p className="text-zinc-500 mb-6 text-sm">Не нашли то, что искали?</p>
-              <Link
-                href="/browse"
-                className="group flex items-center gap-2 px-8 py-4 rounded-full border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-600 transition-all duration-300"
-              >
-                <span className="text-white font-medium">Смотреть весь каталог</span>
-                <svg className="w-4 h-4 text-zinc-400 group-hover:text-white group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
-              </Link>
-            </div>
-          </section>
+                    <button
+                      type="submit"
+                      disabled={submittingReview}
+                      className="mt-3 px-5 py-2.5 rounded-full bg-[#00B4D8] text-black font-medium hover:bg-[#00B4D8]/90 disabled:opacity-50"
+                    >
+                      {submittingReview ? 'Отправка...' : 'Отправить отзыв'}
+                    </button>
+                  </form>
+                )}
+                <ul className="space-y-4">
+                  {reviews.map((r) => (
+                    <li key={r.id} className="border-b border-white/10 pb-4 last:border-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-zinc-400 text-sm">{r.user_email}</span>
+                        <span className="flex gap-0.5">
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <Star key={i} className={`w-4 h-4 ${i <= r.rating ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`} strokeWidth={1.5} />
+                          ))}
+                        </span>
+                        <span className="text-zinc-500 text-xs">{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>
+                      </div>
+                      {r.text && <p className="text-zinc-300 text-sm">{r.text}</p>}
+                    </li>
+                  ))}
+                </ul>
+                {reviews.length === 0 && <p className="text-zinc-500 text-sm">Пока нет отзывов.</p>}
+              </section>
+            )}
+          </div>
         </div>
-      </main>
-    </div>
+
+        {/* Похожие истории — на всю ширину под гридом */}
+        <section className="mt-32 px-4 md:px-8 lg:px-12 xl:px-16">
+          <h2 className="font-heading text-3xl md:text-4xl text-white text-center mb-12">
+            Вам может понравиться
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            {similar.map((s) => (
+              <Link key={s.id} href={`/story/${s.id}`} className="block group w-full">
+                <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-white/10 group-hover:border-[#00B4D8]/40 transition-colors bg-black">
+                  <Image
+                    src={s.coverImage}
+                    alt={s.title}
+                    fill
+                    className="object-cover group-hover:scale-105 transition-transform duration-300"
+                    unoptimized
+                    sizes="(max-width: 768px) 50vw, 25vw"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
+                  <p className="absolute bottom-2 left-2 right-2 text-white text-sm font-medium line-clamp-2">
+                    {s.title}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+          <div className="mt-16 mb-24 flex flex-col items-center justify-center text-center">
+            <p className="text-zinc-500 mb-6 text-sm">Не нашли то, что искали?</p>
+            <Link
+              href="/browse"
+              className="group flex items-center gap-2 px-8 py-4 rounded-full border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-600 transition-all duration-300"
+            >
+              <span className="text-white font-medium">Смотреть весь каталог</span>
+              <svg className="w-4 h-4 text-zinc-400 group-hover:text-white group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+            </Link>
+          </div>
+        </section>
+    </div >
+      </main >
+    </div >
   );
 }

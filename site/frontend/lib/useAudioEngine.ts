@@ -56,7 +56,7 @@ const useAudioEngine = () => {
           if (typeof window !== "undefined" && window.localStorage) {
             localStorage.setItem(`progress:${track.id}`, Math.floor(audio.currentTime).toString());
           }
-        } catch (_) {}
+        } catch (_) { }
       }
     };
 
@@ -95,14 +95,21 @@ const useAudioEngine = () => {
       return;
     }
 
-    if (audio.src !== currentTrack.audioSrc) {
-      audio.src = currentTrack.audioSrc;
+    // Check if the source URL has actually changed.
+    // audio.src is always absolute. currentTrack.audioSrc might be relative.
+    // We create a temporary anchor to resolve the relative URL for comparison.
+    const tempAnchor = document.createElement('a');
+    tempAnchor.href = currentTrack.audioSrc;
+    const resolvedSrc = tempAnchor.href;
+
+    if (audio.src !== resolvedSrc) {
+      audio.src = resolvedSrc;
       audio.load();
       audio.currentTime = 0;
       setPosition(0);
       setDuration(currentTrack.durationSec || 0);
     }
-  }, [currentTrack, isPlaying, pause, setDuration, setPosition]);
+  }, [currentTrack?.audioSrc, pause, setDuration, setPosition]); // Only depend on audioSrc, not the whole track object
 
   useEffect(() => {
     const audio = audioRef.current;

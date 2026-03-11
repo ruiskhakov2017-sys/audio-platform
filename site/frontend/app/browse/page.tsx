@@ -444,7 +444,7 @@ export default function BrowsePage() {
                         )}
                       </div>
                       <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-all duration-500 ease-in-out pointer-events-none">
-                        <span className="text-4xl font-bold uppercase tracking-wider text-center text-white/70 transition-all duration-700 ease-in-out opacity-0 group-[.in-view]:opacity-80 group-hover:opacity-100 group-hover:text-white group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.6)]">
+                        <span className="text-4xl font-bold uppercase tracking-wider text-center text-white/70 transition-opacity duration-[3000ms] delay-[500ms] ease-in-out opacity-0 group-[.in-view]:opacity-80 group-hover:opacity-100 group-hover:text-white group-hover:duration-300 group-hover:delay-0 group-hover:[text-shadow:0_0_15px_rgba(255,255,255,0.6)]">
                           {genre}
                         </span>
                       </span>
