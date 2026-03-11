@@ -428,24 +428,29 @@ export default function BrowsePage() {
                         setActiveGenre(genre);
                         setViewMode('list');
                       }}
-                      className="group relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 transition-all duration-300 ease-in-out hover:scale-105 hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] will-change-transform w-full"
+                      className="group relative aspect-[4/5] rounded-2xl overflow-hidden bg-zinc-800 transition-all duration-300 ease-in-out hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] w-full"
                     >
                       {failedGenreCovers.has(genre) ? (
                         <div className="absolute inset-0 bg-zinc-600 flex items-center justify-center" aria-hidden>
                           <span className="text-white font-bold text-xl sm:text-base text-center px-4">{genre}</span>
                         </div>
                       ) : (
-                        <img
-                          src={genreImagePath(genre)}
-                          alt=""
-                          className="genre-card-image absolute inset-0 w-full h-full object-cover grayscale transition-all duration-700 ease-in-out group-hover:grayscale-0"
-                          aria-hidden
-                          onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
-                        />
+                        <div className="absolute inset-0 overflow-hidden">
+                          <img
+                            src={genreImagePath(genre)}
+                            alt=""
+                            className="genre-card-image w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-110 grayscale group-hover:grayscale-0"
+                            aria-hidden
+                            onError={() => setFailedGenreCovers((prev) => new Set(prev).add(genre))}
+                          />
+                        </div>
                       )}
-                      <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none" aria-hidden />
-                      <span className="absolute bottom-0 left-0 right-0 pt-12 pb-4 px-4 flex items-end justify-center text-center bg-gradient-to-t from-black/85 to-transparent pointer-events-none">
-                        <span className="text-white font-bold text-xl sm:text-base drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] sm:font-semibold sm:drop-shadow-lg transition-colors duration-300 group-hover:text-white group-hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.5)]">
+                      {/* Dark overlay for text readability */}
+                      <span className="absolute inset-0 bg-black/40 transition-colors duration-300 group-hover:bg-black/60 pointer-events-none" aria-hidden />
+                      
+                      {/* Centered Title */}
+                      <span className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+                        <span className="text-white font-black text-2xl md:text-3xl uppercase tracking-wider text-center drop-shadow-lg transform transition-transform duration-300 group-hover:scale-105">
                           {genre}
                         </span>
                       </span>
