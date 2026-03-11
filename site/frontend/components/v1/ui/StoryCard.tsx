@@ -51,6 +51,8 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
   const categoryLabel = getCategoryLabel(story);
 
   if (variant === 'catalog') {
+    const displayTags = getDisplayTags(story);
+
     return (
       <div
         className="group flex flex-col overflow-hidden rounded-3xl border border-white/10 bg-white/5 shadow-none transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_12px_40px_-8px_rgba(167,139,250,0.35)]"
@@ -127,24 +129,37 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
           </div>
         </Link>
 
-        <div className="flex flex-1 flex-col p-4">
-          <p className="mb-1 text-sm text-zinc-500">{categoryLabel}</p>
+        <div className="flex flex-1 flex-col p-5 gap-4">
           <Link
             href={`/story/${story.id}`}
-            className="mt-3 line-clamp-2 text-lg font-semibold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
+            className="line-clamp-2 text-2xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
           >
             {story.title}
           </Link>
-          <p className="mt-2 font-bold text-white">
-            {story.isPremium ? `от ${formatRub(PREMIUM_STORY_FROM_PRICE_RUB)}` : 'Бесплатно'}
-          </p>
-          <Link
-            href={`/story/${story.id}`}
-            className="mt-auto flex w-fit items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-sm font-medium text-[#c4b5fd] no-underline transition-colors hover:border-[#a78bfa]/30 hover:bg-white/5"
-          >
-            Подробнее
-            <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-          </Link>
+
+          <div className="flex flex-wrap gap-2">
+            {displayTags.slice(0, 6).map((tag, index) => (
+              <span
+                key={index}
+                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-1 rounded shadow-sm backdrop-blur-sm"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+
+          <div className="mt-auto flex items-center justify-between pt-2 border-t border-white/5">
+            <p className="font-bold text-white text-sm">
+              {story.isPremium ? `от ${formatRub(PREMIUM_STORY_FROM_PRICE_RUB)}` : 'Бесплатно'}
+            </p>
+            <Link
+              href={`/story/${story.id}`}
+              className="flex items-center gap-1 text-sm font-medium text-[#c4b5fd] no-underline transition-colors hover:text-[#a78bfa]"
+            >
+              Подробнее
+              <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -200,53 +215,67 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
             </button>
           </div>
 
-          {isPremium && (
-            <div
-              className="absolute left-2 top-2 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
-              style={{ backgroundColor: 'rgba(245, 158, 11, 0.95)', color: '#000' }}
-            >
-              <Crown className="h-3 w-3" />
-              PREMIUM
-            </div>
-          )}
+          {/* Badges: NEW красный градиент, PREMIUM золотая корона */}
+          <div className="absolute left-2 top-2 flex flex-wrap gap-1">
+            {isNew && (
+              <span
+                className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-white"
+                style={{ background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)' }}
+              >
+                <Sparkles className="h-2.5 w-2.5" />
+                NEW
+              </span>
+            )}
+            {isPremium && (
+              <span
+                className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-zinc-900"
+                style={{ backgroundColor: 'rgba(212, 175, 55, 0.9)' }}
+              >
+                <Crown className="h-2.5 w-2.5" />
+                PREMIUM
+              </span>
+            )}
+            {isHot && (
+              <span
+                className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-white"
+                style={{ backgroundColor: 'rgba(249, 115, 22, 0.9)' }}
+              >
+                <Flame className="h-2.5 w-2.5" />
+                HOT
+              </span>
+            )}
+          </div>
 
-          <div
-            className="absolute bottom-2 right-2 rounded-lg px-2 py-0.5 text-[10px] font-medium"
-            style={{ backgroundColor: 'rgba(12, 18, 34, 0.8)', color: '#e2e8f0' }}
-          >
+          <div className="absolute bottom-2 right-2 rounded-lg bg-black/60 px-2 py-0.5 text-[10px] font-medium text-[#e9d5ff]">
             {Math.floor(story.durationSec / 60)}:
             {(story.durationSec % 60).toString().padStart(2, '0')}
           </div>
         </div>
 
-        <div className="flex flex-col gap-0.5 p-3">
-          <h3 className="line-clamp-1 text-sm font-bold tracking-tight" style={{ color: '#f1f5f9' }}>
+        <div className="flex flex-1 flex-col p-4 gap-3">
+          <Link
+            href={`/story/${story.id}`}
+            className="line-clamp-2 text-xl font-bold leading-tight text-white transition-colors hover:text-[#c4b5fd] no-underline"
+          >
             {story.title}
-          </h3>
-          <p className="line-clamp-1 text-xs" style={{ color: '#94a3b8' }}>
-            {story.authorName}
+          </Link>
+
+          <div className="flex flex-wrap gap-2">
+            {getDisplayTags(story).slice(0, 4).map((tag, index) => (
+              <span
+                key={index}
+                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-0.5 rounded shadow-sm backdrop-blur-sm"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+
+          <p className="mt-auto font-bold text-white text-sm pt-2 border-t border-white/5">
+            {story.isPremium ? `от ${formatRub(PREMIUM_STORY_FROM_PRICE_RUB)}` : 'Бесплатно'}
           </p>
         </div>
       </Link>
-
-      {getDisplayTags(story).length > 0 && (
-        <div className="flex flex-wrap gap-1 px-3 pb-3">
-          {getDisplayTags(story).slice(0, 3).map((tag) => (
-            <Link
-              key={tag}
-              href={`/browse?tag=${encodeURIComponent(tag)}`}
-              className="rounded px-1.5 py-0.5 text-[10px] transition-opacity hover:opacity-80"
-              style={{
-                backgroundColor: 'rgba(59, 130, 246, 0.2)',
-                color: '#93c5fd',
-                textDecoration: 'none',
-              }}
-            >
-              #{tag}
-            </Link>
-          ))}
-        </div>
-      )}
     </div>
   );
 };

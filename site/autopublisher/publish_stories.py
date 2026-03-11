@@ -7,7 +7,7 @@ GUI-автопаблишер: сканирует To_Publish, загружает 
     Название_рассказа1/
       info.txt          <- название, описание, жанры, теги (опционально)
       *.mp3 или *.wav   <- одно аудио
-      *.jpg или *.png   <- одна обложка
+      *.jpg / *.png / *.jfif   <- одна обложка
       другие .txt       <- текст рассказа (если есть)
     Название_рассказа2/
       ...
@@ -72,7 +72,7 @@ R2_BUCKET = os.environ.get("R2_BUCKET_NAME") or os.environ.get("R2_BUCKET") or "
 R2_PUBLIC_URL = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
 
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".m4b", ".ogg"}
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".jfif"}
 
 INFO_KEYS = {
     "название": "title", "title": "title",
@@ -139,9 +139,9 @@ def parse_info_txt(path: Path) -> dict:
             elif key == "description":
                 result["description"] = value
             elif key == "genres":
-                result["genres"] = [s.strip() for s in value.split(",") if s.strip()]
+                result["genres"] = [s.strip() for s in re.split(r'[,;]', value) if s.strip()]
             elif key == "tags":
-                result["tags"] = filter_allowed_tags([s for s in value.split(",") if s.strip()])
+                result["tags"] = filter_allowed_tags([s for s in re.split(r'[,;]', value) if s.strip()])
             elif key == "author":
                 result["author"] = value
             elif key == "is_premium":
@@ -199,7 +199,7 @@ def get_r2_client():
 def content_type_for(path: Path) -> str:
     mime = {
         ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".m4b": "audio/mp4", ".ogg": "audio/ogg",
-        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".jfif": "image/jpeg",
     }
     return mime.get(path.suffix.lower(), "application/octet-stream")
 
@@ -277,7 +277,7 @@ def publish_one(
         log_error(f'Папка "{folder_name}". Причина: {reason}')
         return False, reason
     if not image_path:
-        reason = "Не найдено изображение (.jpg, .png и т.д.)."
+        reason = "Не найдено изображение (.jpg, .jpeg, .png, .webp, .gif, .jfif)."
         log_error(f'Папка "{folder_name}". Причина: {reason}')
         return False, reason
     report(f"  Аудио: {audio_path.name}, обложка: {image_path.name}")

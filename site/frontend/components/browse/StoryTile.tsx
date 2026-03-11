@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { usePlayerStore } from '@/store/playerStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
+import { getDisplayTags } from '@/lib/stories';
 import type { Story } from '@/types/story';
 
 interface StoryTileProps {
@@ -48,6 +49,8 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
             setIsPlaying(true);
         }
     };
+
+    const displayTags = story ? getDisplayTags(story) : [category];
 
     return (
         <motion.div
@@ -119,15 +122,20 @@ export function StoryTile({ id, title, coverImage, category, price, isPremium, s
                         </motion.div>
                     )}
 
-                    <div className="absolute bottom-0 left-0 right-0 p-4">
-                        <div className="inline-block px-2 py-0.5 mb-2 rounded-md bg-[#00B4D8]/15 border border-[#00B4D8]/30">
-                            <span className="text-[10px] uppercase tracking-wider text-[#00B4D8] font-medium">
-                                {category}
-                            </span>
-                        </div>
-                        <h3 className="text-base font-semibold text-white line-clamp-2 leading-tight">
+                    <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-2">
+                        <h3 className="text-lg font-bold text-white line-clamp-2 leading-tight drop-shadow-sm">
                             {title}
                         </h3>
+                        <div className="flex flex-wrap gap-1.5">
+                            {displayTags.slice(0, 4).map((tag, index) => (
+                                <span
+                                    key={index}
+                                    className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] backdrop-blur-sm"
+                                >
+                                    {tag}
+                                </span>
+                            ))}
+                        </div>
                     </div>
                 </div>
             </Link>
