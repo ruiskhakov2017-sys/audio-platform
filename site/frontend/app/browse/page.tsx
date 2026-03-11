@@ -443,8 +443,8 @@ export default function BrowsePage() {
                           />
                         )}
                       </div>
-                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-all duration-500 ease-in-out pointer-events-none">
-                        <span className="text-3xl md:text-4xl lg:text-5xl font-light uppercase tracking-[0.3em] text-center text-blue-50/10 transition-all duration-1000 group-[.in-view]:text-blue-50/40 group-[.in-view]:[text-shadow:0_0_10px_rgba(0,180,216,0.3)] group-hover:text-white group-hover:[text-shadow:0_0_25px_rgba(255,255,255,0.8),0_0_10px_rgba(0,180,216,0.5)]">
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-all duration-500 ease-in-out pointer-events-none">
+                        <span className="text-5xl lg:text-6xl font-thin uppercase tracking-[0.6em] text-center text-white mix-blend-overlay transition-all duration-1000 opacity-10 group-[.in-view]:opacity-40 group-hover:opacity-100 group-hover:mix-blend-normal group-hover:drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">
                           {genre}
                         </span>
                       </span>
