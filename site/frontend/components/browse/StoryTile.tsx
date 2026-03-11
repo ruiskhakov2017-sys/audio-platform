@@ -14,6 +14,7 @@ interface StoryTileProps {
     id: number;
     title: string;
     coverImage: string;
+    category?: string;
     price?: number;
     isPremium: boolean;
     story?: Story;
