@@ -16,41 +16,25 @@ const pageStyles = {
 
 function getBadgeTestStyle(index: number): string {
   // Base classes for all badges
-  const base = "absolute z-10 flex items-center justify-center font-bold";
+  const base = "absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10";
 
-  if (index > 11) {
-    // Default style
-    return `${base} top-4 left-4 w-10 h-10 rounded-full bg-black/40 backdrop-blur-md text-white font-black text-lg drop-shadow-[0_0_10px_rgba(255,255,255,0.9)]`;
+  if (index > 8) {
+    // Default style (Black)
+    return `${base} bg-gradient-to-r from-black/90 to-transparent border-l-2 border-white/50 text-white`;
   }
 
-  const styles = [
-    // 0: Cyber-Cyan
-    "top-4 left-4 w-10 h-10 rounded-full bg-black/60 backdrop-blur-md border border-cyan-500/50 text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.5)]",
-    // 1: Naked Neon Number
-    "top-4 left-4 text-4xl text-white drop-shadow-[0_0_15px_rgba(255,255,255,1)]",
-    // 2: Gold Premium Square
-    "top-4 left-4 w-10 h-10 rounded-lg bg-gradient-to-br from-yellow-400 to-yellow-600 text-black shadow-[0_0_20px_rgba(250,204,21,0.4)]",
-    // 3: Neon Pink Square
-    "top-4 left-4 w-10 h-10 bg-black/80 border border-fuchsia-500 text-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.5)]",
-    // 4: Wide Glass Pill
-    "top-4 left-4 px-3 py-1 h-8 rounded-full bg-white/10 backdrop-blur-lg border border-white/20 text-white text-sm tracking-widest",
-    // 5: Bloody Slash
-    "top-4 left-4 w-10 h-10 bg-gradient-to-r from-red-600/90 to-transparent border-l-2 border-red-500 text-white",
-    // 6: Holographic Gradient
-    "top-4 left-4 w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-cyan-500 text-white shadow-lg",
-    // 7: Glass Outline
-    "top-4 left-4 w-10 h-10 rounded-full border-2 border-white/60 text-white backdrop-blur-sm bg-transparent",
-    // 8: Deep Velvet
-    "top-4 left-4 w-10 h-10 rounded-xl bg-purple-900/90 border border-purple-400/30 text-purple-200",
-    // 9: Ribbon Bookmark
-    "top-0 left-6 w-8 h-12 rounded-b-lg bg-blue-600/90 text-white shadow-lg shadow-blue-500/40 items-end pb-2",
-    // 10: Fiery Amber
-    "top-4 left-4 w-10 h-10 rounded bg-black/50 text-orange-500 border border-orange-500/40 drop-shadow-[0_0_15px_rgba(249,115,22,0.8)]",
-    // 11: Giant Watermark
-    "top-0 left-2 text-6xl font-black text-white/30 mix-blend-overlay drop-shadow-lg",
-  ];
+  // 0, 1, 2: Red
+  if (index < 3) {
+    return `${base} bg-gradient-to-r from-red-600/90 to-transparent border-l-2 border-red-500 text-white`;
+  }
 
-  return `${base} ${styles[index]}`;
+  // 3, 4, 5: Noble Blue
+  if (index < 6) {
+    return `${base} bg-gradient-to-r from-blue-600/90 to-transparent border-l-2 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]`;
+  }
+
+  // 6, 7, 8: Strict Black
+  return `${base} bg-gradient-to-r from-black/90 to-transparent border-l-2 border-white/50 text-white backdrop-blur-sm`;
 }
 
 export default function TopPage() {
