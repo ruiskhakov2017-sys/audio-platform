@@ -73,10 +73,10 @@ export default function PricingPage() {
                 <div
                   key={plan.id}
                   className={`relative rounded-2xl border p-6 md:p-8 flex flex-col transition-all duration-300 ${plan.id === 'tainyi'
-                      ? 'border border-purple-500/30 bg-purple-500/[0.04] shadow-[0_0_30px_rgba(168,85,247,0.15)] hover:shadow-[0_0_40px_rgba(168,85,247,0.28)]'
+                      ? 'border border-purple-500/40 bg-purple-500/[0.04] shadow-[0_0_30px_rgba(168,85,247,0.2)] hover:shadow-[0_0_40px_rgba(168,85,247,0.4)]'
                       : plan.id === 'gryaznyi'
-                        ? 'border border-amber-500/50 bg-amber-500/[0.06] shadow-[0_0_40px_rgba(245,158,11,0.3)] hover:shadow-[0_0_50px_rgba(245,158,11,0.45)] scale-[1.02]'
-                        : 'border border-blue-500/40 bg-blue-500/[0.05] shadow-[0_0_40px_rgba(59,130,246,0.3)] hover:shadow-[0_0_50px_rgba(59,130,246,0.5)]'
+                        ? 'border border-amber-500/50 bg-amber-500/[0.06] shadow-[0_0_40px_rgba(245,158,11,0.3)] hover:shadow-[0_0_50px_rgba(245,158,11,0.5)] scale-[1.02]'
+                        : 'border border-blue-500/40 bg-blue-500/[0.05] shadow-[0_0_30px_rgba(59,130,246,0.3)] hover:shadow-[0_0_50px_rgba(59,130,246,0.6)]'
                     }`}
                 >
                   {plan.highlighted && (

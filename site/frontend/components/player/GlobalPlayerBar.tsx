@@ -93,9 +93,9 @@ export function GlobalPlayerBar() {
         />
       </div>
 
-      <div className="h-full flex items-center justify-between gap-4 px-4 md:px-6 w-full">
+      <div className="h-full flex items-center justify-between gap-4 px-4 md:px-10 w-full">
         {/* Слева: обложка + название + автор */}
-        <div className="flex items-center gap-3 min-w-0 w-1/3 md:flex-1">
+        <div className="flex items-center gap-3 min-w-0 w-full md:w-[30%] md:flex-none">
           <Link
             href={currentTrack ? `/story/${currentTrack.id}` : '#'}
             className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block hover:ring-2 hover:ring-cyan-500/50 transition-all"
@@ -139,7 +139,7 @@ export function GlobalPlayerBar() {
                   Доступно по подписке
                 </span>
               ) : currentTrack.description ? (
-                <div className="whitespace-nowrap animate-marquee flex [animation-duration:40s]">
+                <div className="whitespace-nowrap animate-marquee flex [animation-duration:80s]">
                   <span className="text-sm text-white/70 mr-8">
                     {currentTrack.description}
                   </span>
@@ -166,7 +166,7 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Центр: Play/Pause или замок */}
-        <div className="flex flex-col items-center justify-center gap-1 shrink-0 mx-auto">
+        <div className="flex flex-col items-center justify-center gap-1 shrink-0 md:w-[40%]">
           {isLocked && (
             <p className="text-xs text-amber-400/90">Доступно только по подписке</p>
           )}
@@ -229,7 +229,7 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Справа: громкость на десктопе */}
-        <div className="hidden md:flex items-center justify-end gap-2 w-1/3 md:flex-1 shrink-0">
+        <div className="hidden md:flex items-center justify-end gap-2 w-full md:w-[30%] shrink-0">
           <div className="flex items-center gap-2 w-40">
             <Volume2 className="w-5 h-5 text-zinc-400 shrink-0" strokeWidth={1.5} />
             <input
