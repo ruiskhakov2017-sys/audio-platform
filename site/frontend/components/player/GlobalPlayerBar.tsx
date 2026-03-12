@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
-import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart, Info, Moon, Maximize2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart, Info, Moon, ExternalLink, ListMusic } from 'lucide-react';
 
 export function GlobalPlayerBar() {
   const router = useRouter();
@@ -65,6 +65,18 @@ export function GlobalPlayerBar() {
     const newPosition = (Number(e.target.value) / 100) * duration;
     seek(newPosition);
   };
+
+  const formatPlayerTime = (value: number) => {
+    const totalSeconds = Math.max(0, Math.floor(value || 0));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+  const displayDuration = duration > 0 ? duration : (currentTrack?.durationSec ?? 0);
 
   return (
     <div
@@ -234,8 +246,13 @@ export function GlobalPlayerBar() {
         {/* Справа: громкость на десктопе */}
         <div className="hidden md:flex items-center justify-end gap-2 w-full md:w-[45%] shrink-0">
           <div className="hidden md:flex items-center gap-6 ml-auto mr-8 text-white/50">
-            <span className="text-xs font-medium tracking-widest hover:text-white cursor-default transition-colors">00:00 / 00:00</span>
-            <button title="Таймер сна" className="hover:text-[#00B4D8] transition-colors">
+            <span className="text-xs font-medium tracking-widest hover:text-white cursor-default transition-colors">
+              {formatPlayerTime(position)} / {formatPlayerTime(displayDuration)}
+            </span>
+            <button title="Добавить в плейлист/Очередь" className="hover:text-[#00B4D8] transition-colors">
+              <ListMusic className="w-5 h-5" />
+            </button>
+            <button title="Таймер сна (в разработке)" className="hover:text-[#00B4D8] transition-colors">
               <Moon className="w-5 h-5" />
             </button>
             <button
@@ -243,7 +260,7 @@ export function GlobalPlayerBar() {
               className="hover:text-[#00B4D8] transition-colors"
               onClick={() => router.push(`/story/${currentTrack.id}`)}
             >
-              <Maximize2 className="w-5 h-5" />
+              <ExternalLink className="w-5 h-5" />
             </button>
           </div>
           <div className="flex items-center gap-2 w-40">

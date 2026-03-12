@@ -18,10 +18,14 @@ import { toast } from 'sonner';
 import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star, ArrowLeft } from 'lucide-react';
 import type { Story } from '@/types/story';
 
-const formatDuration = (sec: number) => {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
+const formatDuration = (value: number) => {
+  const totalSeconds = Math.max(0, Math.floor(value || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours} ч. ${minutes} мин.`;
+  }
+  return `${Math.max(1, minutes)} мин.`;
 };
 
 function getSimilarStories(current: Story, all: Story[], limit: number): Story[] {
@@ -202,6 +206,28 @@ export default function StoryPage() {
     toast.success('Отзыв добавлен');
   };
 
+  const handleShare = async () => {
+    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const shareData = {
+      title: story.title,
+      text: `Слушай рассказ: ${story.title}`,
+      url: shareUrl,
+    };
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+      if (typeof navigator !== 'undefined' && navigator.clipboard && shareUrl) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast.success('Ссылка скопирована');
+      }
+    } catch {
+      toast.error('Не удалось поделиться');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#000814] text-white">
       <Header />
@@ -340,7 +366,8 @@ export default function StoryPage() {
                   </button>
                   <button
                     type="button"
-                    className="p-2 text-zinc-500 hover:text-white transition-colors"
+                    onClick={handleShare}
+                    className="p-2 text-zinc-500 hover:text-[#00B4D8] transition-colors cursor-pointer"
                     aria-label="Поделиться"
                   >
                     <Share2 className="w-5 h-5" strokeWidth={1.5} />
