@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
-import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart, Info } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart, Info, Moon, Maximize2 } from 'lucide-react';
 
 export function GlobalPlayerBar() {
   const router = useRouter();
@@ -233,6 +233,19 @@ export function GlobalPlayerBar() {
 
         {/* Справа: громкость на десктопе */}
         <div className="hidden md:flex items-center justify-end gap-2 w-full md:w-[45%] shrink-0">
+          <div className="hidden md:flex items-center gap-6 ml-auto mr-8 text-white/50">
+            <span className="text-xs font-medium tracking-widest hover:text-white cursor-default transition-colors">00:00 / 00:00</span>
+            <button title="Таймер сна" className="hover:text-[#00B4D8] transition-colors">
+              <Moon className="w-5 h-5" />
+            </button>
+            <button
+              title="К странице рассказа"
+              className="hover:text-[#00B4D8] transition-colors"
+              onClick={() => router.push(`/story/${currentTrack.id}`)}
+            >
+              <Maximize2 className="w-5 h-5" />
+            </button>
+          </div>
           <div className="flex items-center gap-2 w-40">
             <Volume2 className="w-5 h-5 text-zinc-400 shrink-0" strokeWidth={1.5} />
             <input
