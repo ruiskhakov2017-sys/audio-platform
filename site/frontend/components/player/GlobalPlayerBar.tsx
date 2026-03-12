@@ -68,7 +68,7 @@ export function GlobalPlayerBar() {
 
   return (
     <div
-      className={`fixed bottom-0 left-0 right-0 z-50 h-20 bg-black/85 backdrop-blur-xl border-t border-white/10 transition-transform duration-500 ${mounted ? 'translate-y-0' : 'translate-y-full'
+      className={`fixed bottom-0 left-0 right-0 z-50 h-20 bg-black/60 backdrop-blur-xl border-t border-white/10 transition-transform duration-500 ${mounted ? 'translate-y-0' : 'translate-y-full'
         }`}
       role="region"
       aria-label="Плеер"
@@ -93,9 +93,9 @@ export function GlobalPlayerBar() {
         />
       </div>
 
-      <div className="h-full flex items-center justify-between gap-4 px-4 md:px-6 max-w-7xl mx-auto">
+      <div className="h-full flex items-center justify-between gap-4 px-4 md:px-6 w-full">
         {/* Слева: обложка + название + автор */}
-        <div className="flex items-center gap-3 min-w-0 flex-1 md:max-w-[40%]">
+        <div className="flex items-center gap-3 min-w-0 w-1/3 md:flex-1">
           <Link
             href={currentTrack ? `/story/${currentTrack.id}` : '#'}
             className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block hover:ring-2 hover:ring-cyan-500/50 transition-all"
@@ -116,7 +116,7 @@ export function GlobalPlayerBar() {
             <div className="flex items-center gap-2 mb-0.5">
               <Link
                 href={currentTrack ? `/story/${currentTrack.id}` : '#'}
-                className="text-lg md:text-xl font-bold text-white truncate hover:text-cyan-400 transition-colors"
+                className="text-base md:text-lg font-bold text-white truncate hover:text-cyan-400 transition-colors"
               >
                 {currentTrack.title}
               </Link>
@@ -166,11 +166,11 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Центр: Play/Pause или замок */}
-        <div className="flex flex-col items-center gap-1 shrink-0">
+        <div className="flex flex-col items-center justify-center gap-1 shrink-0 mx-auto">
           {isLocked && (
             <p className="text-xs text-amber-400/90">Доступно только по подписке</p>
           )}
-          <div className="flex items-center gap-2 md:gap-4">
+          <div className="flex items-center justify-center gap-2 md:gap-6">
             <button
               type="button"
               onClick={() => {
@@ -229,17 +229,19 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Справа: громкость на десктопе */}
-        <div className="hidden md:flex items-center gap-2 w-40 shrink-0">
-          <Volume2 className="w-5 h-5 text-zinc-400 shrink-0" strokeWidth={1.5} />
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={volume * 100}
-            onChange={(e) => setVolume(Number(e.target.value) / 100)}
-            className="w-full h-1.5 rounded-full appearance-none bg-white/10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyan-500 [&::-webkit-slider-thumb]:cursor-pointer"
-            aria-label="Громкость"
-          />
+        <div className="hidden md:flex items-center justify-end gap-2 w-1/3 md:flex-1 shrink-0">
+          <div className="flex items-center gap-2 w-40">
+            <Volume2 className="w-5 h-5 text-zinc-400 shrink-0" strokeWidth={1.5} />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={volume * 100}
+              onChange={(e) => setVolume(Number(e.target.value) / 100)}
+              className="w-full h-1.5 rounded-full appearance-none bg-white/10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyan-500 [&::-webkit-slider-thumb]:cursor-pointer"
+              aria-label="Громкость"
+            />
+          </div>
         </div>
       </div>
     </div>

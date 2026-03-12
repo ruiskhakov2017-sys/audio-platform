@@ -475,10 +475,18 @@ export default function StoryPage() {
             <p className="text-zinc-500 mb-6 text-sm">Не нашли то, что искали?</p>
             <Link
               href="/browse"
-              className="group flex items-center gap-2 px-8 py-4 rounded-full border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-600 transition-all duration-300"
+              className="group inline-flex items-center justify-center gap-3 px-8 py-3 rounded-full bg-white/[0.03] backdrop-blur-md border border-white/10 transition-all duration-300 hover:bg-[#00B4D8]/10 hover:border-[#00B4D8]/50 hover:shadow-[0_0_20px_rgba(0,180,216,0.3)] hover:-translate-y-0.5"
             >
-              <span className="text-white font-medium">Смотреть весь каталог</span>
-              <svg className="w-4 h-4 text-zinc-400 group-hover:text-white group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+              <span className="text-white/80 font-semibold uppercase tracking-widest text-sm transition-colors duration-300 group-hover:text-[#00B4D8]">Смотреть весь каталог</span>
+              <svg 
+                className="w-4 h-4 text-white/80 transition-all duration-300 group-hover:translate-x-1.5 group-hover:text-[#00B4D8]" 
+                fill="none" 
+                stroke="currentColor" 
+                viewBox="0 0 24 24" 
+                aria-hidden
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+              </svg>
             </Link>
           </div>
         </section>
