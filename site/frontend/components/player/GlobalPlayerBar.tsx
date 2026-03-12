@@ -95,7 +95,7 @@ export function GlobalPlayerBar() {
 
       <div className="h-full flex items-center justify-between gap-4 px-4 md:px-10 w-full">
         {/* Слева: обложка + название + автор */}
-        <div className="flex items-center gap-3 min-w-0 w-full md:w-[30%] md:flex-none">
+        <div className="flex items-center gap-4 min-w-0 w-full md:w-[45%]">
           <Link
             href={currentTrack ? `/story/${currentTrack.id}` : '#'}
             className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block hover:ring-2 hover:ring-cyan-500/50 transition-all"
@@ -112,7 +112,7 @@ export function GlobalPlayerBar() {
             )}
           </Link>
 
-          <div className="min-w-0 flex-1 flex flex-col justify-center overflow-hidden gap-1">
+          <div className="flex flex-col flex-1 min-w-0 w-full justify-center gap-1">
             <div className="flex items-center gap-2 mb-0.5">
               <Link
                 href={currentTrack ? `/story/${currentTrack.id}` : '#'}
@@ -139,7 +139,10 @@ export function GlobalPlayerBar() {
                   Доступно по подписке
                 </span>
               ) : currentTrack.description ? (
-                <div className="whitespace-nowrap animate-marquee flex [animation-duration:80s]">
+                <div
+                  className="whitespace-nowrap animate-marquee flex"
+                  style={{ animationDuration: '100s' }}
+                >
                   <span className="text-sm text-white/70 mr-8">
                     {currentTrack.description}
                   </span>
@@ -166,11 +169,11 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Центр: Play/Pause или замок */}
-        <div className="flex flex-col items-center justify-center gap-1 shrink-0 md:w-[40%]">
+        <div className="flex flex-col items-center justify-center gap-1 shrink-0 md:w-[10%]">
           {isLocked && (
             <p className="text-xs text-amber-400/90">Доступно только по подписке</p>
           )}
-          <div className="flex items-center justify-center gap-2 md:gap-6">
+          <div className="flex items-center justify-center gap-2 md:gap-4">
             <button
               type="button"
               onClick={() => {
@@ -229,7 +232,7 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Справа: громкость на десктопе */}
-        <div className="hidden md:flex items-center justify-end gap-2 w-full md:w-[30%] shrink-0">
+        <div className="hidden md:flex items-center justify-end gap-2 w-full md:w-[45%] shrink-0">
           <div className="flex items-center gap-2 w-40">
             <Volume2 className="w-5 h-5 text-zinc-400 shrink-0" strokeWidth={1.5} />
             <input

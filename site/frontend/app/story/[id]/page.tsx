@@ -453,20 +453,31 @@ export default function StoryPage() {
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             {similar.map((s) => (
-              <Link key={s.id} href={`/story/${s.id}`} className="block group w-full">
-                <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-white/10 group-hover:border-[#00B4D8]/40 transition-colors bg-black">
-                  <Image
-                    src={s.coverImage}
-                    alt={s.title}
-                    fill
-                    className="object-cover group-hover:scale-105 transition-transform duration-300"
-                    unoptimized
-                    sizes="(max-width: 768px) 50vw, 25vw"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
-                  <p className="absolute bottom-2 left-2 right-2 text-white text-sm font-medium line-clamp-2">
+              <Link
+                key={s.id}
+                href={`/story/${s.id}`}
+                className="relative overflow-hidden rounded-2xl group cursor-pointer transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_15px_30px_rgba(0,180,216,0.15)] aspect-[3/4] block"
+              >
+                <Image
+                  src={s.coverImage}
+                  alt={s.title}
+                  fill
+                  className="object-cover transition-transform duration-500 group-hover:scale-105"
+                  unoptimized
+                  sizes="(max-width: 768px) 50vw, 25vw"
+                />
+                
+                {/* Gradient Overlay */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
+                
+                {/* Content */}
+                <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1">
+                  <span className="inline-flex w-max px-2.5 py-1 rounded-md bg-white/10 backdrop-blur-md border border-white/20 text-[#00B4D8] text-[10px] md:text-xs uppercase tracking-wider font-semibold">
+                    {getDisplayTags(s)[0] || 'Аудио'}
+                  </span>
+                  <h3 className="text-white font-bold text-lg leading-tight line-clamp-2">
                     {s.title}
-                  </p>
+                  </h3>
                 </div>
               </Link>
             ))}

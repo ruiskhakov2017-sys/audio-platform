@@ -14,29 +14,6 @@ const pageStyles = {
   gradient: 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(0,180,216,0.08) 0%, transparent 50%)',
 };
 
-function getBadgeTestStyle(index: number): string {
-  // Base classes for all badges
-  const base = "absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10";
-
-  if (index > 8) {
-    // Default style (Black)
-    return `${base} bg-gradient-to-r from-black/90 to-transparent border-l-2 border-white/50 text-white`;
-  }
-
-  // 0, 1, 2: Red
-  if (index < 3) {
-    return `${base} bg-gradient-to-r from-red-600/90 to-transparent border-l-2 border-red-500 text-white`;
-  }
-
-  // 3, 4, 5: Noble Blue
-  if (index < 6) {
-    return `${base} bg-gradient-to-r from-blue-600/90 to-transparent border-l-2 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]`;
-  }
-
-  // 6, 7, 8: Strict Black
-  return `${base} bg-gradient-to-r from-black/90 to-transparent border-l-2 border-white/50 text-white backdrop-blur-sm`;
-}
-
 export default function TopPage() {
   const [list, setList] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,7 +77,7 @@ export default function TopPage() {
                     <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
 
                     {/* Ranking Badge - Glassmorphism */}
-                    <span className={getBadgeTestStyle(index)}>
+                    <span className="absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10 bg-gradient-to-r from-blue-600/90 to-transparent border-l-2 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]">
                       {index + 1}
                     </span>
 
