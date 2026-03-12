@@ -141,7 +141,7 @@ export function GlobalPlayerBar() {
               ) : currentTrack.description ? (
                 <div
                   className="whitespace-nowrap animate-marquee flex"
-                  style={{ animationDuration: '100s' }}
+                  style={{ animationDuration: '75s' }}
                 >
                   <span className="text-sm text-white/70 mr-8">
                     {currentTrack.description}
