@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
+import { toast } from 'sonner';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Lock, Heart, Info, Moon, ExternalLink, ListMusic } from 'lucide-react';
 
 export function GlobalPlayerBar() {
@@ -107,7 +108,7 @@ export function GlobalPlayerBar() {
 
       <div className="h-full flex items-center justify-between gap-4 px-4 md:px-10 w-full">
         {/* Слева: обложка + название + автор */}
-        <div className="flex items-center gap-4 min-w-0 w-full md:w-[45%]">
+        <div className="flex items-center gap-4 min-w-0 w-[35%] md:w-[35%] flex-1 pr-6">
           <Link
             href={currentTrack ? `/story/${currentTrack.id}` : '#'}
             className="relative w-12 h-12 shrink-0 rounded-md overflow-hidden bg-white/5 block hover:ring-2 hover:ring-cyan-500/50 transition-all"
@@ -181,11 +182,11 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Центр: Play/Pause или замок */}
-        <div className="flex flex-col items-center justify-center gap-1 shrink-0 md:w-[10%]">
+        <div className="flex flex-col items-center justify-center gap-1 w-[30%] md:w-[20%] shrink-0">
           {isLocked && (
             <p className="text-xs text-amber-400/90">Доступно только по подписке</p>
           )}
-          <div className="flex items-center justify-center gap-2 md:gap-4">
+          <div className="flex items-center justify-center gap-4 md:gap-6">
             <button
               type="button"
               onClick={() => {
@@ -244,15 +245,23 @@ export function GlobalPlayerBar() {
         </div>
 
         {/* Справа: громкость на десктопе */}
-        <div className="hidden md:flex items-center justify-end gap-2 w-full md:w-[45%] shrink-0">
+        <div className="hidden md:flex items-center justify-end gap-2 w-[35%] md:w-[35%] flex-1 pl-6 shrink-0">
           <div className="hidden md:flex items-center gap-6 ml-auto mr-8 text-white/50">
             <span className="text-xs font-medium tracking-widest hover:text-white cursor-default transition-colors">
               {formatPlayerTime(position)} / {formatPlayerTime(displayDuration)}
             </span>
-            <button title="Добавить в плейлист/Очередь" className="hover:text-[#00B4D8] transition-colors">
+            <button
+              title="Добавить в плейлист/Очередь"
+              className="hover:text-[#00B4D8] transition-colors"
+              onClick={() => toast.info('Функция "Очередь воспроизведения" появится в ближайшем обновлении!')}
+            >
               <ListMusic className="w-5 h-5" />
             </button>
-            <button title="Таймер сна (в разработке)" className="hover:text-[#00B4D8] transition-colors">
+            <button
+              title="Таймер сна (в разработке)"
+              className="hover:text-[#00B4D8] transition-colors"
+              onClick={() => toast.info('Таймер сна будет активирован. Функция в разработке.')}
+            >
               <Moon className="w-5 h-5" />
             </button>
             <button

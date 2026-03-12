@@ -14,6 +14,7 @@ import {
   Check,
   Crown,
   Zap,
+  Diamond,
 } from 'lucide-react';
 
 const GOLD = '#D4AF37';
@@ -76,7 +77,6 @@ const PLAN_THEME: Record<
   string,
   {
     cardClass: string;
-    glow?: string;
     iconBg: string;
     iconColor: string;
     checkColor: string;
@@ -84,27 +84,25 @@ const PLAN_THEME: Record<
   }
 > = {
   tainyi: {
-    cardClass: 'border border-zinc-800 bg-gradient-to-b from-indigo-950/60 to-purple-950/40',
-    iconBg: 'rgba(107,33,168,0.25)',
+    cardClass: 'border border-purple-500/40 bg-gradient-to-b from-purple-950/65 to-indigo-950/40 shadow-[0_0_30px_rgba(168,85,247,0.2)] hover:shadow-[0_0_40px_rgba(168,85,247,0.4)]',
+    iconBg: 'rgba(147,51,234,0.25)',
     iconColor: PURPLE_LIGHT,
     checkColor: PURPLE_LIGHT,
-    buttonClass: 'bg-indigo-700 hover:bg-indigo-600 text-white',
+    buttonClass: 'bg-purple-600 hover:bg-purple-500 text-white shadow-[0_0_20px_rgba(168,85,247,0.2)]',
   },
   gryaznyi: {
-    cardClass: 'border-2 border-yellow-500 bg-gradient-to-b from-amber-950/60 to-yellow-950/30',
-    glow: '0 0 42px rgba(212,175,55,0.35)',
-    iconBg: 'rgba(212,175,55,0.25)',
-    iconColor: GOLD,
-    checkColor: GOLD,
-    buttonClass: 'bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-zinc-950',
+    cardClass: 'border border-amber-500/50 bg-gradient-to-b from-amber-900/40 to-orange-950/30 shadow-[0_0_40px_rgba(245,158,11,0.3)] hover:shadow-[0_0_50px_rgba(245,158,11,0.5)]',
+    iconBg: 'rgba(245,158,11,0.25)',
+    iconColor: '#F59E0B',
+    checkColor: '#F59E0B',
+    buttonClass: 'bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-[0_0_20px_rgba(245,158,11,0.3)]',
   },
   oderzhimyi: {
-    cardClass: 'border border-blue-700 bg-gradient-to-b from-blue-900/75 to-blue-950/40',
-    glow: '0 0 28px rgba(59,130,246,0.25)',
-    iconBg: 'rgba(37,99,235,0.25)',
+    cardClass: 'border border-blue-500/40 bg-gradient-to-b from-blue-900/70 to-blue-950/40 shadow-[0_0_30px_rgba(59,130,246,0.3)] hover:shadow-[0_0_50px_rgba(59,130,246,0.6)]',
+    iconBg: 'rgba(59,130,246,0.25)',
     iconColor: BLUE_LIGHT,
     checkColor: '#3B82F6',
-    buttonClass: 'bg-blue-900 hover:bg-blue-800 text-white',
+    buttonClass: 'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_20px_rgba(59,130,246,0.25)]',
   },
 };
 
@@ -246,13 +244,9 @@ export default function PremiumPage() {
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
                     transition={{ duration: 0.5, delay: i * 0.15 }}
-                    style={{ boxShadow: theme.glow }}
                   >
                     {plan.popular && (
-                      <div
-                        className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-sm font-bold text-black"
-                        style={{ backgroundColor: GOLD }}
-                      >
+                      <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-sm font-bold bg-amber-500 text-zinc-950 shadow-[0_0_18px_rgba(245,158,11,0.45)]">
                         Хит
                       </div>
                     )}
@@ -263,6 +257,8 @@ export default function PremiumPage() {
                       >
                         {plan.popular ? (
                           <Crown className="w-6 h-6" style={{ color: theme.iconColor }} strokeWidth={1.5} />
+                        ) : plan.id === 'oderzhimyi' ? (
+                          <Diamond className="w-6 h-6" style={{ color: theme.iconColor }} strokeWidth={1.5} />
                         ) : (
                           <Zap className="w-6 h-6" style={{ color: theme.iconColor }} strokeWidth={1.5} />
                         )}
