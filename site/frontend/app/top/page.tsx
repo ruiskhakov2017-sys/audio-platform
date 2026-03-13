@@ -31,33 +31,6 @@ export default function TopPage() {
     }
   }, []);
 
-  const getBadgeTestStyle = (index: number) => {
-    const baseClasses = "absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10 z-10 transition-all duration-300";
-
-    switch (index) {
-      case 0: // Вариант 1: Классический синий (Classic Solid)
-        return `${baseClasses} bg-blue-600 text-white rounded-lg shadow-md`;
-      case 1: // Вариант 2: Стеклянный синий (Glassmorphism)
-        return `${baseClasses} bg-blue-500/30 backdrop-blur-md border border-blue-400 text-white rounded-lg`;
-      case 2: // Вариант 3: Темный неон (Dark Neon)
-        return `${baseClasses} bg-black/80 border border-blue-500 text-blue-400 rounded-lg shadow-[0_0_15px_rgba(59,130,246,0.5)]`;
-      case 3: // Вариант 4: Богатый градиент (Rich Gradient)
-        return `${baseClasses} bg-gradient-to-br from-blue-900 to-blue-500 text-white border border-blue-400/50 rounded-lg`;
-      case 4: // Вариант 5: 3D-эффект с внутренним свечением (3D Inner Glow)
-        return `${baseClasses} bg-blue-600 text-white rounded-lg shadow-[inset_0_2px_4px_rgba(255,255,255,0.4),0_4px_6px_rgba(0,0,0,0.3)]`;
-      case 5: // Вариант 6: Фирменный Циан (Brand Cyan)
-        return `${baseClasses} bg-[#00B4D8] text-black font-black rounded-lg shadow-[0_0_20px_rgba(0,180,216,0.4)]`;
-      case 6: // Вариант 7: Растворяющийся градиент (Fade to transparent)
-        return `${baseClasses} bg-gradient-to-r from-blue-600 to-transparent border-l-2 border-blue-400 text-white w-14 justify-start pl-3 rounded-l-none`;
-      case 7: // Вариант 8: Матовый темный синий (Frosted Dark Blue)
-        return `${baseClasses} bg-slate-900/90 border-b-2 border-r-2 border-blue-500 text-blue-400 rounded-tl-lg rounded-br-lg`;
-      case 8: // Вариант 9: Асимметричный срез (Asymmetric)
-        return `${baseClasses} bg-blue-600 text-white rounded-br-2xl rounded-tl-lg shadow-lg`;
-      default: // Для всех остальных карточек (>9) оставляем базовый синий
-        return `${baseClasses} bg-blue-600/50 backdrop-blur-sm text-white rounded-lg`;
-    }
-  };
-
   return (
     <div className="min-h-screen bg-[#000814] text-white">
       <Header />
@@ -103,8 +76,13 @@ export default function TopPage() {
                     {/* Gradient Overlay for Readability */}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
 
-                    {/* Ranking Badge - Glassmorphism */}
-                    <span className={getBadgeTestStyle(index)}>
+                    {/* Ranking Badge - A/B Test Variant 7 vs 9 */}
+                    <span className={`absolute top-4 left-4 z-10 flex items-center justify-center font-black text-lg transition-all duration-300 ${index < 3
+                        ? 'justify-start h-10 w-14 pl-3 bg-gradient-to-r from-blue-600 to-transparent border-l-2 border-blue-400 text-white rounded-r-none' // Вариант 7 для топ-3
+                        : index < 6
+                          ? 'h-10 w-10 bg-blue-600 text-white rounded-br-2xl rounded-tl-lg shadow-lg' // Вариант 9 для 4-6
+                          : 'h-10 w-10 bg-blue-700/80 text-white rounded-lg font-medium text-base' // Базовый синий для остальных
+                      }`}>
                       {index + 1}
                     </span>
 
