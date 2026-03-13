@@ -47,12 +47,12 @@ export function TopSales() {
                             transition={{ duration: 0.4, delay: index * 0.05 }}
                         >
                             <Link href={`/story/${story.id}`}>
-                                <div className="relative aspect-[3/4] rounded-[2rem] overflow-hidden glass-premium transition-transform duration-300 ease-in-out hover:scale-105 hover:z-10">
+                                <div className="relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_0_30px_rgba(0,180,216,0.4)] border border-transparent hover:border-[#00B4D8]/30">
                                     <Image
                                         src={story.coverImage || DEFAULT_COVER}
                                         alt={story.title}
                                         fill
-                                        className="object-cover"
+                                        className="object-cover transition-transform duration-500 group-hover:scale-105"
                                         unoptimized
                                         sizes="(max-width: 1024px) 50vw, 25vw"
                                         onError={(e) => {
@@ -60,24 +60,31 @@ export function TopSales() {
                                             if (t?.src && !t.src.includes('default-cover')) t.src = DEFAULT_COVER;
                                         }}
                                     />
-                                    <div className="absolute inset-0 bg-gradient-to-t from-[#000814] via-transparent to-transparent" />
-                                    <div className="absolute top-3 left-3 z-10">
-                                        <span className="inline-block px-2 py-0.5 rounded bg-black/60 text-[#00B4D8] text-sm font-bold">
-                                            Топ {index + 1}
-                                        </span>
+
+                                    {/* Gradient Overlay */}
+                                    <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/90 via-black/50 to-transparent" />
+
+                                    {/* Top Badge */}
+                                    <div className={`absolute top-3 left-3 px-3 py-1 rounded-lg backdrop-blur-md border font-bold text-sm shadow-lg ${index < 3
+                                            ? 'bg-amber-500/80 border-amber-300 text-white shadow-[0_0_10px_rgba(245,158,11,0.5)]'
+                                            : 'bg-black/40 border-white/20 text-white'
+                                        }`}>
+                                        Топ {index + 1}
                                     </div>
-                                    <div className="absolute bottom-0 left-0 right-0 p-6">
-                                        <h3 className="text-lg font-bold text-white mb-1 line-clamp-2 drop-shadow-md">
+
+                                    {/* Content */}
+                                    <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-1 transform transition-transform duration-300 group-hover:-translate-y-1">
+                                        {getDisplayTags(story)[0] && (
+                                            <p className="text-[#00B4D8] text-xs font-semibold uppercase tracking-wider mb-1">
+                                                {getDisplayTags(story)[0]}
+                                            </p>
+                                        )}
+                                        <h3 className="text-white font-bold text-lg leading-tight line-clamp-2 drop-shadow-md">
                                             {story.title}
                                         </h3>
                                         {story.authorName && (
-                                            <p className="text-zinc-400 text-sm mb-1 drop-shadow-md">
+                                            <p className="text-zinc-400 text-sm line-clamp-1">
                                                 {story.authorName}
-                                            </p>
-                                        )}
-                                        {getDisplayTags(story)[0] && (
-                                            <p className="text-[#00B4D8] text-sm font-medium drop-shadow-[0_0_8px_rgba(0,180,216,0.5)]">
-                                                {getDisplayTags(story)[0]}
                                             </p>
                                         )}
                                     </div>
@@ -90,18 +97,9 @@ export function TopSales() {
                 <div className="text-center mt-12">
                     <Link
                         href="/browse"
-                        className="group inline-flex items-center justify-center gap-3 px-8 py-3 rounded-full bg-white/[0.03] backdrop-blur-md border border-white/10 transition-all duration-300 hover:bg-[#00B4D8]/10 hover:border-[#00B4D8]/50 hover:shadow-[0_0_20px_rgba(0,180,216,0.3)] hover:-translate-y-0.5"
+                        className="inline-flex items-center justify-center px-8 py-3 rounded-xl font-bold text-lg transition-all duration-300 border-2 border-[#00B4D8] text-[#00B4D8] hover:bg-[#00B4D8] hover:text-black hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:scale-105 active:scale-95 mt-8"
                     >
-                        <span className="text-white/80 font-semibold uppercase tracking-widest text-sm transition-colors duration-300 group-hover:text-[#00B4D8]">Смотреть весь каталог</span>
-                        <svg 
-                            className="w-4 h-4 text-white/80 transition-all duration-300 group-hover:translate-x-1.5 group-hover:text-[#00B4D8]" 
-                            fill="none" 
-                            stroke="currentColor" 
-                            viewBox="0 0 24 24" 
-                            aria-hidden
-                        >
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                        </svg>
+                        Смотреть весь каталог
                     </Link>
                 </div>
             </div>
