@@ -31,6 +31,33 @@ export default function TopPage() {
     }
   }, []);
 
+  const getBadgeTestStyle = (index: number) => {
+    const baseClasses = "absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10 z-10 transition-all duration-300";
+
+    switch (index) {
+      case 0: // Вариант 1: Классический синий (Classic Solid)
+        return `${baseClasses} bg-blue-600 text-white rounded-lg shadow-md`;
+      case 1: // Вариант 2: Стеклянный синий (Glassmorphism)
+        return `${baseClasses} bg-blue-500/30 backdrop-blur-md border border-blue-400 text-white rounded-lg`;
+      case 2: // Вариант 3: Темный неон (Dark Neon)
+        return `${baseClasses} bg-black/80 border border-blue-500 text-blue-400 rounded-lg shadow-[0_0_15px_rgba(59,130,246,0.5)]`;
+      case 3: // Вариант 4: Богатый градиент (Rich Gradient)
+        return `${baseClasses} bg-gradient-to-br from-blue-900 to-blue-500 text-white border border-blue-400/50 rounded-lg`;
+      case 4: // Вариант 5: 3D-эффект с внутренним свечением (3D Inner Glow)
+        return `${baseClasses} bg-blue-600 text-white rounded-lg shadow-[inset_0_2px_4px_rgba(255,255,255,0.4),0_4px_6px_rgba(0,0,0,0.3)]`;
+      case 5: // Вариант 6: Фирменный Циан (Brand Cyan)
+        return `${baseClasses} bg-[#00B4D8] text-black font-black rounded-lg shadow-[0_0_20px_rgba(0,180,216,0.4)]`;
+      case 6: // Вариант 7: Растворяющийся градиент (Fade to transparent)
+        return `${baseClasses} bg-gradient-to-r from-blue-600 to-transparent border-l-2 border-blue-400 text-white w-14 justify-start pl-3 rounded-l-none`;
+      case 7: // Вариант 8: Матовый темный синий (Frosted Dark Blue)
+        return `${baseClasses} bg-slate-900/90 border-b-2 border-r-2 border-blue-500 text-blue-400 rounded-tl-lg rounded-br-lg`;
+      case 8: // Вариант 9: Асимметричный срез (Asymmetric)
+        return `${baseClasses} bg-blue-600 text-white rounded-br-2xl rounded-tl-lg shadow-lg`;
+      default: // Для всех остальных карточек (>9) оставляем базовый синий
+        return `${baseClasses} bg-blue-600/50 backdrop-blur-sm text-white rounded-lg`;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#000814] text-white">
       <Header />
@@ -77,21 +104,13 @@ export default function TopPage() {
                     <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
 
                     {/* Ranking Badge - Glassmorphism */}
-                    <span className={`absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10 backdrop-blur-sm ${
-                      index >= 3 && index <= 5 
-                        ? 'bg-gradient-to-r from-black/90 to-transparent border-l-2 border-[#00B4D8] text-white'
-                        : 'bg-gradient-to-r from-blue-600/90 to-transparent border-l-2 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]'
-                    }`}>
+                    <span className={getBadgeTestStyle(index)}>
                       {index + 1}
                     </span>
 
                     {/* Content Group: Genre + Title */}
                     <div className="absolute bottom-0 left-0 right-0 p-5 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1 z-10">
-                      <span className={`inline-block w-max px-3 py-1.5 rounded-full backdrop-blur-md font-bold text-xs uppercase tracking-widest ${
-                        index < 3
-                          ? 'bg-blue-600/30 border border-blue-400 text-blue-50 px-2.5 py-1 rounded-md text-[10px] md:text-xs uppercase tracking-wider font-semibold'
-                          : 'bg-black/70 border border-[#00B4D8]/60 text-[#00B4D8] shadow-[0_0_15px_rgba(0,180,216,0.25)] [text-shadow:0_0_8px_rgba(0,180,216,0.6)]'
-                      }`}>
+                      <span className="inline-block w-max bg-blue-600/30 border border-blue-400 text-blue-50 px-2.5 py-1 rounded-md text-[10px] md:text-xs uppercase tracking-wider font-semibold backdrop-blur-md">
                         {getDisplayTags(story)[0] || 'Аудио'}
                       </span>
                       <h2 className="text-xl md:text-2xl font-bold text-white leading-tight line-clamp-2">
