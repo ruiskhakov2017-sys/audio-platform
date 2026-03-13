@@ -32,28 +32,21 @@ export default function TopPage() {
   }, []);
 
   const getGenreTestStyle = (index: number) => {
-    const base = "px-2.5 py-1 text-[10px] md:text-xs uppercase tracking-wider font-semibold transition-all duration-300";
+    // Добавили w-max и inline-flex для компактности
+    const base = "inline-flex items-center justify-center w-max px-3 py-1 text-[10px] md:text-xs uppercase tracking-wider font-semibold transition-all duration-300";
 
     switch (index) {
-      case 0: // Вариант 1: Классический синий (Solid)
+      case 0: // Финалист 1 (Бывший №1: Классический синий)
         return `${base} bg-blue-600 text-white rounded-md`;
-      case 1: // Вариант 2: Чистое стекло (Glassmorphism)
-        return `${base} bg-blue-500/20 backdrop-blur-md border border-blue-400/50 text-blue-50 rounded-md`;
-      case 2: // Вариант 3: Темный неон (Dark Neon)
+      case 1: // Финалист 2 (Бывший №3: Темный неон)
         return `${base} bg-black/80 border border-blue-500 text-blue-400 rounded-md shadow-[0_0_10px_rgba(59,130,246,0.3)]`;
-      case 3: // Вариант 4: Фирменный Циан - обводка (Cyan Outline)
-        return `${base} bg-transparent border-2 border-[#00B4D8] text-[#00B4D8] rounded-md`;
-      case 4: // Вариант 5: Богатый градиент (Gradient)
+      case 2: // Финалист 3 (Бывший №5: Богатый градиент)
         return `${base} bg-gradient-to-r from-blue-800 to-blue-500 text-white rounded-md border border-blue-400/30`;
-      case 5: // Вариант 6: Мягкий матовый (Muted Slate)
-        return `${base} bg-slate-800/90 text-blue-300 rounded-md border border-slate-600`;
-      case 6: // Вариант 7: Светящийся синий (Glow)
+      case 3: // Финалист 4 (Бывший №7: Светящийся синий)
         return `${base} bg-blue-600 text-white rounded-md shadow-[0_0_15px_rgba(37,99,235,0.6)]`;
-      case 7: // Вариант 8: Минимализм без фона (Text only)
+      case 4: // Финалист 5 (Бывший №8: Минимализм без фона)
         return `${base} bg-transparent text-blue-300 font-bold border-b border-blue-500/50 rounded-none px-1`;
-      case 8: // Вариант 9: Круглые "таблетки" (Pills)
-        return `${base} bg-blue-600/40 backdrop-blur-sm text-white rounded-full border border-blue-400`;
-      default: // Для всех остальных карточек
+      default: // Для остальных
         return `${base} bg-blue-600/30 backdrop-blur-md border border-blue-400 text-blue-50 rounded-md`;
     }
   };
@@ -109,11 +102,11 @@ export default function TopPage() {
                     </span>
 
                     {/* Content Group: Genre + Title */}
-                    <div className="absolute bottom-0 left-0 right-0 p-5 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1 z-10">
+                    <div className="absolute bottom-0 left-0 right-0 p-5 flex flex-col items-start gap-2 transform transition-transform duration-300 group-hover:-translate-y-1 z-10">
                       <span className={getGenreTestStyle(index)}>
                         {getDisplayTags(story)[0] || 'Аудио'}
                       </span>
-                      <h2 className="text-xl md:text-2xl font-bold text-white leading-tight line-clamp-2">
+                      <h2 className="text-xl md:text-2xl font-bold text-white leading-tight line-clamp-2 w-full">
                         {story.title}
                       </h2>
                     </div>
