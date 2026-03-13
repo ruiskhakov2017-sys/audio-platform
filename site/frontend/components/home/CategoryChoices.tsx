@@ -18,16 +18,16 @@ export function CategoryChoices() {
         <section id="genres" className="py-20 px-6">
             <div className="max-w-7xl mx-auto">
                 <motion.div
-                    className="text-center mb-16"
+                    className="flex flex-col items-center justify-center text-center max-w-3xl mx-auto mb-12 px-4"
                     initial={{ opacity: 0, y: 20 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
                     transition={{ duration: 0.6 }}
                 >
-                    <h2 className="font-heading text-3xl md:text-4xl font-bold text-white mb-4">
+                    <h2 className="text-4xl md:text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-[#00B4D8] to-white drop-shadow-[0_0_15px_rgba(0,180,216,0.3)] mb-4">
                         Популярные жанры
                     </h2>
-                    <p className="text-zinc-400 text-lg">
+                    <p className="text-lg md:text-xl text-white/70 font-light leading-relaxed">
                         Выбирай, что заводит тебя сегодня
                     </p>
                 </motion.div>
