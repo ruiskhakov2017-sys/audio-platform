@@ -42,13 +42,13 @@ export function CategoryChoices() {
                             transition={{ duration: 0.5, delay: index * 0.1 }}
                         >
                             <Link href={category.href}>
-                                <div className="relative w-full h-[400px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
+                                <div className="relative w-full h-[350px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 shadow-[0_0_20px_rgba(0,180,216,0.3)] md:shadow-none hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
                                     {/* Image */}
                                     <Image
                                         src={category.image}
                                         alt={category.title}
                                         fill
-                                        className="absolute inset-0 w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 group-hover:scale-110"
+                                        className="absolute inset-0 w-full h-full object-cover grayscale-0 md:grayscale md:group-hover:grayscale-0 transition-all duration-700 group-hover:scale-110"
                                         unoptimized
                                         sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                                     />
@@ -58,10 +58,10 @@ export function CategoryChoices() {
 
                                     {/* Content */}
                                     <div className="absolute inset-0 flex flex-col items-center justify-end pb-12 px-6 text-center">
-                                        <h3 className="text-2xl md:text-3xl font-black text-white drop-shadow-lg transition-transform duration-500 group-hover:-translate-y-2 group-hover:text-[#00B4D8]">
+                                        <h3 className="text-3xl md:text-3xl font-black text-white drop-shadow-lg transition-transform duration-500 group-hover:-translate-y-2 group-hover:text-[#00B4D8]">
                                             {category.title}
                                         </h3>
-                                        <p className="text-sm md:text-base text-white/70 mt-3 font-medium transition-all duration-500 group-hover:text-white group-hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.5)] transform translate-y-2 group-hover:translate-y-0">
+                                        <p className="text-lg md:text-base text-white/70 mt-3 font-medium transition-all duration-500 group-hover:text-white group-hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.5)] transform translate-y-2 group-hover:translate-y-0">
                                             {category.description}
                                         </p>
                                     </div>
