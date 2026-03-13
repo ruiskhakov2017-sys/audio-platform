@@ -47,7 +47,7 @@ export function TopSales() {
                             transition={{ duration: 0.4, delay: index * 0.05 }}
                         >
                             <Link href={`/story/${story.id}`}>
-                                <div className="relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-300 hover:-translate-y-2 shadow-[0_0_15px_rgba(0,180,216,0.2)] md:shadow-none hover:shadow-[0_0_30px_rgba(0,180,216,0.4)] border border-transparent hover:border-[#00B4D8]/30">
+                                <div className="relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-300 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8]">
                                     <Image
                                         src={story.coverImage || DEFAULT_COVER}
                                         alt={story.title}
@@ -79,7 +79,7 @@ export function TopSales() {
                                             {story.title}
                                         </h3>
                                         {getDisplayTags(story)[0] && (
-                                            <p className="text-white md:text-[#00B4D8] text-sm md:text-xs font-semibold uppercase tracking-wider mb-1 order-2 md:order-1 backdrop-blur-md bg-white/10 border border-white/20 px-3 py-1.5 rounded-lg w-max md:bg-transparent md:border-none md:p-0 md:w-auto">
+                                            <p className="text-white md:text-[#00B4D8] text-[10px] md:text-xs font-semibold uppercase tracking-wider mb-1 order-2 md:order-1 backdrop-blur-md bg-white/10 border border-white/20 px-2 py-1 rounded-lg w-max md:bg-transparent md:border-none md:p-0 md:w-auto">
                                                 {getDisplayTags(story)[0]}
                                             </p>
                                         )}

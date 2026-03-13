@@ -42,7 +42,7 @@ export function CategoryChoices() {
                             transition={{ duration: 0.5, delay: index * 0.1 }}
                         >
                             <Link href={category.href}>
-                                <div className="relative w-full h-[350px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 shadow-[0_0_20px_rgba(0,180,216,0.3)] md:shadow-none hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
+                                <div className="relative w-full h-[450px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 shadow-[0_0_20px_rgba(0,180,216,0.3)] md:shadow-none hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
                                     {/* Image */}
                                     <Image
                                         src={category.image}
