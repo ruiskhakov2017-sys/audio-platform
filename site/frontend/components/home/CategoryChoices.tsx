@@ -42,46 +42,30 @@ export function CategoryChoices() {
                             transition={{ duration: 0.5, delay: index * 0.1 }}
                         >
                             <Link href={category.href}>
-                                <motion.div
-                                    className="relative aspect-[3/4] rounded-[2.5rem] overflow-hidden group cursor-pointer"
-                                    whileHover={{ scale: 1.05 }}
-                                    transition={{ duration: 0.3 }}
-                                >
+                                <div className="relative w-full h-[400px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
                                     {/* Image */}
-                                    <div className="absolute inset-0">
-                                        <motion.div
-                                            className="w-full h-full"
-                                            initial={{ filter: 'grayscale(100%)' }}
-                                            whileInView={{ filter: 'grayscale(0%)' }}
-                                            viewport={{ margin: "-20%" }}
-                                            transition={{ duration: 0.5 }}
-                                        >
-                                            <Image
-                                                src={category.image}
-                                                alt={category.title}
-                                                fill
-                                                className="object-cover transition-transform duration-500 md:grayscale md:group-hover:grayscale-0 group-hover:scale-110"
-                                                unoptimized
-                                                sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                                            />
-                                        </motion.div>
-                                    </div>
+                                    <Image
+                                        src={category.image}
+                                        alt={category.title}
+                                        fill
+                                        className="absolute inset-0 w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 group-hover:scale-110"
+                                        unoptimized
+                                        sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                                    />
 
                                     {/* Gradient Overlay */}
-                                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent opacity-80 group-hover:opacity-60 transition-opacity duration-300" />
-                                    {/* Bottom Overlay for Readability */}
-                                    <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none" />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
 
                                     {/* Content */}
-                                    <div className="absolute bottom-0 left-0 right-0 p-8 pb-6 transform transition-transform duration-300 group-hover:scale-105 origin-bottom-left">
-                                        <h3 className="text-xl md:text-2xl font-bold text-white mb-2 drop-shadow-lg">
+                                    <div className="absolute inset-0 flex flex-col items-center justify-end pb-12 px-6 text-center">
+                                        <h3 className="text-2xl md:text-3xl font-black text-white drop-shadow-lg transition-transform duration-500 group-hover:-translate-y-2 group-hover:text-[#00B4D8]">
                                             {category.title}
                                         </h3>
-                                        <p className="text-zinc-200 text-sm font-medium drop-shadow-md">
+                                        <p className="text-sm md:text-base text-white/70 mt-3 font-medium transition-all duration-500 group-hover:text-white group-hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.5)] transform translate-y-2 group-hover:translate-y-0">
                                             {category.description}
                                         </p>
                                     </div>
-                                </motion.div>
+                                </div>
                             </Link>
                         </motion.div>
                     ))}
