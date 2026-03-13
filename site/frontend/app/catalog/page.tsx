@@ -53,6 +53,32 @@ export default function CatalogPage() {
     );
   };
 
+  useEffect(() => {
+    // Intersection Observer для мобильных карточек
+    if (window.innerWidth >= 768) return; // Только для мобильных
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('mobile-in-view');
+          } else {
+            entry.target.classList.remove('mobile-in-view');
+          }
+        });
+      },
+      {
+        threshold: 0.5,
+        rootMargin: '-10% 0px -10% 0px',
+      }
+    );
+
+    const cards = document.querySelectorAll('.catalog-card-mobile');
+    cards.forEach((card) => observer.observe(card));
+
+    return () => observer.disconnect();
+  }, [filteredStories]); // Перезапускать при изменении списка
+
   return (
     <div className="min-h-screen bg-[#1a0b2e] pt-24 pb-32">
       <div className="container mx-auto px-4">
@@ -136,7 +162,7 @@ export default function CatalogPage() {
                   onClick={() => toggleTag(tag)}
                   className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                     selectedTags.includes(tag)
-                      ? "bg-purple-500 text-white"
+                      ? "bg-[#00B4D8]/20 border border-[#00B4D8] text-[#00B4D8] shadow-[0_0_15px_rgba(0,180,216,0.4)]"
                       : "bg-white/10 text-gray-300 hover:bg-white/20"
                   }`}
                 >

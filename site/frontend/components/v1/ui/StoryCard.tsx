@@ -43,7 +43,7 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
 
     return (
       <div
-        className="group flex flex-col overflow-hidden rounded-3xl border border-white/10 bg-white/5 shadow-none transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_12px_40px_-8px_rgba(167,139,250,0.35)]"
+        className="group flex flex-col overflow-hidden rounded-3xl border border-white/10 bg-white/5 shadow-none transition-all duration-300 md:hover:-translate-y-1 md:hover:shadow-[0_12px_40px_-8px_rgba(167,139,250,0.35)] catalog-card-mobile active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.5)] active:border-[#00B4D8]/50"
         style={{ backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       >
         <Link
@@ -58,13 +58,13 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
                 alt={story.title}
                 fill
                 sizes="(max-width: 768px) 50vw, 25vw"
-                className="object-cover transition-transform duration-300 group-hover:scale-105"
+                className="object-cover transition-transform duration-300 md:group-hover:scale-105"
               />
             ) : (
               <div className="h-full w-full bg-[#1a1124]" />
             )}
 
-            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 md:group-hover:opacity-100">
               <button
                 type="button"
                 onClick={handlePlay}
@@ -120,20 +120,31 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
         <div className="flex flex-1 flex-col p-5 gap-4">
           <Link
             href={storyHref}
-            className="truncate text-3xl font-bold leading-tight text-white text-center transition-colors hover:text-[#c4b5fd] no-underline block"
+            className="truncate text-lg md:text-3xl font-black leading-tight text-white text-center transition-colors hover:text-[#c4b5fd] no-underline block mb-2 md:mb-0"
           >
             {story.title}
           </Link>
 
-          <div className="flex flex-nowrap overflow-hidden justify-center gap-[8px] pb-4">
-            {displayTags.map((tag, index) => (
-              <span
-                key={index}
-                className="text-[10px] font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 px-2 py-1 rounded shadow-sm backdrop-blur-sm whitespace-nowrap"
-              >
-                {tag}
-              </span>
-            ))}
+          <div className="flex flex-nowrap overflow-hidden relative mask-image-marquee w-full pb-4">
+            <div className="animate-marquee flex gap-2 whitespace-nowrap w-max">
+              {displayTags.map((tag, index) => (
+                <span
+                  key={`tag1-${index}`}
+                  className="text-xs md:text-sm px-3 py-1 font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 rounded shadow-sm backdrop-blur-sm whitespace-nowrap"
+                >
+                  {tag}
+                </span>
+              ))}
+              {/* Duplicate for infinite loop */}
+              {displayTags.map((tag, index) => (
+                <span
+                  key={`tag2-${index}`}
+                  className="text-xs md:text-sm px-3 py-1 font-bold uppercase tracking-wider text-[#a78bfa] bg-[#a78bfa]/10 rounded shadow-sm backdrop-blur-sm whitespace-nowrap"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
           </div>
 
           <div className="mt-auto flex items-center justify-between pt-2 border-t border-white/5">
