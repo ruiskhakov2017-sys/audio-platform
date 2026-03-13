@@ -61,7 +61,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
             onMouseLeave={() => setIsHovered(false)}
         >
             <Link href={storyHref}>
-                <div className="relative aspect-[3/4] rounded-xl overflow-hidden group cursor-pointer">
+                <div className="relative aspect-[3/4] rounded-xl overflow-hidden group cursor-pointer transition-all duration-300 active:scale-[0.98] active:shadow-[0_0_30px_rgba(0,180,216,0.6)] hover:shadow-none border border-transparent active:border-[#00B4D8] bg-white/5 backdrop-blur-sm shadow-[0_4px_15px_rgba(0,0,0,0.3)]">
                     <div className="absolute inset-0">
                         <Image
                             src={coverImage}
@@ -123,15 +123,15 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                     )}
 
                     <div className="absolute bottom-0 left-0 right-0 p-4 pb-4 flex flex-col gap-2 z-20">
-                        <h3 className="text-xl font-bold text-white leading-tight drop-shadow-sm truncate text-center block transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:[text-shadow:0_0_10px_rgba(255,255,255,0.6)]">
+                        <h3 className="text-xl md:text-xl font-black text-white leading-tight drop-shadow-sm truncate text-center block transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:[text-shadow:0_0_10px_rgba(255,255,255,0.6)] mb-2">
                             {title}
                         </h3>
-                        <div className="relative w-full overflow-hidden">
-                            <div className="flex flex-nowrap w-max gap-2 will-change-transform group-hover:[animation:scroll_12s_linear_infinite]">
+                        <div className="relative w-full overflow-hidden mask-image-marquee">
+                            <div className="flex flex-nowrap w-max gap-2 animate-marquee">
                                 {[...displayTags, ...displayTags].map((tag, index) => (
                                     <span
                                         key={`scroll-${tag}-${index}`}
-                                        className="text-[10px] font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] whitespace-nowrap inline-block"
+                                        className="text-[11px] md:text-xs font-bold uppercase tracking-wider text-[#00B4D8] bg-[#00B4D8]/10 px-3 py-1.5 rounded shadow-[0_0_8px_rgba(0,180,216,0.1)] whitespace-nowrap inline-block"
                                     >
                                         {tag}
                                     </span>
