@@ -77,13 +77,21 @@ export default function TopPage() {
                     <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
 
                     {/* Ranking Badge - Glassmorphism */}
-                    <span className="absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10 bg-gradient-to-r from-blue-600/90 to-transparent border-l-2 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]">
+                    <span className={`absolute top-4 left-4 flex items-center justify-center font-bold text-lg w-10 h-10 backdrop-blur-sm ${
+                      index >= 3 && index <= 5 
+                        ? 'bg-gradient-to-r from-black/90 to-transparent border-l-2 border-[#00B4D8] text-white'
+                        : 'bg-gradient-to-r from-blue-600/90 to-transparent border-l-2 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]'
+                    }`}>
                       {index + 1}
                     </span>
 
                     {/* Content Group: Genre + Title */}
                     <div className="absolute bottom-0 left-0 right-0 p-5 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1 z-10">
-                      <span className="inline-block w-max px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md border border-[#00B4D8]/60 text-[#00B4D8] font-bold text-xs uppercase tracking-widest shadow-[0_0_15px_rgba(0,180,216,0.25)] [text-shadow:0_0_8px_rgba(0,180,216,0.6)]">
+                      <span className={`inline-block w-max px-3 py-1.5 rounded-full backdrop-blur-md font-bold text-xs uppercase tracking-widest ${
+                        index < 3
+                          ? 'bg-blue-600/30 border border-blue-400 text-blue-50 px-2.5 py-1 rounded-md text-[10px] md:text-xs uppercase tracking-wider font-semibold'
+                          : 'bg-black/70 border border-[#00B4D8]/60 text-[#00B4D8] shadow-[0_0_15px_rgba(0,180,216,0.25)] [text-shadow:0_0_8px_rgba(0,180,216,0.6)]'
+                      }`}>
                         {getDisplayTags(story)[0] || 'Аудио'}
                       </span>
                       <h2 className="text-xl md:text-2xl font-bold text-white leading-tight line-clamp-2">
