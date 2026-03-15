@@ -17,6 +17,32 @@ export function TopSales() {
         getTopStories(12).then(setStories);
     }, []);
 
+    useEffect(() => {
+        // Intersection Observer только для мобильных экранов
+        if (window.innerWidth >= 768) return;
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('mobile-glow-in-view');
+                    } else {
+                        entry.target.classList.remove('mobile-glow-in-view');
+                    }
+                });
+            },
+            {
+                threshold: 0.6, // Срабатывает, когда 60% карточки видно
+                rootMargin: '-10% 0px -10% 0px',
+            }
+        );
+
+        const cards = document.querySelectorAll('.topsales-card-mobile');
+        cards.forEach((card) => observer.observe(card));
+
+        return () => observer.disconnect();
+    }, [stories]); // Перезапускаем при загрузке историй
+
     return (
         <section className="relative py-20 px-6 overflow-hidden">
             <div className="relative z-10 max-w-7xl mx-auto">
@@ -47,7 +73,7 @@ export function TopSales() {
                             transition={{ duration: 0.4, delay: index * 0.05 }}
                         >
                             <Link href={`/story/${story.id}`}>
-                                <div className="relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-300 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8]">
+                                <div className="topsales-card-mobile relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-500 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8]">
                                     <Image
                                         src={story.coverImage || DEFAULT_COVER}
                                         alt={story.title}
