@@ -73,25 +73,29 @@ export function TopSales() {
                             transition={{ duration: 0.4, delay: index * 0.05 }}
                         >
                             <Link href={`/story/${story.id}`}>
-                                <div className="topsales-card-mobile relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-500 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8] will-change-transform">
-                                    <Image
-                                        src={story.coverImage || DEFAULT_COVER}
-                                        alt={story.title}
-                                        fill
-                                        className="object-cover transition-transform duration-500 group-hover:scale-105"
-                                        unoptimized
-                                        sizes="(max-width: 1024px) 50vw, 25vw"
-                                        onError={(e) => {
-                                            const t = e.target as HTMLImageElement;
-                                            if (t?.src && !t.src.includes('default-cover')) t.src = DEFAULT_COVER;
-                                        }}
-                                    />
+                                {/* Убрали overflow-hidden с внешнего контейнера, чтобы тень не обрезалась */}
+                                <div className="topsales-card-mobile relative aspect-[3/4] rounded-2xl group cursor-pointer transition-all duration-500 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8] will-change-transform z-10">
+                                    {/* Inner container for overflow hidden content */}
+                                    <div className="absolute inset-0 overflow-hidden rounded-2xl">
+                                        <Image
+                                            src={story.coverImage || DEFAULT_COVER}
+                                            alt={story.title}
+                                            fill
+                                            className="object-cover transition-transform duration-500 group-hover:scale-105"
+                                            unoptimized
+                                            sizes="(max-width: 1024px) 50vw, 25vw"
+                                            onError={(e) => {
+                                                const t = e.target as HTMLImageElement;
+                                                if (t?.src && !t.src.includes('default-cover')) t.src = DEFAULT_COVER;
+                                            }}
+                                        />
 
-                                    {/* Gradient Overlay */}
-                                    <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/90 via-black/50 to-transparent" />
+                                        {/* Gradient Overlay */}
+                                        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/90 via-black/50 to-transparent" />
+                                    </div>
 
                                     {/* Top Badge */}
-                                    <div className={`absolute top-3 left-3 px-3 py-1 rounded-lg backdrop-blur-md border font-bold shadow-lg w-12 h-12 text-xl md:w-auto md:h-auto md:text-sm flex items-center justify-center md:block ${index < 3
+                                    <div className={`absolute top-3 left-3 px-3 py-1 rounded-lg backdrop-blur-md border font-bold shadow-lg w-12 h-12 text-xl md:w-auto md:h-auto md:text-sm flex items-center justify-center md:block z-20 ${index < 3
                                         ? 'bg-amber-500/80 border-amber-300 text-white shadow-[0_0_10px_rgba(245,158,11,0.5)]'
                                         : 'bg-black/40 border-white/20 text-white'
                                         }`}>
@@ -100,7 +104,7 @@ export function TopSales() {
                                     </div>
 
                                     {/* Content */}
-                                    <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-1 transform transition-transform duration-300 group-hover:-translate-y-1">
+                                    <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-1 transform transition-transform duration-300 group-hover:-translate-y-1 z-20">
                                         <h3 className="text-white font-black text-xl md:text-lg text-center md:text-left leading-tight line-clamp-2 drop-shadow-md mb-2 md:mb-0 order-1 md:order-2">
                                             {story.title}
                                         </h3>
