@@ -73,7 +73,7 @@ export function TopSales() {
                             transition={{ duration: 0.4, delay: index * 0.05 }}
                         >
                             <Link href={`/story/${story.id}`}>
-                                <div className="topsales-card-mobile relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-500 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8]">
+                                <div className="topsales-card-mobile relative aspect-[3/4] overflow-hidden rounded-2xl group cursor-pointer transition-all duration-500 active:scale-[0.98] active:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:-translate-y-2 hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] border border-transparent active:border-[#00B4D8] hover:border-[#00B4D8] will-change-transform">
                                     <Image
                                         src={story.coverImage || DEFAULT_COVER}
                                         alt={story.title}
