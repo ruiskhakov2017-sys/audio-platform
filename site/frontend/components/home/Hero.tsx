@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { NeonWaveform } from '../ui/NeonWaveform';
-import { NeonButton } from '../ui/NeonButton';
+import Link from 'next/link';
 
 export function Hero() {
     return (
@@ -111,13 +111,16 @@ export function Hero() {
                 >
                     <Link
                         href="/browse"
-                        className="inline-flex items-center justify-center w-full sm:w-auto px-8 py-4 rounded-xl font-black text-lg sm:text-lg transition-all duration-300 bg-[#00B4D8] hover:bg-[#0096B4] text-[#000814] shadow-[0_0_20px_rgba(0,180,216,0.5)] hover:shadow-[0_0_40px_rgba(0,180,216,0.8)] hover:scale-105 active:scale-95 min-h-[52px] sm:min-h-0 animate-neon-pulse hover:animate-none"
+                        className="inline-flex items-center justify-center w-full sm:w-auto px-8 py-4 rounded-xl font-black text-lg sm:text-lg transition-all duration-300 bg-[#00B4D8] hover:bg-[#0096B4] text-[#000814] shadow-[0_0_20px_rgba(0,180,216,0.5)] hover:shadow-[0_0_40px_rgba(0,180,216,0.8)] hover:scale-105 active:scale-95 min-h-[52px] sm:min-h-0 animate-neon-pulse hover:animate-none z-20 relative"
                     >
                         Слушать истории
                     </Link>
-                    <NeonButton variant="glass" size="large" href="#genres" className="hidden sm:inline-flex">
+                    <Link
+                        href="#genres"
+                        className="hidden sm:inline-flex items-center justify-center px-8 py-4 rounded-xl font-bold text-lg transition-all duration-300 bg-white/5 hover:bg-white/10 text-white border border-white/10 hover:border-white/30 backdrop-blur-sm"
+                    >
                         Выбрать жанр
-                    </NeonButton>
+                    </Link>
                 </motion.div>
             </div>
 
