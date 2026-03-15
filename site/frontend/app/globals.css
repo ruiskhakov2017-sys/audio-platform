@@ -147,8 +147,9 @@ a {
   }
 
   .topsales-card-mobile.mobile-glow-in-view {
-    box-shadow: 0 0 40px rgba(255, 255, 255, 0.4) !important;
-    border-color: rgba(255, 255, 255, 0.4) !important;
+    /* Уменьшили радиус и непрозрачность свечения (было 40px и 0.4) */
+    box-shadow: 0 0 25px rgba(255, 255, 255, 0.2) !important;
+    border-color: rgba(255, 255, 255, 0.25) !important;
     z-index: 10;
   }
   
@@ -165,8 +166,20 @@ a {
   }
 
   .topsales-card-mobile.mobile-glow-in-view::before {
-    box-shadow: 0 0 50px 10px rgba(255, 255, 255, 0.2);
+    /* Сильно ослабили дополнительное свечение (было 50px/10px/0.2) */
+    box-shadow: 0 0 30px 5px rgba(255, 255, 255, 0.1);
     opacity: 1;
+  }
+  
+  /* Восстанавливаем эффект нажатия (Active State) */
+  .topsales-card-mobile:active {
+    transform: scale(0.98) !important;
+    box-shadow: 0 0 25px rgba(0, 180, 216, 0.6) !important;
+    border-color: #00B4D8 !important;
+  }
+
+  .topsales-card-mobile:active::before {
+    opacity: 0; /* Убираем белое свечение при нажатии, чтобы не мешало синему */
   }
 }
 
