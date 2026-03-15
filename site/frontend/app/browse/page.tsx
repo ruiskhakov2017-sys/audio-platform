@@ -101,7 +101,7 @@ function filterStories(
   let list = allStories;
   if (accessFilter === 'free') list = list.filter((s) => !s.isPremium);
   if (accessFilter === 'premium') list = list.filter((s) => s.isPremium);
-  if (activeGenre !== ALL_GENRES) {
+  if (activeGenre && activeGenre !== ALL_GENRES) {
     list = list.filter((s) => getDisplayTags(s).includes(activeGenre));
   }
   if (selectedTag) {
@@ -135,8 +135,9 @@ export default function BrowsePage() {
       : 'genres'
   );
   const [accessFilter, setAccessFilter] = useState<AccessFilter>('all');
+  // Меняем начальное состояние с ALL_GENRES на пустую строку, чтобы жанры по умолчанию не были активны
   const [activeGenre, setActiveGenre] = useState<string>(() =>
-    searchParams.get(GENRE_PARAM) || ALL_GENRES
+    searchParams.get(GENRE_PARAM) || ''
   );
   const [selectedTag, setSelectedTag] = useState<string | null>(() =>
     searchParams.get(TAG_PARAM) || null
@@ -229,7 +230,7 @@ export default function BrowsePage() {
   }, [activeGenre, selectedTag, searchQuery, activeSort, accessFilter]);
 
   const handleResetFilters = () => {
-    setActiveGenre(ALL_GENRES);
+    setActiveGenre('');
     setSelectedTag(null);
     setSearchQuery('');
     setAccessFilter('all');
@@ -244,14 +245,14 @@ export default function BrowsePage() {
   };
 
   const handleBackToGenres = () => {
-    setActiveGenre(ALL_GENRES);
+    setActiveGenre('');
     setViewMode('genres');
   };
 
   const hasActiveFilters =
-    activeGenre !== ALL_GENRES || selectedTag !== null;
+    activeGenre !== '' || selectedTag !== null;
   const activeFiltersLabel = [
-    activeGenre !== ALL_GENRES && (activeGenre.charAt(0).toUpperCase() + activeGenre.slice(1).toLowerCase()),
+    activeGenre !== '' && (activeGenre.charAt(0).toUpperCase() + activeGenre.slice(1).toLowerCase()),
     selectedTag && (selectedTag.charAt(0).toUpperCase() + selectedTag.slice(1).toLowerCase()),
   ]
     .filter(Boolean)
@@ -359,7 +360,7 @@ export default function BrowsePage() {
                   </span>
                 </button>
                 {SORT_OPTIONS.map((opt) => {
-                  const isSidebarFilterActive = activeGenre !== ALL_GENRES || selectedTag !== null;
+                  const isSidebarFilterActive = activeGenre !== '' || selectedTag !== null;
                   const isActive = viewMode === 'list' && !isSidebarFilterActive && activeSort === opt.key;
                   const isMine = opt.key === 'mine';
                   const isPremium = opt.key === 'premium';

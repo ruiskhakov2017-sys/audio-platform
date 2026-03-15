@@ -73,8 +73,13 @@ export function FilterSidebar({
   };
 
   const handleGenreClick = (genre: string) => {
-    setActiveGenre(genre);
-    if (genre !== ALL_GENRES) onGenreSelect?.();
+    // Если кликаем по уже активному жанру (и это не "Все") - сбрасываем его
+    if (activeGenre === genre && genre !== ALL_GENRES) {
+      setActiveGenre('');
+    } else {
+      setActiveGenre(genre);
+      if (genre !== ALL_GENRES) onGenreSelect?.();
+    }
   };
 
   return (
@@ -126,6 +131,8 @@ export function FilterSidebar({
           <h4 className="text-sm font-medium text-zinc-400 mb-2">Жанры</h4>
           <div className="flex flex-wrap gap-2 content-start">
             {genres.map((genre) => {
+              // Если activeGenre пустой, значит ни один жанр не выбран. 
+              // Кнопка "Все" (ALL_GENRES) активна только если она явно выбрана.
               const isActive = activeGenre === genre;
               return (
                 <button

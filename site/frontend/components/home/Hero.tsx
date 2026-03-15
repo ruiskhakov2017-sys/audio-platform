@@ -109,9 +109,13 @@ export function Hero() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.8, delay: 0.4 }}
                 >
-                    <NeonButton variant="primary" size="large" href="/browse" className="w-full sm:w-auto min-h-[52px] sm:min-h-0 flex items-center justify-center px-8 py-4 text-lg sm:text-lg">
-                        Слушать истории
-                    </NeonButton>
+                    <div className="relative group">
+                        {/* Пульсирующее свечение под кнопкой */}
+                        <div className="absolute -inset-1 bg-[#00B4D8] rounded-xl blur opacity-30 group-hover:opacity-60 transition duration-1000 group-hover:duration-200 animate-pulse"></div>
+                        <NeonButton variant="primary" size="large" href="/browse" className="relative w-full sm:w-auto min-h-[52px] sm:min-h-0 flex items-center justify-center px-8 py-4 text-lg sm:text-lg animate-pulse hover:animate-none">
+                            Слушать истории
+                        </NeonButton>
+                    </div>
                     <NeonButton variant="glass" size="large" href="#genres" className="hidden sm:inline-flex">
                         Выбрать жанр
                     </NeonButton>
