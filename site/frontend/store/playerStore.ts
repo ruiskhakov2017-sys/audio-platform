@@ -27,6 +27,13 @@ type PlayerState = {
   setDuration: (duration: number) => void;
   setVolume: (volume: number) => void;
   setPlaybackRate: (rate: number) => void;
+  isAutoPlay: boolean;
+  sleepTimer: number | null; // timestamp when to stop
+  setAutoPlay: (enabled: boolean) => void;
+  setSleepTimer: (minutes: number | null) => void;
+  toggleAutoPlay: () => void;
+  checkSleepTimer: () => boolean; // returns true if should stop
+  
   next: () => void;
   previous: () => void;
   seekTarget: number | null;
@@ -45,8 +52,35 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playbackRate: 1,
   isPremiumUser: false,
   isPaywallOpen: false,
+  isAutoPlay: false,
+  sleepTimer: null,
+
   setPremiumStatus: (status) => set({ isPremiumUser: status }),
   setPaywallOpen: (isOpen) => set({ isPaywallOpen: isOpen }),
+  setAutoPlay: (enabled) => set({ isAutoPlay: enabled }),
+  toggleAutoPlay: () => set((state) => ({ isAutoPlay: !state.isAutoPlay })),
+  
+  setSleepTimer: (minutes) => {
+    if (minutes === null) {
+      set({ sleepTimer: null });
+      return;
+    }
+    const targetTime = Date.now() + minutes * 60 * 1000;
+    set({ sleepTimer: targetTime });
+  },
+
+  checkSleepTimer: () => {
+    const { sleepTimer, isPlaying } = get();
+    if (sleepTimer && Date.now() >= sleepTimer) {
+      if (isPlaying) {
+        set({ isPlaying: false, sleepTimer: null });
+        return true;
+      }
+      set({ sleepTimer: null });
+    }
+    return false;
+  },
+
   play: (story, queue = []) => {
     if (story.isPremium && !get().isPremiumUser) {
       set({ isPaywallOpen: true });

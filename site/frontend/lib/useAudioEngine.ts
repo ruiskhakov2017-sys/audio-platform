@@ -33,6 +33,18 @@ const useAudioEngine = () => {
     trackRef.current = currentTrack;
   }, [currentTrack]);
 
+  const next = usePlayerStore((state) => state.next);
+  const isAutoPlay = usePlayerStore((state) => state.isAutoPlay);
+  const checkSleepTimer = usePlayerStore((state) => state.checkSleepTimer);
+
+  useEffect(() => {
+    // Check sleep timer every second
+    const interval = setInterval(() => {
+      checkSleepTimer();
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [checkSleepTimer]);
+
   useEffect(() => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
@@ -45,7 +57,7 @@ const useAudioEngine = () => {
       if (isFinite(audio.duration)) {
         setDuration(audio.duration);
       }
-
+      
       const track = trackRef.current;
       if (!track) return;
 
@@ -67,7 +79,11 @@ const useAudioEngine = () => {
     };
 
     const handleEnded = () => {
-      pause();
+      if (isAutoPlay) {
+        next();
+      } else {
+        pause();
+      }
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
@@ -79,7 +95,7 @@ const useAudioEngine = () => {
       audio.removeEventListener('loadedmetadata', handleLoaded);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [pause, setDuration, setPosition]);
+  }, [pause, setDuration, setPosition, next, isAutoPlay]);
 
   useEffect(() => {
     const audio = audioRef.current;

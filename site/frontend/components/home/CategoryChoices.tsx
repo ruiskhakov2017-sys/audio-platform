@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import Image from 'next/image';
+import { useEffect, useRef } from 'react';
 
 const categories = [
     { title: 'Восемнадцать лет', description: 'Откровенные истории для взрослых', image: '/images/genres/18-plus.jpg', href: '/browse?genre=Восемнадцать+лет' },
@@ -14,6 +15,32 @@ const categories = [
 ];
 
 export function CategoryChoices() {
+    useEffect(() => {
+        // Логика IntersectionObserver только для мобильных
+        if (window.innerWidth >= 768) return;
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('mobile-in-view');
+                    } else {
+                        entry.target.classList.remove('mobile-in-view');
+                    }
+                });
+            },
+            {
+                threshold: 0.6, // Срабатывает, когда 60% карточки видно
+                rootMargin: '-10% 0px -10% 0px', // Отступы от краев экрана
+            }
+        );
+
+        const cards = document.querySelectorAll('.category-card-mobile');
+        cards.forEach((card) => observer.observe(card));
+
+        return () => observer.disconnect();
+    }, []);
+
     return (
         <section id="genres" className="py-20 px-6">
             <div className="max-w-7xl mx-auto">
@@ -42,13 +69,13 @@ export function CategoryChoices() {
                             transition={{ duration: 0.5, delay: index * 0.1 }}
                         >
                             <Link href={category.href}>
-                                <div className="relative w-full h-[450px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 shadow-[0_0_20px_rgba(0,180,216,0.3)] md:shadow-none hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
+                                <div className="category-card-mobile relative w-full h-[450px] md:h-[500px] overflow-hidden rounded-3xl group cursor-pointer transition-all duration-500 hover:-translate-y-2 shadow-[0_0_20px_rgba(0,180,216,0.3)] md:shadow-none hover:shadow-[0_0_40px_rgba(0,180,216,0.3)] bg-black">
                                     {/* Image */}
                                     <Image
                                         src={category.image}
                                         alt={category.title}
                                         fill
-                                        className="absolute inset-0 w-full h-full object-cover grayscale-0 md:grayscale md:group-hover:grayscale-0 transition-all duration-700 group-hover:scale-110"
+                                        className="absolute inset-0 w-full h-full object-cover grayscale md:grayscale md:group-hover:grayscale-0 transition-all duration-700 group-hover:scale-110 mobile-img"
                                         unoptimized
                                         sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                                     />

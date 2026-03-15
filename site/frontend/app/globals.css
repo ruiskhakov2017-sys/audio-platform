@@ -123,6 +123,16 @@ a {
     box-shadow: 0 0 35px rgba(255, 255, 255, 0.3);
     border-color: rgba(255, 255, 255, 0.2);
   }
+
+  /* Mobile Category Choices Animation */
+  .category-card-mobile .mobile-img {
+    filter: grayscale(100%);
+    transition: filter 0.7s ease-out;
+  }
+
+  .category-card-mobile.mobile-in-view .mobile-img {
+    filter: grayscale(0%);
+  }
 }
 
 .mask-image-marquee {

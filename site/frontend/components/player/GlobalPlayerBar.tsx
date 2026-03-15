@@ -28,6 +28,23 @@ export function GlobalPlayerBar() {
   const playbackRate = usePlayerStore((s) => s.playbackRate);
   const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate);
   const { toggleLike, isLiked } = useFavoritesStore();
+  const isAutoPlay = usePlayerStore((s) => s.isAutoPlay);
+  const toggleAutoPlay = usePlayerStore((s) => s.toggleAutoPlay);
+  const sleepTimer = usePlayerStore((s) => s.sleepTimer);
+  const setSleepTimer = usePlayerStore((s) => s.setSleepTimer);
+
+  const [showSleepMenu, setShowSleepMenu] = useState(false);
+  const sleepMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (sleepMenuRef.current && !sleepMenuRef.current.contains(event.target as Node)) {
+        setShowSleepMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const [mounted, setMounted] = useState(false);
   const isFavorite = currentTrack ? isLiked(String(currentTrack.id)) : false;
@@ -252,18 +269,47 @@ export function GlobalPlayerBar() {
             </span>
             <button
               title="Добавить в плейлист/Очередь"
-              className="hover:text-[#00B4D8] transition-colors"
-              onClick={() => toast.info('Функция "Очередь воспроизведения" появится в ближайшем обновлении!')}
+              className={`transition-colors ${isAutoPlay ? 'text-cyan-400' : 'hover:text-[#00B4D8]'}`}
+              onClick={toggleAutoPlay}
             >
               <ListMusic className="w-5 h-5" />
             </button>
-            <button
-              title="Таймер сна (в разработке)"
-              className="hover:text-[#00B4D8] transition-colors"
-              onClick={() => toast.info('Таймер сна будет активирован. Функция в разработке.')}
-            >
-              <Moon className="w-5 h-5" />
-            </button>
+            <div className="relative" ref={sleepMenuRef}>
+              <button
+                title="Таймер сна"
+                className={`transition-colors ${sleepTimer ? 'text-cyan-400' : 'hover:text-[#00B4D8]'}`}
+                onClick={() => setShowSleepMenu(!showSleepMenu)}
+              >
+                <Moon className="w-5 h-5" />
+              </button>
+              {showSleepMenu && (
+                <div className="absolute bottom-full mb-2 right-0 bg-zinc-900 border border-white/10 rounded-lg p-2 min-w-[120px] flex flex-col gap-1 shadow-xl">
+                  {[15, 30, 45, 60].map((mins) => (
+                    <button
+                      key={mins}
+                      onClick={() => {
+                        setSleepTimer(mins);
+                        setShowSleepMenu(false);
+                        toast.success(`Таймер сна установлен на ${mins} мин`);
+                      }}
+                      className="text-sm text-left px-3 py-1.5 hover:bg-white/10 rounded text-zinc-300 hover:text-white"
+                    >
+                      {mins} минут
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => {
+                      setSleepTimer(null);
+                      setShowSleepMenu(false);
+                      toast.info('Таймер сна отключен');
+                    }}
+                    className="text-sm text-left px-3 py-1.5 hover:bg-white/10 rounded text-red-400 hover:text-red-300 border-t border-white/10 mt-1"
+                  >
+                    Отключить
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               title="К странице рассказа"
               className="hover:text-[#00B4D8] transition-colors"

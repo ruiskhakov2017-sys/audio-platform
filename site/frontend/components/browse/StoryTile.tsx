@@ -127,7 +127,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             {title}
                         </h3>
                         <div className="relative w-full overflow-hidden mask-image-marquee">
-                            <div className="flex flex-nowrap w-max gap-2 animate-marquee">
+                            <div className="flex flex-nowrap w-max gap-2 animate-marquee md:animate-none md:group-hover:animate-marquee">
                                 {[...displayTags, ...displayTags].map((tag, index) => (
                                     <span
                                         key={`scroll-${tag}-${index}`}
