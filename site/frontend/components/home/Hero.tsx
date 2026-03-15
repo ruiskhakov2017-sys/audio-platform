@@ -111,7 +111,7 @@ export function Hero() {
                 >
                     <Link
                         href="/browse"
-                        className="inline-flex items-center justify-center w-full sm:w-auto px-8 py-4 rounded-xl font-bold text-lg sm:text-lg transition-all duration-300 border-2 border-[#00B4D8] text-[#00B4D8] hover:bg-[#00B4D8] hover:text-black hover:shadow-[0_0_25px_rgba(0,180,216,0.6)] hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(0,180,216,0.5)] animate-pulse hover:animate-none bg-[#00B4D8]/10 min-h-[52px] sm:min-h-0"
+                        className="inline-flex items-center justify-center w-full sm:w-auto px-8 py-4 rounded-xl font-black text-lg sm:text-lg transition-all duration-300 bg-[#00B4D8] hover:bg-[#0096B4] text-[#000814] shadow-[0_0_20px_rgba(0,180,216,0.5)] hover:shadow-[0_0_40px_rgba(0,180,216,0.8)] hover:scale-105 active:scale-95 min-h-[52px] sm:min-h-0 animate-neon-pulse hover:animate-none"
                     >
                         Слушать истории
                     </Link>

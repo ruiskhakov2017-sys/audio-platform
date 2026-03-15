@@ -69,10 +69,14 @@ a {
   }
 
   50% {
-    box-shadow: 0 0 30px rgba(0, 180, 216, 0.5),
-      inset 0 0 20px rgba(0, 180, 216, 0.15),
-      0 0 0 2px rgba(0, 180, 216, 0.6);
+    box-shadow: 0 0 35px rgba(0, 180, 216, 0.6),
+      inset 0 0 20px rgba(0, 180, 216, 0.2),
+      0 0 0 2px rgba(0, 180, 216, 0.7);
   }
+}
+
+.animate-neon-pulse {
+  animation: neonPulse 3s infinite ease-in-out;
 }
 
 @keyframes neonGlow {
@@ -137,11 +141,12 @@ a {
   /* Mobile TopSales Glow Animation */
   .topsales-card-mobile {
     transition: all 0.5s ease-out;
+    box-shadow: none; /* Явно убираем тень по умолчанию */
   }
 
   .topsales-card-mobile.mobile-glow-in-view {
-    box-shadow: 0 0 35px rgba(255, 255, 255, 0.3);
-    border-color: rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 35px rgba(255, 255, 255, 0.5) !important; /* Усиливаем и форсируем тень */
+    border-color: rgba(255, 255, 255, 0.4) !important;
   }
 }
 
