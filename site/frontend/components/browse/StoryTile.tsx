@@ -127,6 +127,9 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             {title}
                         </h3>
                         <div className="relative w-full overflow-hidden mask-image-marquee">
+                            {/* animate-marquee - всегда работает (мобилка)
+                                md:animate-none - останавливаем на десктопе по умолчанию
+                                md:group-hover:animate-marquee - запускаем на десктопе при ховере */}
                             <div className="flex flex-nowrap w-max gap-2 animate-marquee md:animate-none md:group-hover:animate-marquee">
                                 {[...displayTags, ...displayTags].map((tag, index) => (
                                     <span

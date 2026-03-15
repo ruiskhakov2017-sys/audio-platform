@@ -234,10 +234,7 @@ export default function BrowsePage() {
     setSearchQuery('');
     setAccessFilter('all');
     setActiveSort('popular');
-    // Не переключаем viewMode, если пользователь хочет видеть карточки всех жанров
-    if (viewMode === 'genres') {
-      setViewMode('list');
-    }
+    setViewMode('genres');
   };
 
   // Кнопка "Все рассказы" переключает на список всех рассказов без фильтров
@@ -347,24 +344,11 @@ export default function BrowsePage() {
                 <span>Фильтры и Жанры</span>
               </button>
 
-              <div className="flex overflow-x-auto gap-8 pb-2 mb-8 lg:grid lg:grid-cols-8 lg:overflow-visible lg:pb-0 lg:gap-8 [&>button]:shrink-0 border-b border-white/10 px-2">
-                <button
-                  type="button"
-                  onClick={handleShowAllStories}
-                  className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all group ${viewMode === 'list' && activeGenre === ALL_GENRES && selectedTag === null
-                    ? 'text-cyan-400'
-                    : 'text-zinc-400 hover:text-cyan-400'
-                    }`}
-                >
-                  <span aria-hidden>♾️</span>
-                  <span className={viewMode === 'list' && activeGenre === ALL_GENRES && selectedTag === null ? 'relative after:absolute after:-bottom-4 after:left-0 after:right-0 after:h-0.5 after:bg-cyan-400 after:shadow-[0_0_8px_rgba(34,211,238,0.8)]' : ''}>
-                    Все рассказы
-                  </span>
-                </button>
+              <div className="flex overflow-x-auto gap-4 pb-2 mb-8 lg:flex lg:flex-wrap lg:overflow-visible lg:pb-0 lg:gap-8 border-b border-white/10 px-2">
                 <button
                   type="button"
                   onClick={() => setViewMode('genres')}
-                  className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all group ${viewMode === 'genres'
+                  className={`relative inline-flex items-center justify-center gap-2 pb-4 text-sm font-medium transition-all shrink-0 group ${viewMode === 'genres'
                     ? 'text-cyan-400'
                     : 'text-zinc-400 hover:text-cyan-400'
                     }`}
