@@ -181,6 +181,13 @@ a {
   .topsales-card-mobile:active::before {
     opacity: 0; /* Убираем белое свечение при нажатии, чтобы не мешало синему */
   }
+
+  /* Active state для карточек рассказов — cyan glow перебивает белый scroll glow */
+  .catalog-card-mobile:active {
+    transform: scale(0.98) !important;
+    box-shadow: 0 0 30px rgba(0, 180, 216, 0.6) !important;
+    border-color: #00B4D8 !important;
+  }
 }
 
 .mask-image-marquee {

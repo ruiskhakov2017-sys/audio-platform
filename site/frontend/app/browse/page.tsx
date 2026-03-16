@@ -272,6 +272,33 @@ export default function BrowsePage() {
     [filteredStories, visibleCount]
   );
 
+  // Scroll glow для карточек рассказов на мобильных в list-режиме
+  useEffect(() => {
+    if (viewMode !== 'list') return;
+    if (typeof window !== 'undefined' && window.innerWidth >= 768) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('mobile-in-view');
+          } else {
+            entry.target.classList.remove('mobile-in-view');
+          }
+        });
+      },
+      {
+        threshold: 0.5,
+        rootMargin: '-5% 0px -5% 0px',
+      }
+    );
+
+    const cards = document.querySelectorAll('.catalog-card-mobile');
+    cards.forEach((card) => observer.observe(card));
+
+    return () => observer.disconnect();
+  }, [viewMode, displayedStories.length, loading]);
+
   // Интерактивный эффект для карточек при скролле (черно-белые -> цветные)
   useEffect(() => {
     if (viewMode !== 'genres') return;

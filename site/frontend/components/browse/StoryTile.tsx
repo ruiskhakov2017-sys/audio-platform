@@ -61,8 +61,9 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
             onMouseLeave={() => setIsHovered(false)}
         >
             <Link href={storyHref}>
-                <div className="relative aspect-[3/4] rounded-xl overflow-hidden group cursor-pointer transition-all duration-300 active:scale-[0.98] active:shadow-[0_0_30px_rgba(0,180,216,0.6)] md:hover:shadow-[0_0_20px_rgba(255,255,255,0.25)] border border-transparent active:border-[#00B4D8] md:hover:border-white/20 bg-white/5 backdrop-blur-sm shadow-[0_4px_15px_rgba(0,0,0,0.3)]">
-                    <div className="absolute inset-0">
+                <div className="catalog-card-mobile relative aspect-[3/4] rounded-xl group cursor-pointer transition-all duration-300 active:scale-[0.98] active:shadow-[0_0_30px_rgba(0,180,216,0.6)] md:hover:shadow-[0_0_20px_rgba(255,255,255,0.25)] border border-transparent active:border-[#00B4D8] md:hover:border-white/20 bg-white/5 backdrop-blur-sm shadow-[0_4px_15px_rgba(0,0,0,0.3)]">
+                    {/* Inner container with overflow-hidden so box-shadow is not clipped */}
+                    <div className="absolute inset-0 overflow-hidden rounded-xl">
                         <Image
                             src={coverImage}
                             alt={title}
@@ -71,6 +72,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             unoptimized
                             sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 25vw"
                         />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-transparent" />
                     </div>
 
                     {/* Like — top-left */}
@@ -98,8 +100,6 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             </span>
                         )}
                     </div>
-
-                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-transparent" />
 
                     {isHovered && (
                         <motion.div
