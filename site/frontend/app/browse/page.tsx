@@ -312,11 +312,23 @@ export default function BrowsePage() {
               accessFilter={accessFilter}
               setAccessFilter={setAccessFilter}
               activeGenre={activeGenre}
-              setActiveGenre={setActiveGenre}
+              setActiveGenre={(genre) => {
+                // Если пользователь выбрал "Все" (ALL_GENRES), сбрасываем activeGenre и показываем список всех рассказов
+                if (genre === ALL_GENRES) {
+                  setActiveGenre('');
+                  setViewMode('list');
+                } else {
+                  setActiveGenre(genre);
+                  setViewMode('list');
+                }
+              }}
               genres={genres}
               allTags={allTags}
               selectedTag={selectedTag}
-              setSelectedTag={setSelectedTag}
+              setSelectedTag={(tag) => {
+                setSelectedTag(tag);
+                setViewMode('list');
+              }}
               onReset={handleResetFilters}
               onGenreSelect={() => setViewMode('list')}
             />
