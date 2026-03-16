@@ -61,11 +61,6 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
             onMouseLeave={() => setIsHovered(false)}
         >
             <Link href={storyHref}>
-                {/* 
-                  Основные изменения:
-                  - md:hover:shadow-[0_0_20px_rgba(255,255,255,0.25)] - белое свечение при наведении на десктопе
-                  - md:hover:border-white/20 - белая рамка при наведении
-                */}
                 <div className="relative aspect-[3/4] rounded-xl overflow-hidden group cursor-pointer transition-all duration-300 active:scale-[0.98] active:shadow-[0_0_30px_rgba(0,180,216,0.6)] md:hover:shadow-[0_0_20px_rgba(255,255,255,0.25)] border border-transparent active:border-[#00B4D8] md:hover:border-white/20 bg-white/5 backdrop-blur-sm shadow-[0_4px_15px_rgba(0,0,0,0.3)]">
                     <div className="absolute inset-0">
                         <Image
@@ -132,10 +127,7 @@ export function StoryTile({ id, title, coverImage, price, isPremium, story }: St
                             {title}
                         </h3>
                         <div className="relative w-full overflow-hidden mask-image-marquee">
-                            {/* animate-marquee - всегда работает на мобильных
-                                md:animate-none - остановлено по умолчанию на десктопе
-                                md:group-hover:animate-marquee - запускается при наведении на десктопе */}
-                            <div className="flex flex-nowrap w-max gap-2 animate-marquee md:animate-none md:group-hover:animate-marquee">
+                            <div className="storytile-tags-track flex flex-nowrap w-max gap-2">
                                 {[...displayTags, ...displayTags].map((tag, index) => (
                                     <span
                                         key={`scroll-${tag}-${index}`}
