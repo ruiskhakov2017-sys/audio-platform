@@ -31,6 +31,33 @@ export default function TopPage() {
     }
   }, []);
 
+  // Scroll glow для карточек на мобильных (как в каталоге)
+  useEffect(() => {
+    if (loading || list.length === 0) return;
+    if (typeof window !== 'undefined' && window.innerWidth >= 768) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('mobile-in-view');
+          } else {
+            entry.target.classList.remove('mobile-in-view');
+          }
+        });
+      },
+      {
+        threshold: 0.5,
+        rootMargin: '-5% 0px -5% 0px',
+      }
+    );
+
+    const cards = document.querySelectorAll('.catalog-card-mobile');
+    cards.forEach((card) => observer.observe(card));
+
+    return () => observer.disconnect();
+  }, [loading, list.length]);
+
   return (
     <div className="min-h-screen bg-[#000814] text-white">
       <Header />
@@ -57,9 +84,9 @@ export default function TopPage() {
                 <Link
                   key={`${story.id}-${story.slug}-${index}`}
                   href={`/story/${story.id}`}
-                  className="group relative block rounded-2xl overflow-hidden transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_15px_30px_rgba(0,180,216,0.2)] bg-zinc-900"
+                  className="catalog-card-mobile group relative block rounded-2xl border border-transparent transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_15px_30px_rgba(0,180,216,0.2)] bg-zinc-900"
                 >
-                  <div className="aspect-[3/4] relative">
+                  <div className="aspect-[3/4] relative overflow-hidden rounded-2xl">
                     {story.coverImage ? (
                       <Image
                         src={story.coverImage}
