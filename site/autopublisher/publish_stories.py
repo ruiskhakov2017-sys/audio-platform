@@ -149,6 +149,12 @@ def parse_info_txt(path: Path) -> dict:
     return result
 
 
+def find_story_text_file(folder: Path) -> Path | None:
+    """Возвращает путь к файлу с текстом рассказа (любой .txt, кроме info.txt)."""
+    candidates = [p for p in sorted(folder.glob("*.txt")) if p.name.lower() != "info.txt"]
+    return candidates[0] if candidates else None
+
+
 def find_story_text(folder: Path) -> str:
     parts = []
     for p in sorted(folder.glob("*.txt")):
@@ -200,6 +206,7 @@ def content_type_for(path: Path) -> str:
     mime = {
         ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".m4b": "audio/mp4", ".ogg": "audio/ogg",
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".jfif": "image/jpeg",
+        ".txt": "text/plain; charset=utf-8",
     }
     return mime.get(path.suffix.lower(), "application/octet-stream")
 
@@ -272,6 +279,8 @@ def publish_one(
 
     audio_path = find_audio(folder)
     image_path = find_image(folder)
+    text_path = find_story_text_file(folder)
+
     if not audio_path:
         reason = "Не найден аудиофайл (.mp3, .wav, .m4a и т.д.)."
         log_error(f'Папка "{folder_name}". Причина: {reason}')
@@ -280,13 +289,14 @@ def publish_one(
         reason = "Не найдено изображение (.jpg, .jpeg, .png, .webp, .gif, .jfif)."
         log_error(f'Папка "{folder_name}". Причина: {reason}')
         return False, reason
-    report(f"  Аудио: {audio_path.name}, обложка: {image_path.name}")
+    report(f"  Аудио: {audio_path.name}, обложка: {image_path.name}" + (f", текст: {text_path.name}" if text_path else ", текст: не найден"))
 
     report("  Загрузка аудио в R2...")
     prefix = f"{int(time.time() * 1000)}"
     safe = re.sub(r"[^\w\-.]", "-", title)[:80]
     audio_key = f"{prefix}-{safe}{audio_path.suffix}"
     image_key = f"{prefix}-{safe}{image_path.suffix}"
+    text_key = f"{prefix}-{safe}-story.txt"
 
     audio_url = upload_file_to_r2(r2_client, audio_path, content_type_for(audio_path), audio_key)
     report("  Аудио в R2: " + (audio_url or "ОШИБКА"))
@@ -298,6 +308,17 @@ def publish_one(
         reason = "Ошибка загрузки медиа в R2."
         log_error(f'Папка "{folder_name}". Причина: {reason}')
         return False, reason
+
+    text_url: str | None = None
+    if text_path:
+        report("  Загрузка текста рассказа в R2 (бэкап)...")
+        text_url = upload_file_to_r2(r2_client, text_path, "text/plain; charset=utf-8", text_key)
+        if text_url:
+            report(f"✅ Текст рассказа успешно сохранен в R2 (для бэкапа): {text_url}")
+        else:
+            report("  ⚠️  Не удалось загрузить текст рассказа в R2.")
+    else:
+        report("  ℹ️  Файл с текстом рассказа не найден, пропускаем загрузку в R2.")
 
     duration = get_audio_duration_seconds(audio_path)
     genres = meta["genres"] or ["Без жанра"]
@@ -316,11 +337,36 @@ def publish_one(
         "duration": duration,
         "is_premium": meta["is_premium"],
     }
+    if text_url:
+        row["text_url"] = text_url
 
     report("  Сохранение в Supabase...")
     try:
         insert_story_to_supabase(supabase_url, supabase_key, row)
         report("  Supabase: запись создана.")
+    except RuntimeError as e:
+        err_str = str(e)
+        # PostgREST возвращает ошибку если колонка text_url ещё не добавлена в таблицу
+        if "text_url" in err_str and text_url:
+            report(
+                "  ⚠️  WARNING: текст рассказа загружен в R2, но в таблице stories нет колонки text_url — "
+                "ссылка не сохранена в БД. Добавьте колонку: ALTER TABLE stories ADD COLUMN text_url TEXT;"
+            )
+            _console(
+                f"[WARNING] Файл загружен в R2 ({text_url}), но в Supabase нет колонки text_url. "
+                "Ссылка не сохранена в БД. Добавьте колонку и перезапустите."
+            )
+            row_without_text_url = {k: v for k, v in row.items() if k != "text_url"}
+            try:
+                insert_story_to_supabase(supabase_url, supabase_key, row_without_text_url)
+                report("  Supabase: запись создана (без text_url).")
+            except Exception as e2:
+                reason = str(e2)
+                log_error(f'Папка "{folder_name}". Причина: {reason}')
+                return False, reason
+        else:
+            log_error(f'Папка "{folder_name}". Причина: {err_str}')
+            return False, err_str
     except Exception as e:
         reason = str(e)
         log_error(f'Папка "{folder_name}". Причина: {reason}')
