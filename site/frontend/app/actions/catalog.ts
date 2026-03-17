@@ -115,7 +115,7 @@ export async function getTop100Stories(): Promise<Story[]> {
 }
 
 /** Инкремент счётчика прослушиваний у рассказа (при открытии страницы или при нажатии Play). */
-export async function incrementListensCount(storyId: number): Promise<void> {
+export async function incrementListensCount(storyId: string | number): Promise<void> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data: row } = await supabase

@@ -28,18 +28,19 @@ function slugFromTitle(title: string): string {
 export function mapRowToStory(row: StoryRow): Story {
   const genres = Array.isArray(row.genres) ? row.genres : row.genre ? [row.genre] : [];
   const tagList = Array.isArray(row.tags) ? row.tags : [];
-  const rawId = row.id as unknown;
+  const rawIdVal = row.id as unknown;
+  const rawId = String(rawIdVal);
   let id = 0;
-  if (typeof rawId === 'number' && Number.isFinite(rawId)) {
-    id = rawId;
-  } else if (typeof rawId === 'string') {
-    const numeric = Number(rawId);
+  if (typeof rawIdVal === 'number' && Number.isFinite(rawIdVal)) {
+    id = rawIdVal;
+  } else if (typeof rawIdVal === 'string') {
+    const numeric = Number(rawIdVal);
     if (Number.isFinite(numeric)) {
       id = numeric;
     } else {
       let hash = 0;
-      for (let i = 0; i < rawId.length; i += 1) {
-        hash = (hash * 31 + rawId.charCodeAt(i)) >>> 0;
+      for (let i = 0; i < rawIdVal.length; i += 1) {
+        hash = (hash * 31 + rawIdVal.charCodeAt(i)) >>> 0;
       }
       id = hash || 1;
     }
@@ -49,6 +50,7 @@ export function mapRowToStory(row: StoryRow): Story {
   const slug = safeSlug || `${generatedSlug}-${id}`;
   return {
     id,
+    rawId,
     slug,
     title: String(row.title ?? ''),
     description: String(row.description ?? ''),

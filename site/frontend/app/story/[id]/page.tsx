@@ -90,10 +90,11 @@ export default function StoryPage() {
   }, [idParam]);
 
   useEffect(() => {
-    if (!story || typeof story.id !== 'number' || useDjangoApi() || hasIncrementedView.current) return;
+    if (!story || useDjangoApi() || hasIncrementedView.current) return;
     hasIncrementedView.current = true;
-    incrementListensCount(story.id).catch(() => { });
-  }, [story?.id]);
+    const dbId = story.rawId ?? story.id;
+    incrementListensCount(dbId).catch(() => {});
+  }, [story?.id, story?.rawId]);
 
   useEffect(() => {
     if (!story || typeof story.id !== 'number' || !useDjangoApi() || !process.env.NEXT_PUBLIC_API_URL) return;

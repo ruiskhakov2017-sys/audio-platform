@@ -174,7 +174,8 @@ export function EditStoryDrawer({ story, onClose, onSaved }: EditStoryDrawerProp
       if (imageUrl) payload.image_url = imageUrl;
       if (finalAudioUrl) payload.audio_url = finalAudioUrl;
 
-      const result = await updateStory(story.id, payload);
+      const dbId = story.rawId ?? String(story.id);
+      const result = await updateStory(dbId, payload);
       if (result.success) {
         toast.success('Изменения сохранены');
         onClose();

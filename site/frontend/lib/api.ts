@@ -30,6 +30,7 @@ export function mapDjangoStoryToStory(row: DjangoStory): Story {
   const genres = row.genre ? [row.genre.name] : [];
   return {
     id: row.id,
+    rawId: String(row.id),
     slug: row.slug,
     title: row.title,
     description: row.description ?? '',

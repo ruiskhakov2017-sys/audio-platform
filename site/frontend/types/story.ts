@@ -1,5 +1,7 @@
 export type Story = {
   id: number;
+  /** Исходный id из БД (UUID или число) — для update/delete в Supabase */
+  rawId?: string;
   slug: string;
   title: string;
   description: string;

@@ -92,7 +92,7 @@ export type UpdateStoryPayload = {
 
 export type UpdateStoryResult = { success: true } | { success: false; error: string };
 
-export async function updateStory(id: number, payload: UpdateStoryPayload): Promise<UpdateStoryResult> {
+export async function updateStory(id: string | number, payload: UpdateStoryPayload): Promise<UpdateStoryResult> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     return { success: false, error: 'Supabase не настроен' };
   }
@@ -125,7 +125,7 @@ export async function updateStoryGenresAndTags(
 
 export type DeleteStoryResult = { success: true } | { success: false; error: string };
 
-export async function deleteStory(id: number): Promise<DeleteStoryResult> {
+export async function deleteStory(id: string | number): Promise<DeleteStoryResult> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     return { success: false, error: 'Supabase не настроен' };
   }

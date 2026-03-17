@@ -48,13 +48,14 @@ export default function AdminStoriesPage() {
     return true;
   });
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (story: Story) => {
     if (!confirm('Удалить эту историю? Файл в R2 тоже будет удалён.')) return;
-    setDeletingId(id);
-    const res = await deleteStory(id);
+    const dbId = story.rawId ?? String(story.id);
+    setDeletingId(story.id);
+    const res = await deleteStory(dbId);
     setDeletingId(null);
     if (res.success) {
-      setList((prev) => prev.filter((s) => s.id !== id));
+      setList((prev) => prev.filter((s) => (s.rawId ?? String(s.id)) !== dbId));
     } else {
       alert(res.error);
     }
@@ -167,7 +168,7 @@ export default function AdminStoriesPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDelete(story.id)}
+                        onClick={() => handleDelete(story)}
                         disabled={deletingId === story.id}
                         className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-600 text-zinc-400 hover:text-rose-400 hover:border-rose-500/50 hover:bg-rose-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                         aria-label="Удалить"
