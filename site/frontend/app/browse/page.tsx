@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal, LayoutTemplate, MousePointer2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { FilterSidebar } from '@/components/browse/FilterSidebar';
 import { MobileFilterDrawer } from '@/components/ui/MobileFilterDrawer';
@@ -119,6 +119,9 @@ const SEARCH_PARAM = 'search';
 const TAG_PARAM = 'tag';
 
 type ViewMode = 'genres' | 'list';
+type DisplayMode = 'loadMore' | 'pagination';
+
+const ITEMS_PER_PAGE = 24;
 
 function getGenreTestStyle(index: number): string {
   // Always return classic white style
@@ -146,7 +149,9 @@ export default function BrowsePage() {
     searchParams.get(SEARCH_PARAM) || ''
   );
   const [activeSort, setActiveSort] = useState<SortKey>('popular');
-  const [visibleCount, setVisibleCount] = useState(20);
+  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('loadMore');
+  const [currentPage, setCurrentPage] = useState(1);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [list, setList] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
@@ -226,7 +231,8 @@ export default function BrowsePage() {
   }, [list, activeGenre, selectedTag, searchQuery, accessFilter, activeSort, likedIds]);
 
   useEffect(() => {
-    setVisibleCount(20);
+    setVisibleCount(ITEMS_PER_PAGE);
+    setCurrentPage(1);
   }, [activeGenre, selectedTag, searchQuery, activeSort, accessFilter]);
 
   const handleResetFilters = () => {
@@ -258,19 +264,23 @@ export default function BrowsePage() {
     .filter(Boolean)
     .join(' + ');
 
-  const displayedStories = useMemo(
-    () =>
-      filteredStories.slice(0, visibleCount).map((s) => ({
-        id: s.id,
-        title: s.title,
-        coverImage: s.coverImage,
-        category: getDisplayTags(s)[0] || 'Аудио',
-        price: s.isPremium ? 190 : undefined,
-        isPremium: s.isPremium,
-        story: s,
-      })),
-    [filteredStories, visibleCount]
-  );
+  const totalPages = Math.ceil(filteredStories.length / ITEMS_PER_PAGE);
+
+  const displayedStories = useMemo(() => {
+    const slice =
+      displayMode === 'pagination'
+        ? filteredStories.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+        : filteredStories.slice(0, visibleCount);
+    return slice.map((s) => ({
+      id: s.id,
+      title: s.title,
+      coverImage: s.coverImage,
+      category: getDisplayTags(s)[0] || 'Аудио',
+      price: s.isPremium ? 190 : undefined,
+      isPremium: s.isPremium,
+      story: s,
+    }));
+  }, [filteredStories, visibleCount, displayMode, currentPage]);
 
   // Scroll glow для карточек рассказов на мобильных в list-режиме
   useEffect(() => {
@@ -516,8 +526,48 @@ export default function BrowsePage() {
                       Ко всем жанрам
                     </button>
                   )}
-                  <div className="text-zinc-500 text-sm mb-4">
-                    Показано {Math.min(visibleCount, filteredStories.length)} из {filteredStories.length} историй
+
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-zinc-500 text-sm">
+                      {displayMode === 'pagination'
+                        ? `Страница ${currentPage} из ${totalPages || 1} · ${filteredStories.length} историй`
+                        : `Показано ${Math.min(visibleCount, filteredStories.length)} из ${filteredStories.length} историй`}
+                    </div>
+
+                    <div
+                      className="flex items-center rounded-lg overflow-hidden border border-white/10 bg-white/5"
+                      role="group"
+                      aria-label="Режим просмотра"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => { setDisplayMode('loadMore'); setCurrentPage(1); }}
+                        aria-pressed={displayMode === 'loadMore'}
+                        aria-label="Режим «Показать ещё»"
+                        className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
+                          displayMode === 'loadMore'
+                            ? 'bg-[#00B4D8]/20 text-[#00B4D8] shadow-[0_0_15px_rgba(0,180,216,0.3)]'
+                            : 'text-gray-400 hover:text-white bg-white/5'
+                        }`}
+                      >
+                        <MousePointer2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Листать</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setDisplayMode('pagination'); setCurrentPage(1); }}
+                        aria-pressed={displayMode === 'pagination'}
+                        aria-label="Режим постраничной навигации"
+                        className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
+                          displayMode === 'pagination'
+                            ? 'bg-[#00B4D8]/20 text-[#00B4D8] shadow-[0_0_15px_rgba(0,180,216,0.3)]'
+                            : 'text-gray-400 hover:text-white bg-white/5'
+                        }`}
+                      >
+                        <LayoutTemplate className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Страницы</span>
+                      </button>
+                    </div>
                   </div>
 
                   {loading ? (
@@ -560,14 +610,68 @@ export default function BrowsePage() {
                           <StoryTile key={item.id} {...item} />
                         ))}
                       </div>
-                      {visibleCount < filteredStories.length && (
+
+                      {displayMode === 'loadMore' && visibleCount < filteredStories.length && (
                         <div className="mt-8 flex justify-center">
                           <button
                             type="button"
-                            onClick={() => setVisibleCount((prev) => prev + 20)}
+                            onClick={() => setVisibleCount((prev) => prev + ITEMS_PER_PAGE)}
                             className="w-full max-w-md py-4 text-lg font-medium text-white rounded-full border border-white/20 hover:bg-white/10 transition"
                           >
-                            Показать еще ({filteredStories.length - visibleCount})
+                            Показать ещё ({filteredStories.length - visibleCount})
+                          </button>
+                        </div>
+                      )}
+
+                      {displayMode === 'pagination' && totalPages > 1 && (
+                        <div className="flex justify-center items-center gap-2 mt-8 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => { setCurrentPage((p) => Math.max(1, p - 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                            disabled={currentPage === 1}
+                            aria-label="Предыдущая страница"
+                            className="w-10 h-10 rounded-lg flex items-center justify-center bg-white/5 border border-white/10 text-zinc-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+
+                          {Array.from({ length: totalPages }, (_, i) => i + 1)
+                            .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                            .reduce<(number | '…')[]>((acc, p, idx, arr) => {
+                              if (idx > 0 && p - (arr[idx - 1] as number) > 1) acc.push('…');
+                              acc.push(p);
+                              return acc;
+                            }, [])
+                            .map((p, idx) =>
+                              p === '…' ? (
+                                <span key={`ellipsis-${idx}`} className="w-10 h-10 flex items-center justify-center text-zinc-500 text-sm select-none">
+                                  …
+                                </span>
+                              ) : (
+                                <button
+                                  key={p}
+                                  type="button"
+                                  onClick={() => { setCurrentPage(p as number); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                                  aria-current={currentPage === p ? 'page' : undefined}
+                                  className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm transition-all ${
+                                    currentPage === p
+                                      ? 'bg-[#00B4D8] text-black shadow-[0_0_20px_rgba(0,180,216,0.5)]'
+                                      : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white hover:bg-white/10'
+                                  }`}
+                                >
+                                  {p}
+                                </button>
+                              )
+                            )}
+
+                          <button
+                            type="button"
+                            onClick={() => { setCurrentPage((p) => Math.min(totalPages, p + 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                            disabled={currentPage === totalPages}
+                            aria-label="Следующая страница"
+                            className="w-10 h-10 rounded-lg flex items-center justify-center bg-white/5 border border-white/10 text-zinc-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                          >
+                            <ChevronRight className="w-4 h-4" />
                           </button>
                         </div>
                       )}
