@@ -15,7 +15,7 @@ import { useAuthStore } from '@/store/authStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
 import { fetchReviewsByStoryId, submitReviewApi, type ReviewItem } from '@/lib/reviewsApi';
 import { toast } from 'sonner';
-import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star, ArrowLeft } from 'lucide-react';
+import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star, ArrowLeft, ThumbsUp, Flag, X } from 'lucide-react';
 import type { Story } from '@/types/story';
 
 const formatDuration = (value: number) => {
@@ -38,6 +38,45 @@ function getSimilarStories(current: Story, all: Story[], limit: number): Story[]
 
 const DESCRIPTION_LINE_CLAMP = 4;
 const TEST_AUDIO_SRC = '/audio/test.mp3';
+const AUTH_REQUIRED_MSG =
+  'Пожалуйста, войдите в аккаунт или зарегистрируйтесь, чтобы оставлять отзывы и оценивать рассказы';
+
+const MOCK_REVIEWS = [
+  {
+    id: 'mock-1',
+    name: 'Анна К.',
+    initials: 'АК',
+    gradient: 'from-violet-500 to-purple-600',
+    rating: 5,
+    text: 'Атмосфера просто невероятная! Голос рассказчика затягивает с первых секунд. Слушала поздно вечером — мурашки по коже. Один из лучших рассказов на платформе.',
+    date: '14 марта 2026',
+  },
+  {
+    id: 'mock-2',
+    name: 'Михаил В.',
+    initials: 'МВ',
+    gradient: 'from-cyan-500 to-blue-600',
+    rating: 4,
+    text: 'Хорошая озвучка, сюжет держит интригу до конца. Немного не хватило финала, но в целом очень достойно. Рекомендую любителям жанра.',
+    date: '10 марта 2026',
+  },
+  {
+    id: 'mock-3',
+    name: 'Елена Р.',
+    initials: 'ЕР',
+    gradient: 'from-rose-500 to-pink-600',
+    rating: 5,
+    text: 'Переслушала уже трижды. Потрясающая работа! Хочется, чтобы таких рассказов было больше.',
+    date: '5 марта 2026',
+  },
+];
+
+const REPORT_REASONS = [
+  { value: 'spam', label: 'Спам' },
+  { value: 'inappropriate', label: 'Неприемлемый контент' },
+  { value: 'audio_error', label: 'Ошибка озвучки' },
+  { value: 'other', label: 'Другое' },
+];
 
 export default function StoryPage() {
   const params = useParams<{ id: string }>();
@@ -48,6 +87,11 @@ export default function StoryPage() {
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [reviewForm, setReviewForm] = useState({ rating: 5, text: '' });
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [likeCount, setLikeCount] = useState(245);
+  const [liked, setLiked] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportForm, setReportForm] = useState({ reason: 'spam', details: '' });
+  const [submittingReport, setSubmittingReport] = useState(false);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const hasIncrementedView = useRef(false);
 
@@ -159,6 +203,80 @@ export default function StoryPage() {
     seek(pct * displayDuration);
   };
 
+  const handleLike = () => {
+    if (!isAuthenticated) {
+      toast.error(AUTH_REQUIRED_MSG);
+      return;
+    }
+    setLiked((prev) => !prev);
+    setLikeCount((prev) => (liked ? prev - 1 : prev + 1));
+  };
+
+  const handleReport = () => {
+    if (!isAuthenticated) {
+      toast.error(AUTH_REQUIRED_MSG);
+      return;
+    }
+    setReportModalOpen(true);
+  };
+
+  const handleSubmitReport = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmittingReport(true);
+    console.log('Жалоба:', { story: story?.id, ...reportForm });
+    setTimeout(() => {
+      setSubmittingReport(false);
+      setReportModalOpen(false);
+      setReportForm({ reason: 'spam', details: '' });
+      toast.success('Жалоба отправлена модераторам');
+    }, 600);
+  };
+
+  const handleShare = async () => {
+    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const shareData = {
+      title: story?.title ?? '',
+      text: `Слушай рассказ: ${story?.title ?? ''}`,
+      url: shareUrl,
+    };
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+      if (typeof navigator !== 'undefined' && navigator.clipboard && shareUrl) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast.success('Ссылка скопирована');
+      }
+    } catch {
+      toast.error('Не удалось поделиться');
+    }
+  };
+
+  const handleSubmitReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAuthenticated) {
+      toast.error(AUTH_REQUIRED_MSG);
+      return;
+    }
+    if (!story || submittingReview) return;
+    setSubmittingReview(true);
+    const result = await submitReviewApi({
+      story: Number(story.id),
+      rating: reviewForm.rating,
+      text: reviewForm.text.trim(),
+    });
+    setSubmittingReview(false);
+    if ('error' in result) {
+      toast.error(result.error);
+      return;
+    }
+    setReviews((prev) => [result, ...prev]);
+    setReviewForm({ rating: 5, text: '' });
+    toast.success('Отзыв добавлен');
+  };
+
   if (story === undefined) {
     return (
       <div className="min-h-screen bg-[#000814]">
@@ -188,46 +306,8 @@ export default function StoryPage() {
   const avgRating = reviews.length > 0
     ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length
     : 0;
-  const handleSubmitReview = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!story || submittingReview || !isAuthenticated) return;
-    setSubmittingReview(true);
-    const result = await submitReviewApi({
-      story: Number(story.id),
-      rating: reviewForm.rating,
-      text: reviewForm.text.trim(),
-    });
-    setSubmittingReview(false);
-    if ('error' in result) {
-      toast.error(result.error);
-      return;
-    }
-    setReviews((prev) => [result, ...prev]);
-    setReviewForm({ rating: 5, text: '' });
-    toast.success('Отзыв добавлен');
-  };
 
-  const handleShare = async () => {
-    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
-    const shareData = {
-      title: story.title,
-      text: `Слушай рассказ: ${story.title}`,
-      url: shareUrl,
-    };
-
-    try {
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        await navigator.share(shareData);
-        return;
-      }
-      if (typeof navigator !== 'undefined' && navigator.clipboard && shareUrl) {
-        await navigator.clipboard.writeText(shareUrl);
-        toast.success('Ссылка скопирована');
-      }
-    } catch {
-      toast.error('Не удалось поделиться');
-    }
-  };
+  const displayedReviews = reviews.length > 0 ? reviews : null;
 
   return (
     <div className="min-h-screen bg-[#000814] text-white">
@@ -258,9 +338,8 @@ export default function StoryPage() {
         </button>
 
         <div className="max-w-[95%] mx-auto mt-8 md:mt-0">
-          {/* Split: слева фото, справа текст + Play. Чистый минимализм. */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
-            {/* Колонка слева — обложка, острые углы (Hidden on mobile to fix layout order) */}
+            {/* Колонка слева — обложка */}
             <div className="hidden lg:block w-full max-w-[550px] md:max-w-[650px] mx-auto lg:max-w-none lg:mx-0 sticky top-32">
               <div className="relative w-full aspect-[3/4] rounded-sm overflow-hidden shadow-2xl">
                 <Image
@@ -275,16 +354,15 @@ export default function StoryPage() {
               </div>
             </div>
 
-            {/* Колонка справа — на чёрном фоне, без карточек */}
+            {/* Колонка справа */}
             <div className="flex flex-col gap-6 pt-4">
-              {/* 1. Заголовок (H1) - Самый главный элемент */}
+              {/* Заголовок */}
               <h1 className="font-heading text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight">
                 {story.title}
               </h1>
 
-              {/* 2. Жанры и Теги */}
+              {/* Жанры и Теги */}
               <div className="flex flex-col gap-3">
-                {/* Жанры - Яркие плашки */}
                 <div className="flex flex-wrap gap-2">
                   {getDisplayTags(story).slice(0, 3).map((tag) => (
                     <Link
@@ -296,8 +374,6 @@ export default function StoryPage() {
                     </Link>
                   ))}
                 </div>
-
-                {/* Теги - Хештеги */}
                 <div className="flex flex-wrap gap-x-3 gap-y-1">
                   {getDisplayTags(story).slice(3).map((tag) => (
                     <Link
@@ -311,7 +387,7 @@ export default function StoryPage() {
                 </div>
               </div>
 
-              {/* Mobile Image: Visible only on mobile, inserted here to match requested order */}
+              {/* Мобильная обложка */}
               <div className="block lg:hidden w-full max-w-[550px] mx-auto mb-2">
                 <div className="relative w-full aspect-[3/4] rounded-sm overflow-hidden shadow-2xl">
                   <Image
@@ -326,6 +402,7 @@ export default function StoryPage() {
                 </div>
               </div>
 
+              {/* Рейтинг + Action Bar */}
               <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
                 <div>
                   {reviews.length > 0 && (
@@ -343,7 +420,10 @@ export default function StoryPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Кнопки действий */}
                 <div className="flex items-center gap-1">
+                  {/* В избранное */}
                   <button
                     type="button"
                     onClick={async () => {
@@ -365,17 +445,51 @@ export default function StoryPage() {
                       fill={isFavorite ? 'currentColor' : 'none'}
                     />
                   </button>
+
+                  {/* Лайк */}
+                  <button
+                    type="button"
+                    onClick={handleLike}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-full transition-all ${
+                      liked
+                        ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                        : 'text-zinc-500 hover:text-white hover:bg-white/10'
+                    }`}
+                    aria-label="Лайк"
+                  >
+                    <ThumbsUp
+                      className="w-4 h-4"
+                      strokeWidth={1.5}
+                      fill={liked ? 'currentColor' : 'none'}
+                    />
+                    <span className="text-xs font-medium tabular-nums">{likeCount}</span>
+                  </button>
+
+                  {/* Поделиться */}
                   <button
                     type="button"
                     onClick={handleShare}
-                    className="p-2 text-zinc-500 hover:text-[#00B4D8] transition-colors cursor-pointer"
+                    className="p-2 text-zinc-500 hover:text-[#00B4D8] transition-colors cursor-pointer rounded-full hover:bg-white/10"
                     aria-label="Поделиться"
                   >
                     <Share2 className="w-5 h-5" strokeWidth={1.5} />
                   </button>
+
+                  {/* Пожаловаться — менее броская */}
+                  <button
+                    type="button"
+                    onClick={handleReport}
+                    className="ml-2 flex items-center gap-1.5 px-2.5 py-2 rounded-full text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition-all"
+                    aria-label="Пожаловаться"
+                    title="Пожаловаться"
+                  >
+                    <Flag className="w-4 h-4" strokeWidth={1.5} />
+                    <span className="text-xs hidden sm:inline">Жалоба</span>
+                  </button>
                 </div>
               </div>
-              {/* Кнопка Play - Большая и заметная */}
+
+              {/* Кнопка Play */}
               <div className="flex gap-4 mt-2">
                 <button
                   onClick={handlePlay}
@@ -412,69 +526,96 @@ export default function StoryPage() {
                   </button>
                 )}
               </div>
-            </div>
 
-            {/* Отзывы — только при наличии API */}
-            {process.env.NEXT_PUBLIC_API_URL && (
-              <section className="mt-12">
-                <h2 className="font-heading text-xl font-bold text-white mb-4">Отзывы</h2>
-                {isAuthenticated && (
-                  <form onSubmit={handleSubmitReview} className="mb-8">
-                    <div className="flex flex-wrap gap-4 items-center mb-3">
-                      <label className="text-zinc-400 text-sm">Оценка:</label>
-                      <div className="flex gap-1">
-                        {[1, 2, 3, 4, 5].map((i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => setReviewForm((f) => ({ ...f, rating: i }))}
-                            className={`p-1 rounded ${reviewForm.rating >= i ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`}
-                            aria-label={`Оценка ${i}`}
-                          >
-                            <Star className="w-5 h-5" strokeWidth={1.5} fill={reviewForm.rating >= i ? 'currentColor' : 'none'} />
-                          </button>
-                        ))}
-                      </div>
+              {/* ────────── ОТЗЫВЫ ────────── */}
+              <div className="mt-4">
+                <div className="h-px bg-white/10 mb-8" />
+                <h2 className="font-heading text-2xl font-bold text-white mb-6">Отзывы</h2>
+
+                {/* Форма — всегда видна */}
+                <form onSubmit={handleSubmitReview} className="mb-10">
+                  <div className="flex flex-wrap gap-4 items-center mb-3">
+                    <label className="text-zinc-400 text-sm">Оценка:</label>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setReviewForm((f) => ({ ...f, rating: i }))}
+                          className={`p-1 rounded ${reviewForm.rating >= i ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`}
+                          aria-label={`Оценка ${i}`}
+                        >
+                          <Star className="w-5 h-5" strokeWidth={1.5} fill={reviewForm.rating >= i ? 'currentColor' : 'none'} />
+                        </button>
+                      ))}
                     </div>
-                    <textarea
-                      value={reviewForm.text}
-                      onChange={(e) => setReviewForm((f) => ({ ...f, text: e.target.value }))}
-                      placeholder="Текст отзыва (необязательно)"
-                      className="w-full max-w-md rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-zinc-500 focus:border-[#00B4D8]/50 focus:outline-none resize-y min-h-[80px]"
-                      rows={3}
-                    />
-                    <button
-                      type="submit"
-                      disabled={submittingReview}
-                      className="mt-3 px-5 py-2.5 rounded-full bg-[#00B4D8] text-black font-medium hover:bg-[#00B4D8]/90 disabled:opacity-50"
-                    >
-                      {submittingReview ? 'Отправка...' : 'Отправить отзыв'}
-                    </button>
-                  </form>
-                )}
-                <ul className="space-y-4">
-                  {reviews.map((r) => (
-                    <li key={r.id} className="border-b border-white/10 pb-4 last:border-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-zinc-400 text-sm">{r.user_email}</span>
-                        <span className="flex gap-0.5">
-                          {[1, 2, 3, 4, 5].map((i) => (
-                            <Star key={i} className={`w-4 h-4 ${i <= r.rating ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`} strokeWidth={1.5} />
-                          ))}
-                        </span>
-                        <span className="text-zinc-500 text-xs">{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>
-                      </div>
-                      {r.text && <p className="text-zinc-300 text-sm">{r.text}</p>}
-                    </li>
-                  ))}
+                  </div>
+                  <textarea
+                    value={reviewForm.text}
+                    onChange={(e) => setReviewForm((f) => ({ ...f, text: e.target.value }))}
+                    placeholder={isAuthenticated ? 'Напишите отзыв...' : 'Войдите, чтобы оставить отзыв...'}
+                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-zinc-500 focus:border-[#00B4D8]/50 focus:outline-none resize-y min-h-[90px] transition-colors"
+                    rows={3}
+                  />
+                  <button
+                    type="submit"
+                    disabled={submittingReview}
+                    className="mt-3 px-6 py-2.5 rounded-full bg-[#00B4D8] text-black font-semibold hover:bg-[#00B4D8]/90 disabled:opacity-50 transition-all"
+                  >
+                    {submittingReview ? 'Отправка...' : 'Отправить отзыв'}
+                  </button>
+                </form>
+
+                {/* Список отзывов */}
+                <ul className="space-y-5">
+                  {displayedReviews
+                    ? displayedReviews.map((r) => (
+                        <li key={r.id} className="flex gap-4 pb-5 border-b border-white/10 last:border-0">
+                          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center text-xs font-bold text-white">
+                            {r.user_email.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="text-white text-sm font-medium">{r.user_email}</span>
+                              <span className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map((i) => (
+                                  <Star key={i} className={`w-3.5 h-3.5 ${i <= r.rating ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`} strokeWidth={1.5} />
+                                ))}
+                              </span>
+                              <span className="text-zinc-500 text-xs">{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>
+                            </div>
+                            {r.text && <p className="text-zinc-300 text-sm leading-relaxed">{r.text}</p>}
+                          </div>
+                        </li>
+                      ))
+                    : MOCK_REVIEWS.map((r) => (
+                        <li key={r.id} className="flex gap-4 pb-5 border-b border-white/10 last:border-0">
+                          <div className={`flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br ${r.gradient} flex items-center justify-center text-xs font-bold text-white`}>
+                            {r.initials}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="text-white text-sm font-medium">{r.name}</span>
+                              <span className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map((i) => (
+                                  <Star key={i} className={`w-3.5 h-3.5 ${i <= r.rating ? 'text-amber-400 fill-amber-400' : 'text-zinc-600'}`} strokeWidth={1.5} />
+                                ))}
+                              </span>
+                              <span className="text-zinc-500 text-xs">{r.date}</span>
+                            </div>
+                            <p className="text-zinc-300 text-sm leading-relaxed">{r.text}</p>
+                          </div>
+                        </li>
+                      ))
+                  }
                 </ul>
-                {reviews.length === 0 && <p className="text-zinc-500 text-sm">Пока нет отзывов.</p>}
-              </section>
-            )}
+              </div>
+              {/* ────────── /ОТЗЫВЫ ────────── */}
+            </div>
           </div>
         </div>
 
-        {/* Похожие истории — на всю ширину под гридом */}
+        {/* Похожие истории */}
         <section className="mt-32 px-4 md:px-8 lg:px-12 xl:px-16">
           <h2 className="font-heading text-3xl md:text-4xl text-white text-center mb-12">
             Вам может понравиться
@@ -494,11 +635,7 @@ export default function StoryPage() {
                   unoptimized
                   sizes="(max-width: 768px) 50vw, 25vw"
                 />
-                
-                {/* Gradient Overlay */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
-                
-                {/* Content */}
                 <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col gap-2 transform transition-transform duration-300 group-hover:-translate-y-1">
                   <span className="inline-flex w-max px-2.5 py-1 rounded-md bg-white/10 backdrop-blur-md border border-white/20 text-[#00B4D8] text-[10px] md:text-xs uppercase tracking-wider font-semibold">
                     {getDisplayTags(s)[0] || 'Аудио'}
@@ -517,11 +654,11 @@ export default function StoryPage() {
               className="group inline-flex items-center justify-center gap-3 px-8 py-3 rounded-full bg-white/[0.03] backdrop-blur-md border border-white/10 transition-all duration-300 hover:bg-[#00B4D8]/10 hover:border-[#00B4D8]/50 hover:shadow-[0_0_20px_rgba(0,180,216,0.3)] hover:-translate-y-0.5"
             >
               <span className="text-white/80 font-semibold uppercase tracking-widest text-sm transition-colors duration-300 group-hover:text-[#00B4D8]">Смотреть весь каталог</span>
-              <svg 
-                className="w-4 h-4 text-white/80 transition-all duration-300 group-hover:translate-x-1.5 group-hover:text-[#00B4D8]" 
-                fill="none" 
-                stroke="currentColor" 
-                viewBox="0 0 24 24" 
+              <svg
+                className="w-4 h-4 text-white/80 transition-all duration-300 group-hover:translate-x-1.5 group-hover:text-[#00B4D8]"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
                 aria-hidden
               >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
@@ -530,6 +667,90 @@ export default function StoryPage() {
           </div>
         </section>
       </main>
+
+      {/* ────────── МОДАЛЬНОЕ ОКНО ЖАЛОБЫ ────────── */}
+      {reportModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="report-modal-title"
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setReportModalOpen(false)}
+          />
+
+          {/* Modal */}
+          <div className="relative z-10 w-full max-w-md bg-[#0d1b2a] border border-white/10 rounded-2xl shadow-2xl p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h2 id="report-modal-title" className="text-white font-bold text-lg">
+                Жалоба на материал
+              </h2>
+              <button
+                type="button"
+                onClick={() => setReportModalOpen(false)}
+                className="p-1.5 rounded-full text-zinc-500 hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Закрыть"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitReport} className="flex flex-col gap-4">
+              <div>
+                <label htmlFor="report-reason" className="block text-zinc-400 text-sm mb-2">
+                  Причина жалобы
+                </label>
+                <select
+                  id="report-reason"
+                  value={reportForm.reason}
+                  onChange={(e) => setReportForm((f) => ({ ...f, reason: e.target.value }))}
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white focus:border-[#00B4D8]/50 focus:outline-none appearance-none cursor-pointer"
+                >
+                  {REPORT_REASONS.map((r) => (
+                    <option key={r.value} value={r.value} className="bg-[#0d1b2a]">
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="report-details" className="block text-zinc-400 text-sm mb-2">
+                  Подробности <span className="text-zinc-600">(необязательно)</span>
+                </label>
+                <textarea
+                  id="report-details"
+                  value={reportForm.details}
+                  onChange={(e) => setReportForm((f) => ({ ...f, details: e.target.value }))}
+                  placeholder="Опишите проблему подробнее..."
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-zinc-500 focus:border-[#00B4D8]/50 focus:outline-none resize-none min-h-[100px] transition-colors"
+                  rows={4}
+                />
+              </div>
+
+              <div className="flex gap-3 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setReportModalOpen(false)}
+                  className="flex-1 px-4 py-2.5 rounded-full border border-white/10 text-zinc-400 hover:text-white hover:border-white/30 transition-all text-sm font-medium"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingReport}
+                  className="flex-1 px-4 py-2.5 rounded-full bg-red-500/80 hover:bg-red-500 text-white font-semibold text-sm disabled:opacity-50 transition-all"
+                >
+                  {submittingReport ? 'Отправка...' : 'Отправить'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
