@@ -80,7 +80,7 @@ export async function getStoriesForBrowse(filter: BrowseFilter): Promise<Story[]
       query = query.order('created_at', { ascending: false });
   }
 
-  const { data, error } = await query.limit(500);
+  const { data, error } = await query.limit(50000);
   if (error) return [];
   return (data ?? []).map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
 }
