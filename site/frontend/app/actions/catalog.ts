@@ -15,7 +15,8 @@ export async function getStoriesForCatalog(): Promise<Story[]> {
   const { data, error } = await supabase
     .from('stories')
     .select('*')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(50000);
   if (error || !data) return [];
   return data.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
 }
