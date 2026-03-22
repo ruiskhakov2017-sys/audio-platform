@@ -12,13 +12,21 @@ const SUPABASE_SERVICE_KEY =
 export async function getStoriesForCatalog(): Promise<Story[]> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return [];
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const { data, error } = await supabase
-    .from('stories')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50000);
-  if (error || !data) return [];
-  return data.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
+  const PAGE_SIZE = 1000;
+  const all: Story[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('stories')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data) break;
+    all.push(...data.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0])));
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
 }
 
 /** Топ-12 по прослушиваниям (listens_count desc, created_at desc). Если колонки listens_count нет или все 0 — по дате добавления. */
@@ -81,9 +89,17 @@ export async function getStoriesForBrowse(filter: BrowseFilter): Promise<Story[]
       query = query.order('created_at', { ascending: false });
   }
 
-  const { data, error } = await query.limit(50000);
-  if (error) return [];
-  return (data ?? []).map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
+  const PAGE_SIZE = 1000;
+  const all: Story[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if (error || !data) break;
+    all.push(...data.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0])));
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
 }
 
 /** Список жанров для Топ-100 (топ 3 по listens_count в каждом). */
