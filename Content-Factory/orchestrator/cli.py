@@ -551,8 +551,11 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             print(f"exported={exp.get('exported')} skipped={exp.get('skipped')}")
             print(f"waiting_for_mp3={exp.get('exported')}")
             if int(exp.get("exported", 0) or 0) <= 0:
-                print("nothing to wait/import")
-                return 0
+                print("No prepared output/site stories found.")
+                print("This is a TTS-only command.")
+                print("For raw input stories, run:")
+                print("[S] Full Site pipeline with Kokoro Google Drive TTS")
+                return 2
             try:
                 res = wait_drive_mp3_and_import(
                     cfg.root_dir,

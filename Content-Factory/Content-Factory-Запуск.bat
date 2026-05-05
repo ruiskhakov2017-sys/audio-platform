@@ -18,6 +18,7 @@ echo   Content-Factory: Main Menu
 echo ============================================================
 echo.
 echo [1] Run full Site pipeline
+echo [S] Full Site pipeline with Kokoro Google Drive TTS
 echo [2] Run full YouTube pipeline
 echo.
 echo [3] Run individual Site stages
@@ -27,7 +28,7 @@ echo [6] Run preflight
 echo [7] Open reports folder
 echo [8] Open logs and status files
 echo [9] Cleanup / quarantine menu
-echo [S] Run only Phase B ^(scaffold, not production^)
+echo [X] Run only Phase B ^(scaffold, not production^)
 echo [R] Resume Site pipeline after manual steps
 echo [T] Toggle Phase A limit ^(current: %PHASE_A_LIMIT_LABEL%^)
 echo [K] Site TTS ^(Kokoro^): dry-run / queue
@@ -37,6 +38,7 @@ echo.
 set /p MAIN_CHOICE=Select menu item: 
 if /I "%MAIN_CHOICE%"=="T" goto :TOGGLE_PHASE_A_LIMIT_MODE
 if "%MAIN_CHOICE%"=="1" goto :RUN_SITE_PIPELINE
+if /I "%MAIN_CHOICE%"=="S" goto :RUN_SITE_PIPELINE_KOKORO_DRIVE
 if "%MAIN_CHOICE%"=="2" goto :RUN_YOUTUBE_PIPELINE
 if "%MAIN_CHOICE%"=="3" goto :STAGE_MENU
 if "%MAIN_CHOICE%"=="4" goto :MODES_MENU
@@ -46,7 +48,7 @@ if "%MAIN_CHOICE%"=="6" goto :PREFLIGHT
 if "%MAIN_CHOICE%"=="7" goto :OPEN_REPORTS
 if "%MAIN_CHOICE%"=="8" goto :OPEN_LOGS
 if "%MAIN_CHOICE%"=="9" goto :CLEANUP_MENU
-if /I "%MAIN_CHOICE%"=="S" goto :RUN_SCAFFOLD_PHASE_B
+if /I "%MAIN_CHOICE%"=="X" goto :RUN_SCAFFOLD_PHASE_B
 if /I "%MAIN_CHOICE%"=="R" goto :RESUME_SITE_PIPELINE
 if "%MAIN_CHOICE%"=="0" goto :EOF_EXIT
 goto :MAIN_MENU
@@ -134,6 +136,87 @@ echo Run id: %RUN_ID%
 echo Report: %PIPELINE_REPORT_FILE%
 pause
 goto :MAIN_MENU
+
+:RUN_SITE_PIPELINE_KOKORO_DRIVE
+cls
+echo [RUN] Site: FULL from input with Kokoro Google Drive TTS
+echo.
+set "GEMINI_WORKERS=5"
+call :ASK_STORIES_DIR
+if "%STORIES_DIR%"=="" goto :MAIN_MENU
+set /p RUN_ID=Run id (Enter = site-drive-run): 
+if "%RUN_ID%"=="" set "RUN_ID=site-drive-run"
+echo.
+echo Steps: [1/3] phase-a site  [2/3] phase-b  [3/3] run --pipeline site ^(site_tts_engine=kokoro_colab_drive^)
+choice /c YN /n /m "Confirm? [Y/N]: "
+if errorlevel 2 goto :MAIN_MENU
+echo.
+set "PIPELINE_NAME=site"
+set "PIPELINE_RUN_ID=%RUN_ID%"
+set "PIPELINE_STATUS=running"
+set "PIPELINE_REPORT_DIR=.orchestrator\reports\pipeline_runs"
+set "PIPELINE_REPORT_FILE=%PIPELINE_REPORT_DIR%\%RUN_ID%_site_drive.txt"
+if not exist "%PIPELINE_REPORT_DIR%" mkdir "%PIPELINE_REPORT_DIR%"
+(
+  echo pipeline=site
+  echo run_id=%RUN_ID%
+  echo stories_dir=%STORIES_DIR%
+  echo tts_engine=kokoro_colab_drive
+  echo started=%DATE% %TIME%
+) > "%PIPELINE_REPORT_FILE%"
+call :PRINT_SITE_PIPELINE_DIAGNOSTICS "%STORIES_DIR%" "kokoro_colab_drive"
+%PY_CMD% -m orchestrator set-mode --key site_tts_engine --value kokoro_colab_drive
+if errorlevel 1 (
+  echo [ERROR] failed to set site_tts_engine=kokoro_colab_drive
+  pause
+  goto :MAIN_MENU
+)
+echo [1/3] phase-a...
+call :RESOLVE_SITE_VISUAL_MODE
+if /I "%SITE_VISUAL_MODE%"=="auto" (
+  if "%SITE_VISUAL_POD_URL%"=="" (
+    echo [ERROR] visual auto: need ComfyUI/RunPod URL
+    pause
+    goto :MAIN_MENU
+  )
+  %PY_CMD% -m orchestrator phase-a --stories-dir "%STORIES_DIR%" --story-id "%RUN_ID%-a" --run-branch site --gemini-workers "%GEMINI_WORKERS%" %PHASE_A_MAX_STORIES_ARG% --visual-mode auto --visual-pod-url "%SITE_VISUAL_POD_URL%" --resume --execute
+) else (
+  %PY_CMD% -m orchestrator phase-a --stories-dir "%STORIES_DIR%" --story-id "%RUN_ID%-a" --run-branch site --gemini-workers "%GEMINI_WORKERS%" %PHASE_A_MAX_STORIES_ARG% --visual-mode manual --resume --execute
+)
+if errorlevel 1 (
+  echo [ERROR] phase-a failed
+  set "PIPELINE_STATUS=failed"
+  set "PIPELINE_FAILED_STAGE=phase-a"
+  goto :SITE_PIPELINE_DONE
+)
+echo [OK] phase-a
+call :PRINT_PHASE_A_STATS "%RUN_ID%-a"
+echo [2/3] phase-b...
+%PY_CMD% -m orchestrator phase-b --story-id "%RUN_ID%-b" --deferred-manifest "runs\site\%RUN_ID%-a\_phase_a\ready_queues\deferred.json" --gemini-registry "configs\gemini_bots_registry.example.yaml"
+if errorlevel 1 (
+  echo [ERROR] phase-b failed
+  set "PIPELINE_STATUS=failed"
+  set "PIPELINE_FAILED_STAGE=phase-b"
+  goto :SITE_PIPELINE_DONE
+)
+echo [OK] phase-b
+call :CHECK_PREPARED_SITE_OUTPUT_OR_FAIL
+if errorlevel 1 (
+  set "PIPELINE_STATUS=failed"
+  set "PIPELINE_FAILED_STAGE=site-preparation-check"
+  goto :SITE_PIPELINE_DONE
+)
+echo [3/3] run site...
+%PY_CMD% -m orchestrator run --pipeline site --story-id "%RUN_ID%-site" --stories-dir "%STORIES_DIR%" --execute
+if errorlevel 1 (
+  echo [ERROR] site run failed
+  set "PIPELINE_STATUS=failed"
+  set "PIPELINE_FAILED_STAGE=site-runtime"
+  goto :SITE_PIPELINE_DONE
+)
+echo [OK] site run
+set "PIPELINE_STATUS=done"
+goto :SITE_PIPELINE_DONE
 
 :RUN_YOUTUBE_PIPELINE
 cls
@@ -329,8 +412,18 @@ if not exist "%TTS_PY_CMD%" (
   goto :MAIN_MENU
 )
 cls
+for /f %%I in ('dir /b /ad "output\site" 2^>nul ^| find /c /v ""') do set "PREPARED_SITE_COUNT=%%I"
+if "%PREPARED_SITE_COUNT%"=="" set "PREPARED_SITE_COUNT=0"
+if "%PREPARED_SITE_COUNT%"=="0" (
+  echo No prepared output/site stories found.
+  echo This is a TTS-only command.
+  echo For raw input stories, run:
+  echo [S] Full Site pipeline with Kokoro Google Drive TTS
+  pause
+  goto :MAIN_MENU
+)
 echo ============================================================
-echo   Site TTS ^(Kokoro^) queue: output\site
+echo   Site TTS tools ^(prepared output\site only^)
 echo ============================================================
 echo Queue: cleaned_story.txt, no folder.mp3, voice M/F/U from info.txt
 echo Dry-run first. Modes: main [4] then [3] for Kokoro + local.
@@ -342,7 +435,7 @@ echo [4] sync first N ^(dry-run then optional execute^)
 echo [5] export Kokoro Colab batch
 echo [6] import Kokoro Colab results
 echo [7] verify mp3 coverage
-echo [8] [Site] Full site cycle with Kokoro Colab Drive wait
+echo [8] [TTS only] Prepared output/site stories -^> Google Drive -^> wait mp3
 echo [9] setup Google Drive Kokoro workspace
 echo [0] back
 echo.
@@ -452,7 +545,7 @@ goto :SITE_TTS_TEST_MENU
 
 :SITE_TTS_COLAB_FULL_DRIVE
 cls
-echo [Site] Full cycle: export txt ^> wait mp3 ^> import ^> cleanup
+echo [TTS only] Prepared output/site stories ^> Google Drive ^> wait mp3 ^> import ^> cleanup
 set /p KC_LIMIT=Limit stories ^(0=all, Enter=0^): 
 if "%KC_LIMIT%"=="" set "KC_LIMIT=0"
 set /p KC_WAIT=Wait interval minutes ^(Enter=config^): 
@@ -664,11 +757,38 @@ if "%TXT_COUNT%"=="" set "TXT_COUNT=0"
 echo Current stories directory: stories/input/
 echo Found txt files: %TXT_COUNT%
 if "%TXT_COUNT%"=="0" (
-echo No source texts in stories/input/. Put .txt files in this folder.
+echo No raw input stories found. Put stories into: %STORIES_DIR%
   set "STORIES_DIR="
   pause
 )
 goto :EOF
+:PRINT_SITE_PIPELINE_DIAGNOSTICS
+set "DIAG_STORIES_DIR=%~1"
+set "DIAG_TTS_ENGINE=%~2"
+for /f %%I in ('dir /b /a:-d "%DIAG_STORIES_DIR%\*.txt" 2^>nul ^| find /c /v ""') do set "DIAG_RAW_COUNT=%%I"
+if "%DIAG_RAW_COUNT%"=="" set "DIAG_RAW_COUNT=0"
+echo [DIAG] input_dir=%DIAG_STORIES_DIR%
+echo [DIAG] raw_files_found=%DIAG_RAW_COUNT%
+echo [DIAG] output_site_dir=output\site
+for /f "usebackq delims=" %%I in (`%PY_CMD% -c "from pathlib import Path; from orchestrator.site_tts.config import load_site_tts_settings as L; s=L(Path('.')); print(s.google_drive_root_dir or '(not_configured)')"`) do set "DIAG_GDRIVE_ROOT=%%I"
+echo [DIAG] google_drive_root=%DIAG_GDRIVE_ROOT%
+echo [DIAG] site_tts_engine=%DIAG_TTS_ENGINE%
+echo [DIAG] publish_enabled=true
+echo [DIAG] mode=execute
+set "DIAG_STORIES_DIR="
+set "DIAG_TTS_ENGINE="
+set "DIAG_RAW_COUNT="
+set "DIAG_GDRIVE_ROOT="
+goto :EOF
+:CHECK_PREPARED_SITE_OUTPUT_OR_FAIL
+set "PREPARED_SITE_COUNT="
+for /f %%I in ('dir /b /ad "output\site" 2^>nul ^| find /c /v ""') do set "PREPARED_SITE_COUNT=%%I"
+if "%PREPARED_SITE_COUNT%"=="" set "PREPARED_SITE_COUNT=0"
+if "%PREPARED_SITE_COUNT%"=="0" (
+  echo [ERROR] Site preparation produced 0 prepared stories. TTS was not started.
+  exit /b 1
+)
+exit /b 0
 :RESOLVE_SITE_VISUAL_MODE
 set "SITE_VISUAL_MODE="
 set "SITE_VISUAL_POD_URL="
