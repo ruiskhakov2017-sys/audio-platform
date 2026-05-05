@@ -3,9 +3,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import os
 import re
 import shutil
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -122,6 +122,51 @@ def _resolve_drive_dir(root: Path, cli_dir: Path | None, cfg_dir: str) -> Path:
     return (p if p.is_absolute() else (root / p)).resolve()
 
 
+def _drive_root(root: Path, settings: Any) -> Path | None:
+    raw = str(getattr(settings, "google_drive_root_dir", "") or "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    return (p if p.is_absolute() else (root / p)).resolve()
+
+
+def _drive_dir_from(root: Path, settings: Any, key: str, default_sub: str) -> Path:
+    cli = ""
+    if key == "texts":
+        cli = str(getattr(settings, "google_drive_texts_dir", "") or "").strip()
+    elif key == "mp3":
+        cli = str(getattr(settings, "google_drive_mp3_dir", "") or "").strip()
+    elif key == "scripts":
+        cli = str(getattr(settings, "google_drive_scripts_dir", "") or "").strip()
+    elif key == "cache":
+        cli = str(getattr(settings, "google_drive_cache_dir", "") or "").strip()
+    elif key == "logs":
+        cli = str(getattr(settings, "google_drive_logs_dir", "") or "").strip()
+    elif key == "job":
+        cli = str(getattr(settings, "google_drive_job_dir", "") or "").strip()
+    if cli:
+        p = Path(cli)
+        return (p if p.is_absolute() else (root / p)).resolve()
+    dr = _drive_root(root, settings)
+    if dr is not None:
+        return (dr / default_sub).resolve()
+    raise ValueError(
+        f"google drive path for {key} is not configured; set google_drive_tts.root_dir or explicit {key}_dir"
+    )
+
+
+def _load_expected_files(job_dir: Path) -> list[str]:
+    p = job_dir / "EXPECTED_FILES.txt"
+    if not p.is_file():
+        return []
+    names: list[str] = []
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        t = raw.strip()
+        if t and t.lower().endswith(".mp3"):
+            names.append(Path(t).name)
+    return names
+
+
 def export_drive_texts(
     root_dir: Path,
     *,
@@ -130,9 +175,24 @@ def export_drive_texts(
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
-    target = _resolve_drive_dir(root, texts_dir, settings.google_drive_texts_dir)
+    target = (
+        (texts_dir if texts_dir.is_absolute() else (root / texts_dir)).resolve()
+        if texts_dir is not None
+        else _drive_dir_from(root, settings, "texts", "texts")
+    )
     target.mkdir(parents=True, exist_ok=True)
     index_csv = target.parent / "STORIES_INDEX.csv"
+    drive_root = target.parent
+    scripts_dir = _drive_dir_from(root, settings, "scripts", "scripts")
+    cache_dir = _drive_dir_from(root, settings, "cache", "cache")
+    logs_dir = _drive_dir_from(root, settings, "logs", "logs")
+    job_dir = _drive_dir_from(root, settings, "job", "job")
+    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3")
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    mp3_dir.mkdir(parents=True, exist_ok=True)
 
     site_root = (root / "output" / "site").resolve()
     exported_rows: list[list[str]] = []
@@ -165,9 +225,39 @@ def export_drive_texts(
             w.writerow(["number", "story_folder", "source_txt", "expected_mp3", "final_output_path", "note"])
             w.writerows(skipped_rows[:200])
 
+    expected_files = [r[3] for r in exported_rows]
+    job = {
+        "job_id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "created_at": _utc_now_iso(),
+        "expected_count": len(expected_files),
+        "expected_files": expected_files,
+        "texts_dir": str(target),
+        "mp3_dir": str(mp3_dir),
+        "state": "exported_waiting_mp3",
+    }
+    (job_dir / "current_job.json").write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    (job_dir / "EXPECTED_COUNT.txt").write_text(str(len(expected_files)) + "\n", encoding="utf-8")
+    (job_dir / "EXPECTED_FILES.txt").write_text("\n".join(expected_files) + ("\n" if expected_files else ""), encoding="utf-8")
+    (job_dir / "LOCAL_STATUS.json").write_text(
+        json.dumps(
+            {
+                "state": "exported_waiting_mp3",
+                "expected_count": len(expected_files),
+                "found_mp3": 0,
+                "updated_at": _utc_now_iso(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
     return {
         "ok": True,
         "texts_dir": str(target),
+        "mp3_dir": str(mp3_dir),
+        "drive_root": str(drive_root),
+        "job_dir": str(job_dir),
         "index_csv": str(index_csv),
         "exported": exported,
         "skipped": len(skipped_rows),
@@ -183,8 +273,14 @@ def import_drive_mp3(
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
-    source = _resolve_drive_dir(root, mp3_dir, settings.google_drive_mp3_dir)
+    source = (
+        (mp3_dir if mp3_dir.is_absolute() else (root / mp3_dir)).resolve()
+        if mp3_dir is not None
+        else _drive_dir_from(root, settings, "mp3", "mp3")
+    )
     source.mkdir(parents=True, exist_ok=True)
+    job_dir = _drive_dir_from(root, settings, "job", "job")
+    expected = set(_load_expected_files(job_dir))
     site_root = (root / "output" / "site").resolve()
 
     imported = 0
@@ -194,6 +290,10 @@ def import_drive_mp3(
     errors = 0
     details: list[dict[str, str]] = []
     for mp3 in sorted(source.glob("*.mp3")):
+        if expected and mp3.name not in expected:
+            missing_story += 1
+            details.append({"status": "extra_mp3", "file": mp3.name, "reason": "not_in_expected_files"})
+            continue
         try:
             size = mp3.stat().st_size
         except OSError as exc:
@@ -227,6 +327,7 @@ def import_drive_mp3(
     return {
         "ok": True,
         "mp3_dir": str(source),
+        "job_dir": str(job_dir),
         "imported": imported,
         "skipped_existing": skipped_existing,
         "missing_story": missing_story,
@@ -244,8 +345,17 @@ def verify_drive_status(
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
-    texts = _resolve_drive_dir(root, texts_dir, settings.google_drive_texts_dir)
-    mp3 = _resolve_drive_dir(root, mp3_dir, settings.google_drive_mp3_dir)
+    texts = (
+        (texts_dir if texts_dir.is_absolute() else (root / texts_dir)).resolve()
+        if texts_dir is not None
+        else _drive_dir_from(root, settings, "texts", "texts")
+    )
+    mp3 = (
+        (mp3_dir if mp3_dir.is_absolute() else (root / mp3_dir)).resolve()
+        if mp3_dir is not None
+        else _drive_dir_from(root, settings, "mp3", "mp3")
+    )
+    job_dir = _drive_dir_from(root, settings, "job", "job")
     texts.mkdir(parents=True, exist_ok=True)
     mp3.mkdir(parents=True, exist_ok=True)
 
@@ -262,13 +372,19 @@ def verify_drive_status(
         except OSError:
             invalid_mp3_names.append(p.name)
     txt_set = {p.stem for p in txt_files}
-    missing = sorted(txt_set - valid_mp3_stems)
-    extra = sorted(valid_mp3_stems - txt_set)
-    can_import = sorted(txt_set & valid_mp3_stems)
+    expected_mp3 = set(_load_expected_files(job_dir))
+    if expected_mp3:
+        expected_stems = {Path(x).stem for x in expected_mp3}
+    else:
+        expected_stems = {p.stem for p in txt_files}
+    missing = sorted(expected_stems - valid_mp3_stems)
+    extra = sorted(valid_mp3_stems - expected_stems)
+    can_import = sorted(expected_stems & valid_mp3_stems)
     return {
         "ok": True,
         "texts_dir": str(texts),
         "mp3_dir": str(mp3),
+        "job_dir": str(job_dir),
         "texts_count": len(txt_set),
         "mp3_count": len(mp3_files),
         "valid_mp3_count": len(valid_mp3_stems),
@@ -280,6 +396,143 @@ def verify_drive_status(
         "first_extra": extra[:20],
         "first_invalid": invalid_mp3_names[:20],
     }
+
+
+def setup_drive_workspace(root_dir: Path) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    drive_root = _drive_root(root, settings)
+    if drive_root is None:
+        raise ValueError("google_drive_tts.root_dir is not configured in configs/site_tts.yaml")
+    texts = _drive_dir_from(root, settings, "texts", "texts")
+    mp3 = _drive_dir_from(root, settings, "mp3", "mp3")
+    scripts = _drive_dir_from(root, settings, "scripts", "scripts")
+    cache = _drive_dir_from(root, settings, "cache", "cache")
+    logs = _drive_dir_from(root, settings, "logs", "logs")
+    job = _drive_dir_from(root, settings, "job", "job")
+    for d in (texts, mp3, scripts, cache, logs, job):
+        d.mkdir(parents=True, exist_ok=True)
+    src_runner = (root / "colab" / "kokoro_google_drive_colab.py").resolve()
+    copied = False
+    if src_runner.is_file():
+        (scripts / "kokoro_google_drive_colab.py").write_text(src_runner.read_text(encoding="utf-8"), encoding="utf-8")
+        copied = True
+    return {
+        "ok": True,
+        "drive_root": str(drive_root),
+        "texts_dir": str(texts),
+        "mp3_dir": str(mp3),
+        "scripts_dir": str(scripts),
+        "cache_dir": str(cache),
+        "logs_dir": str(logs),
+        "job_dir": str(job),
+        "runner_copied": copied,
+        "colab_cmd": "python /content/drive/MyDrive/ContentFactory_TTS/scripts/kokoro_google_drive_colab.py",
+    }
+
+
+def wait_drive_mp3_and_import(
+    root_dir: Path,
+    *,
+    mp3_dir: Path | None = None,
+    wait_interval_minutes: int | None = None,
+    max_wait_hours: int | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    source = (
+        (mp3_dir if mp3_dir.is_absolute() else (root / mp3_dir)).resolve()
+        if mp3_dir is not None
+        else _drive_dir_from(root, settings, "mp3", "mp3")
+    )
+    job_dir = _drive_dir_from(root, settings, "job", "job")
+    source.mkdir(parents=True, exist_ok=True)
+    expected = _load_expected_files(job_dir)
+    if not expected:
+        return {"ok": False, "message": f"EXPECTED_FILES.txt is empty or missing in {job_dir}"}
+    interval = max(1, int(wait_interval_minutes or settings.google_drive_wait_interval_minutes))
+    max_hours = max(1, int(max_wait_hours or settings.google_drive_max_wait_hours))
+    deadline = time.time() + max_hours * 3600
+    expected_set = set(expected)
+
+    last_status: dict[str, Any] = {}
+    while True:
+        found_files = [p for p in source.glob("*.mp3") if p.is_file()]
+        valid_set = {p.name for p in found_files if p.stat().st_size > 0}
+        zero_size = [p.name for p in found_files if p.stat().st_size <= 0]
+        missing = sorted(expected_set - valid_set)
+        extra = sorted(valid_set - expected_set)
+        last_status = {
+            "expected": len(expected_set),
+            "found": len(valid_set & expected_set),
+            "missing": len(missing),
+            "zero_size": len(zero_size),
+            "extra": len(extra),
+            "next_check_in_minutes": interval,
+        }
+        print(
+            f"expected={last_status['expected']} found={last_status['found']} missing={last_status['missing']} "
+            f"zero_size={last_status['zero_size']} extra={last_status['extra']} next_check_in={interval}_minutes",
+            flush=True,
+        )
+        if not missing and not zero_size:
+            break
+        if time.time() >= deadline:
+            return {"ok": False, "message": "max wait time exceeded", "status": last_status, "missing_files": missing[:50], "zero_size_files": zero_size[:50]}
+        time.sleep(interval * 60)
+
+    imp = import_drive_mp3(root, mp3_dir=source, force=force)
+    if not imp.get("ok", False) or int(imp.get("errors", 0) or 0) > 0:
+        return {"ok": False, "message": "import-drive failed", "import": imp, "status": last_status}
+
+    # post-check: expected output files exist and non-zero
+    site_root = (root / "output" / "site").resolve()
+    failed_local: list[str] = []
+    for name in expected:
+        story, _v = _split_story_voice(Path(name).stem)
+        story = _safe_name(story)
+        out_mp3 = site_root / story / f"{story}.mp3"
+        if not out_mp3.is_file() or out_mp3.stat().st_size <= 0:
+            failed_local.append(story)
+    if failed_local:
+        return {"ok": False, "message": "local post-check failed", "failed_stories": failed_local[:50], "import": imp}
+
+    cleaned = {"texts_deleted": 0, "mp3_deleted": 0}
+    if settings.google_drive_cleanup_after_success:
+        texts = _drive_dir_from(root, settings, "texts", "texts")
+        for name in expected:
+            txt_name = Path(name).with_suffix(".txt").name
+            p = texts / txt_name
+            if p.is_file():
+                try:
+                    p.unlink()
+                    cleaned["texts_deleted"] += 1
+                except OSError:
+                    pass
+            p2 = source / name
+            if p2.is_file():
+                try:
+                    p2.unlink()
+                    cleaned["mp3_deleted"] += 1
+                except OSError:
+                    pass
+
+    (job_dir / "LOCAL_STATUS.json").write_text(
+        json.dumps(
+            {
+                "state": "imported_success",
+                "expected_count": len(expected),
+                "imported": int(imp.get("imported", 0) or 0),
+                "cleanup": cleaned,
+                "updated_at": _utc_now_iso(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return {"ok": True, "status": last_status, "import": imp, "cleanup": cleaned}
 
 
 def _current_paths(root: Path) -> tuple[Path, Path, Path]:

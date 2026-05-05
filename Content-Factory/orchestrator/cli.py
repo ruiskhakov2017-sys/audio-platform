@@ -187,6 +187,7 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_exp_drive = st_cc_sub.add_parser("export-drive", help="Google Drive flow: копировать txt в одну папку texts/")
     st_cc_exp_drive.add_argument("--limit", type=int, default=0, help="Макс. количество историй (0 = без лимита)")
     st_cc_exp_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
+    st_cc_setup_drive = st_cc_sub.add_parser("setup-drive", help="Создать структуру Google Drive и скопировать Colab runner")
     st_cc_imp = st_cc_sub.add_parser("import", help="Импортировать mp3-результаты Colab в output/site")
     st_cc_imp.add_argument("--batch-id", default="", help="ID batch в runs/tts_colab_batches/")
     st_cc_imp.add_argument("--batch-dir", type=Path, default=None, help="Явный путь к batch-папке")
@@ -205,6 +206,18 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_ver_drive = st_cc_sub.add_parser("verify-drive", help="Google Drive flow: сравнить texts/ и mp3/")
     st_cc_ver_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
     st_cc_ver_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
+    st_cc_wait_drive = st_cc_sub.add_parser("wait-drive", help="Ждать mp3 в Drive и авто-импортировать в output/site")
+    st_cc_wait_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
+    st_cc_wait_drive.add_argument("--wait-interval-minutes", type=int, default=0, help="Интервал проверки mp3 (0 = из конфига)")
+    st_cc_wait_drive.add_argument("--max-wait-hours", type=int, default=0, help="Максимум ожидания в часах (0 = из конфига)")
+    st_cc_wait_drive.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
+    st_cc_full_drive = st_cc_sub.add_parser("full-cycle-drive", help="Export txt -> wait mp3 -> import -> cleanup")
+    st_cc_full_drive.add_argument("--limit", type=int, default=0, help="Макс. количество историй (0 = без лимита)")
+    st_cc_full_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
+    st_cc_full_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
+    st_cc_full_drive.add_argument("--wait-interval-minutes", type=int, default=0, help="Интервал проверки mp3 (0 = из конфига)")
+    st_cc_full_drive.add_argument("--max-wait-hours", type=int, default=0, help="Максимум ожидания в часах (0 = из конфига)")
+    st_cc_full_drive.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
 
     return p
 
@@ -326,8 +339,10 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             export_drive_texts,
             import_kokoro_colab_results,
             import_drive_mp3,
+            setup_drive_workspace,
             verify_mp3_coverage,
             verify_drive_status,
+            wait_drive_mp3_and_import,
         )
 
         sub = str(getattr(args, "site_tts_colab_cmd", "") or "").strip().lower()
@@ -367,6 +382,17 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             print(f"stories_index={res.get('index_csv')}")
             print(f"exported={res.get('exported')}")
             print(f"skipped={res.get('skipped')}")
+            return 0
+
+        if sub == "setup-drive":
+            try:
+                res = setup_drive_workspace(cfg.root_dir)
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            for k in ("drive_root", "texts_dir", "mp3_dir", "scripts_dir", "cache_dir", "logs_dir", "job_dir", "runner_copied"):
+                print(f"{k}={res.get(k)}")
+            print(f"colab_command={res.get('colab_cmd')}")
             return 0
 
         if sub == "import":
@@ -482,6 +508,69 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                 "first_invalid",
             ):
                 print(f"{k}={res.get(k)}")
+            return 0
+
+        if sub == "wait-drive":
+            mdir = getattr(args, "mp3_dir", None)
+            force = bool(getattr(args, "force", False))
+            wait_interval = int(getattr(args, "wait_interval_minutes", 0) or 0)
+            max_wait = int(getattr(args, "max_wait_hours", 0) or 0)
+            try:
+                res = wait_drive_mp3_and_import(
+                    cfg.root_dir,
+                    mp3_dir=mdir,
+                    wait_interval_minutes=(wait_interval if wait_interval > 0 else None),
+                    max_wait_hours=(max_wait if max_wait > 0 else None),
+                    force=force,
+                )
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            if not res.get("ok", False):
+                print(res.get("message", "wait-drive failed"))
+                print(f"status={res.get('status')}")
+                return 2
+            print("wait_drive=ok")
+            print(f"status={res.get('status')}")
+            print(f"cleanup={res.get('cleanup')}")
+            return 0
+
+        if sub == "full-cycle-drive":
+            lim = int(getattr(args, "limit", 0) or 0)
+            tdir = getattr(args, "texts_dir", None)
+            mdir = getattr(args, "mp3_dir", None)
+            force = bool(getattr(args, "force", False))
+            wait_interval = int(getattr(args, "wait_interval_minutes", 0) or 0)
+            max_wait = int(getattr(args, "max_wait_hours", 0) or 0)
+            try:
+                exp = export_drive_texts(cfg.root_dir, texts_dir=tdir, limit=(lim if lim > 0 else None))
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            print(exp.get("message", "export ok"))
+            print(f"exported={exp.get('exported')} skipped={exp.get('skipped')}")
+            print(f"waiting_for_mp3={exp.get('exported')}")
+            if int(exp.get("exported", 0) or 0) <= 0:
+                print("nothing to wait/import")
+                return 0
+            try:
+                res = wait_drive_mp3_and_import(
+                    cfg.root_dir,
+                    mp3_dir=mdir,
+                    wait_interval_minutes=(wait_interval if wait_interval > 0 else None),
+                    max_wait_hours=(max_wait if max_wait > 0 else None),
+                    force=force,
+                )
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            if not res.get("ok", False):
+                print(res.get("message", "full-cycle-drive failed"))
+                print(f"status={res.get('status')}")
+                return 2
+            print("full_cycle_drive=ok")
+            print(f"status={res.get('status')}")
+            print(f"cleanup={res.get('cleanup')}")
             return 0
 
     print("Неизвестная подкоманда site-tts")

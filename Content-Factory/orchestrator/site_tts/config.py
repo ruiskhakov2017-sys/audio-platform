@@ -21,8 +21,16 @@ class SiteTtsSettings:
     kokoro_pause_between_chunks_sec: float
     keep_tts_chunks: bool
     vibevoice_enabled: bool
+    google_drive_root_dir: str
     google_drive_texts_dir: str
     google_drive_mp3_dir: str
+    google_drive_scripts_dir: str
+    google_drive_cache_dir: str
+    google_drive_logs_dir: str
+    google_drive_job_dir: str
+    google_drive_wait_interval_minutes: int
+    google_drive_max_wait_hours: int
+    google_drive_cleanup_after_success: bool
 
 
 def _minimal_yaml(text: str) -> dict[str, Any]:
@@ -68,6 +76,15 @@ def load_site_tts_settings(root: Path, path: Path | None = None) -> SiteTtsSetti
     def g(key: str, default: Any) -> Any:
         return parsed.get(key, default)
 
+    gd = parsed.get("google_drive_tts", {}) if isinstance(parsed, dict) else {}
+    if not isinstance(gd, dict):
+        gd = {}
+
+    def gdv(key: str, fallback_key: str, default: Any) -> Any:
+        if key in gd and gd.get(key) not in (None, ""):
+            return gd.get(key)
+        return g(fallback_key, default)
+
     return SiteTtsSettings(
         site_tts_engine=str(g("site_tts_engine", "kokoro")).strip().lower(),
         site_tts_runtime=str(g("site_tts_runtime", "local")).strip().lower(),
@@ -80,6 +97,14 @@ def load_site_tts_settings(root: Path, path: Path | None = None) -> SiteTtsSetti
         kokoro_pause_between_chunks_sec=float(g("kokoro_pause_between_chunks_sec", 0.35)),
         keep_tts_chunks=bool(g("keep_tts_chunks", False)),
         vibevoice_enabled=bool(g("vibevoice_enabled", False)),
-        google_drive_texts_dir=str(g("google_drive_texts_dir", "") or "").strip(),
-        google_drive_mp3_dir=str(g("google_drive_mp3_dir", "") or "").strip(),
+        google_drive_root_dir=str(gdv("root_dir", "google_drive_root_dir", "") or "").strip(),
+        google_drive_texts_dir=str(gdv("texts_dir", "google_drive_texts_dir", "") or "").strip(),
+        google_drive_mp3_dir=str(gdv("mp3_dir", "google_drive_mp3_dir", "") or "").strip(),
+        google_drive_scripts_dir=str(gdv("scripts_dir", "google_drive_scripts_dir", "") or "").strip(),
+        google_drive_cache_dir=str(gdv("cache_dir", "google_drive_cache_dir", "") or "").strip(),
+        google_drive_logs_dir=str(gdv("logs_dir", "google_drive_logs_dir", "") or "").strip(),
+        google_drive_job_dir=str(gdv("job_dir", "google_drive_job_dir", "") or "").strip(),
+        google_drive_wait_interval_minutes=int(gdv("wait_interval_minutes", "google_drive_wait_interval_minutes", 60)),
+        google_drive_max_wait_hours=int(gdv("max_wait_hours", "google_drive_max_wait_hours", 24)),
+        google_drive_cleanup_after_success=bool(gdv("cleanup_after_success", "google_drive_cleanup_after_success", True)),
     )

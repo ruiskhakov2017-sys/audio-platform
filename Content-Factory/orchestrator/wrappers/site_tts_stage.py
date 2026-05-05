@@ -8,6 +8,7 @@ from pathlib import Path
 from orchestrator.contracts import StageContract
 from orchestrator.runtime_modes import load_runtime_modes
 from orchestrator.site_tts.batch import run_site_tts_for_story
+from orchestrator.site_tts.colab_batch import export_drive_texts, wait_drive_mp3_and_import
 from orchestrator.wrappers.base import BaseWrapper, WrapperResult
 
 
@@ -84,6 +85,35 @@ class SiteTtsStageWrapper(BaseWrapper):
                 ok=True,
                 state="dry-run",
                 message="site_tts: dry-run (elevenlabs subprocess not started)",
+            )
+
+        if engine == "kokoro_colab_drive":
+            if not execute or not allow_real:
+                return WrapperResult(
+                    ok=True,
+                    state="dry-run",
+                    message="site_tts: dry-run (kokoro_colab_drive export/wait/import not started)",
+                )
+            try:
+                exp = export_drive_texts(self._root, limit=None)
+            except Exception as exc:
+                return WrapperResult(ok=False, state="failed", message=f"site_tts drive export failed: {exc}")
+            if int(exp.get("exported", 0) or 0) <= 0:
+                return WrapperResult(ok=True, state="done", message="site_tts drive: nothing to export/import")
+            try:
+                res = wait_drive_mp3_and_import(self._root)
+            except Exception as exc:
+                return WrapperResult(ok=False, state="failed", message=f"site_tts drive wait/import failed: {exc}")
+            if not res.get("ok", False):
+                return WrapperResult(
+                    ok=False,
+                    state="failed",
+                    message=f"site_tts drive wait/import failed: {res.get('message', 'unknown error')}",
+                )
+            return WrapperResult(
+                ok=True,
+                state="done",
+                message=f"site_tts drive cycle done (exported={exp.get('exported')})",
             )
 
         res = run_site_tts_for_story(

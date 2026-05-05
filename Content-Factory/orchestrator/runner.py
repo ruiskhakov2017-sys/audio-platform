@@ -77,6 +77,8 @@ class Runner:
                         f"TTS Kokoro: ожидается site_tts_runtime=local для локального inference (сейчас {rt})."
                     )
                 return None
+            if engine == "kokoro_colab_drive":
+                return None
             if engine in {"edge_tts", "fish_audio"}:
                 return (
                     f"TTS engine {engine} для site: слот в modular registry зарезервирован, адаптер пока не подключён."

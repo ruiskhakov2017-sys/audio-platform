@@ -12,3 +12,15 @@ keep_tts_chunks: false
 vibevoice_enabled: false
 google_drive_texts_dir: ""
 google_drive_mp3_dir: ""
+
+google_drive_tts:
+  root_dir: ""
+  texts_dir: ""
+  mp3_dir: ""
+  scripts_dir: ""
+  cache_dir: ""
+  logs_dir: ""
+  job_dir: ""
+  wait_interval_minutes: 60
+  max_wait_hours: 24
+  cleanup_after_success: true

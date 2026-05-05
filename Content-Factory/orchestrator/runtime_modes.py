@@ -25,6 +25,7 @@ ALLOWED_VALUES: dict[str, set[str]] = {
         "fish_audio_s2_pro",
         "elevenlabs",
         "kokoro",
+        "kokoro_colab_drive",
         "vibevoice",
         "edge_tts",
         "fish_audio",

@@ -342,6 +342,8 @@ echo [4] sync first N ^(dry-run then optional execute^)
 echo [5] export Kokoro Colab batch
 echo [6] import Kokoro Colab results
 echo [7] verify mp3 coverage
+echo [8] [Site] Full site cycle with Kokoro Colab Drive wait
+echo [9] setup Google Drive Kokoro workspace
 echo [0] back
 echo.
 set /p KCH=Choice: 
@@ -392,6 +394,8 @@ if "%KCH%"=="4" (
 if "%KCH%"=="5" goto :SITE_TTS_COLAB_EXPORT
 if "%KCH%"=="6" goto :SITE_TTS_COLAB_IMPORT
 if "%KCH%"=="7" goto :SITE_TTS_COLAB_VERIFY
+if "%KCH%"=="8" goto :SITE_TTS_COLAB_FULL_DRIVE
+if "%KCH%"=="9" goto :SITE_TTS_COLAB_SETUP_DRIVE
 goto :SITE_TTS_TEST_MENU
 
 :SITE_TTS_COLAB_EXPORT
@@ -436,6 +440,32 @@ if "%KC_BATCH%"=="" (
 ) else (
   "%TTS_PY_CMD%" -m orchestrator site-tts kokoro-colab verify --batch-id "%KC_BATCH%"
 )
+pause
+goto :SITE_TTS_TEST_MENU
+
+:SITE_TTS_COLAB_SETUP_DRIVE
+cls
+echo Google Drive setup: create folders + copy Colab runner script
+"%TTS_PY_CMD%" -m orchestrator site-tts kokoro-colab setup-drive
+pause
+goto :SITE_TTS_TEST_MENU
+
+:SITE_TTS_COLAB_FULL_DRIVE
+cls
+echo [Site] Full cycle: export txt ^> wait mp3 ^> import ^> cleanup
+set /p KC_LIMIT=Limit stories ^(0=all, Enter=0^): 
+if "%KC_LIMIT%"=="" set "KC_LIMIT=0"
+set /p KC_WAIT=Wait interval minutes ^(Enter=config^): 
+set /p KC_MAX=Max wait hours ^(Enter=config^): 
+set "KC_WAIT_ARG="
+set "KC_MAX_ARG="
+if not "%KC_WAIT%"=="" set "KC_WAIT_ARG=--wait-interval-minutes %KC_WAIT%"
+if not "%KC_MAX%"=="" set "KC_MAX_ARG=--max-wait-hours %KC_MAX%"
+choice /c YN /n /m "Force overwrite existing mp3? [Y/N]: "
+set "KC_FORCE="
+if errorlevel 1 set "KC_FORCE=--force"
+if errorlevel 2 set "KC_FORCE="
+"%TTS_PY_CMD%" -m orchestrator site-tts kokoro-colab full-cycle-drive --limit %KC_LIMIT% %KC_WAIT_ARG% %KC_MAX_ARG% %KC_FORCE%
 pause
 goto :SITE_TTS_TEST_MENU
 
@@ -493,11 +523,12 @@ set /p RCH=Your runtime choice:
 if "%RCH%"=="1" %PY_CMD% -m orchestrator set-mode --key site_tts_runtime --value local
 if "%RCH%"=="2" %PY_CMD% -m orchestrator set-mode --key site_tts_runtime --value disabled
 if "%RCH%"=="3" %PY_CMD% -m orchestrator set-mode --key site_tts_runtime --value runpod
-echo Engine: [1] Kokoro [2] ElevenLabs ^(legacy^) [3] Fish S2 Pro ^(RunPod^)
+echo Engine: [1] Kokoro [2] ElevenLabs ^(legacy^) [3] Fish S2 Pro ^(RunPod^) [4] Kokoro Colab Drive auto-wait
 set /p ECH=Your engine choice: 
 if "%ECH%"=="1" %PY_CMD% -m orchestrator set-mode --key site_tts_engine --value kokoro
 if "%ECH%"=="2" %PY_CMD% -m orchestrator set-mode --key site_tts_engine --value elevenlabs
 if "%ECH%"=="3" %PY_CMD% -m orchestrator set-mode --key site_tts_engine --value fish_audio_s2_pro
+if "%ECH%"=="4" %PY_CMD% -m orchestrator set-mode --key site_tts_engine --value kokoro_colab_drive
 echo.
 echo Kokoro voice settings: configs\site_tts.yaml
 pause
