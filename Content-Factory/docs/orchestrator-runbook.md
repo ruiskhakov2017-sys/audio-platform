@@ -154,6 +154,14 @@ Human-friendly handoff directory (recommended):
   - `results_drop_here/` (put downloaded mp3 files here)
   - `internal_manifest.json`
 
+Colab runner:
+- `Content-Factory/colab/kokoro_colab_runner.py`
+- `Content-Factory/colab/README_KOKORO_COLAB.md`
+- Colab output contract:
+  - `results/`
+  - `results_report.csv`
+  - `kokoro_results.zip`
+
 Safety:
 - Allowed by default: `scan`, `missing-mp3` (without `--execute`), `kokoro-colab export|verify`
 - Forbidden without explicit approval: `site-tts sync --execute`, `site-tts missing-mp3 --execute`
