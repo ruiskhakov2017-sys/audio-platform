@@ -353,6 +353,7 @@ def _run_legacy_gemini_gate(
         return True, "legacy Gemini gate completed"
 
     procs: list[tuple[int, subprocess.Popen[bytes]]] = []
+    skipped_workers: list[tuple[int, str]] = []
     for idx in range(workers):
         env = dict(os.environ)
         env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
@@ -364,7 +365,9 @@ def _run_legacy_gemini_gate(
         user_data_dir = gemini_module_dir / f"user_data_{idx}"
         ok_url, selected_url, selected_email, err = _select_url(idx)
         if not ok_url:
-            return False, err
+            skipped_workers.append((idx, err))
+            print(f"[A3] worker {idx+1}/{workers} skipped: {err}", flush=True)
+            continue
         env.pop("GEMINI_URL", None)
         env["GEMINI_URL"] = selected_url
         env["PARALLEL_WORKERS"] = str(workers)
@@ -379,17 +382,43 @@ def _run_legacy_gemini_gate(
         creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         procs.append((idx, subprocess.Popen(cmd, env=env, creationflags=creationflags)))
 
+    if not procs:
+        reasons = "; ".join([f"worker {i+1}: {msg}" for i, msg in skipped_workers]) or "no valid workers"
+        return False, f"legacy Gemini gate failed: no active workers. {reasons}"
+
     failed: list[int] = []
+    succeeded: list[int] = []
     for idx, proc in procs:
         code = proc.wait()
         if code != 0:
             failed.append(idx)
+        else:
+            succeeded.append(idx)
         print(f"[A3] worker {idx+1}/{workers} finished with code={code}", flush=True)
+
+    skipped_note = ""
+    if skipped_workers:
+        skipped_note = "; skipped_workers=" + ",".join(str(i + 1) for i, _ in skipped_workers)
+
+    if failed and not succeeded:
+        bundle = _build_error_bundle(failed)
+        hint = f"; error_bundle: {bundle}" if bundle else ""
+        return False, (
+            f"legacy Gemini gate failed in workers: {', '.join(str(i+1) for i in failed)}"
+            f"{hint}{skipped_note}"
+        )
     if failed:
         bundle = _build_error_bundle(failed)
         hint = f"; error_bundle: {bundle}" if bundle else ""
-        return False, f"legacy Gemini gate failed in workers: {', '.join(str(i+1) for i in failed)}{hint}"
-    return True, f"legacy Gemini gate completed ({workers} workers)"
+        return True, (
+            f"legacy Gemini gate completed with partial worker failures: "
+            f"ok={','.join(str(i+1) for i in succeeded)} "
+            f"failed={','.join(str(i+1) for i in failed)}{hint}{skipped_note}"
+        )
+    return True, (
+        f"legacy Gemini gate completed ({len(procs)} active workers"
+        f"{skipped_note})"
+    )
 
 
 def _gemini_fit(info_path: Path) -> str | None:

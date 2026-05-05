@@ -198,7 +198,7 @@ if errorlevel 1 (
 echo [OK] phase-a
 call :PRINT_PHASE_A_STATS "%RUN_ID%-a"
 echo [2/3] phase-b site-only...
-%PY_CMD% -m orchestrator phase-b --branch site --story-id "%RUN_ID%-b" --deferred-manifest "runs\site\%RUN_ID%-a\_phase_a\ready_queues\deferred.json" --gemini-registry "configs\gemini_bots_registry.example.yaml"
+%PY_CMD% -m orchestrator phase-b --branch site --story-id "%RUN_ID%-b" --deferred-manifest "runs\site\%RUN_ID%-a\_phase_a\ready_queues\deferred.json" --gemini-registry "configs\gemini_bots_registry.example.yaml" --allow-scaffold
 if errorlevel 1 (
   echo [ERROR] phase-b failed
   set "PIPELINE_STATUS=failed"
