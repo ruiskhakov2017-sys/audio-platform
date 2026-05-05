@@ -102,6 +102,162 @@ def _safe_name(name: str) -> str:
     return out or "story"
 
 
+def _split_story_voice(stem: str) -> tuple[str, str]:
+    s = (stem or "").strip()
+    if "__" in s:
+        story, voice = s.rsplit("__", 1)
+        v = voice.strip().upper()[:1]
+        if v in {"M", "F", "U"}:
+            return story, v
+    return s, "U"
+
+
+def _resolve_drive_dir(root: Path, cli_dir: Path | None, cfg_dir: str) -> Path:
+    if cli_dir is not None:
+        return (cli_dir if cli_dir.is_absolute() else (root / cli_dir)).resolve()
+    raw = (cfg_dir or "").strip()
+    if not raw:
+        raise ValueError("drive directory is not configured; pass via CLI or configs/site_tts.yaml")
+    p = Path(raw)
+    return (p if p.is_absolute() else (root / p)).resolve()
+
+
+def export_drive_texts(
+    root_dir: Path,
+    *,
+    texts_dir: Path | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    target = _resolve_drive_dir(root, texts_dir, settings.google_drive_texts_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    index_csv = target.parent / "STORIES_INDEX.csv"
+
+    site_root = (root / "output" / "site").resolve()
+    exported_rows: list[list[str]] = []
+    skipped_rows: list[list[str]] = []
+    lim = None if limit is None or int(limit) <= 0 else int(limit)
+    exported = 0
+    for i, story_folder in enumerate(_iter_story_dirs(site_root), start=1):
+        src, err = _resolve_story_tts_source(story_folder)
+        if src is None:
+            skipped_rows.append([f"{i:03d}", story_folder.name, "", "", "", f"skip:{err or 'unknown'}"])
+            continue
+        if src.has_mp3:
+            skipped_rows.append([f"{i:03d}", src.story_id, src.tts_text_path.name, f"{src.story_id}__{src.voice_type}.mp3", str(src.expected_output_mp3), "skip:has_mp3"])
+            continue
+        txt_name = f"{_safe_name(src.story_id)}__{src.voice_type}.txt"
+        mp3_name = f"{_safe_name(src.story_id)}__{src.voice_type}.mp3"
+        dst = target / txt_name
+        dst.write_text(src.tts_text_path.read_text(encoding="utf-8"), encoding="utf-8")
+        exported += 1
+        exported_rows.append([f"{exported:03d}", src.story_id, txt_name, mp3_name, str(src.expected_output_mp3), src.voice_type])
+        if lim is not None and exported >= lim:
+            break
+
+    with index_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["number", "story_folder", "source_txt", "expected_mp3", "final_output_path", "voice"])
+        w.writerows(exported_rows)
+        if skipped_rows:
+            w.writerow([])
+            w.writerow(["number", "story_folder", "source_txt", "expected_mp3", "final_output_path", "note"])
+            w.writerows(skipped_rows[:200])
+
+    return {
+        "ok": True,
+        "texts_dir": str(target),
+        "index_csv": str(index_csv),
+        "exported": exported,
+        "skipped": len(skipped_rows),
+        "message": "TXT copied to Google Drive texts folder",
+    }
+
+
+def import_drive_mp3(
+    root_dir: Path,
+    *,
+    mp3_dir: Path | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    source = _resolve_drive_dir(root, mp3_dir, settings.google_drive_mp3_dir)
+    source.mkdir(parents=True, exist_ok=True)
+    site_root = (root / "output" / "site").resolve()
+
+    imported = 0
+    skipped_existing = 0
+    missing_story = 0
+    errors = 0
+    details: list[dict[str, str]] = []
+    for mp3 in sorted(source.glob("*.mp3")):
+        story, _voice = _split_story_voice(mp3.stem)
+        story = _safe_name(story)
+        folder = site_root / story
+        if not folder.is_dir():
+            missing_story += 1
+            details.append({"status": "extra_mp3", "file": mp3.name, "reason": "story_folder_not_found"})
+            continue
+        dst = folder / f"{story}.mp3"
+        if dst.is_file() and not force:
+            skipped_existing += 1
+            details.append({"status": "skipped_existing", "file": mp3.name, "path": str(dst)})
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(mp3.read_bytes())
+            imported += 1
+            details.append({"status": "imported", "file": mp3.name, "path": str(dst)})
+        except OSError as exc:
+            errors += 1
+            details.append({"status": "error", "file": mp3.name, "reason": str(exc)})
+    return {
+        "ok": True,
+        "mp3_dir": str(source),
+        "imported": imported,
+        "skipped_existing": skipped_existing,
+        "missing_story": missing_story,
+        "errors": errors,
+        "details": details,
+    }
+
+
+def verify_drive_status(
+    root_dir: Path,
+    *,
+    texts_dir: Path | None = None,
+    mp3_dir: Path | None = None,
+) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    texts = _resolve_drive_dir(root, texts_dir, settings.google_drive_texts_dir)
+    mp3 = _resolve_drive_dir(root, mp3_dir, settings.google_drive_mp3_dir)
+    texts.mkdir(parents=True, exist_ok=True)
+    mp3.mkdir(parents=True, exist_ok=True)
+
+    txt_files = sorted([p for p in texts.glob("*.txt") if p.is_file()])
+    mp3_files = sorted([p for p in mp3.glob("*.mp3") if p.is_file()])
+    txt_set = {p.stem for p in txt_files}
+    mp3_set = {p.stem for p in mp3_files}
+    missing = sorted(txt_set - mp3_set)
+    extra = sorted(mp3_set - txt_set)
+    can_import = sorted(txt_set & mp3_set)
+    return {
+        "ok": True,
+        "texts_dir": str(texts),
+        "mp3_dir": str(mp3),
+        "texts_count": len(txt_set),
+        "mp3_count": len(mp3_set),
+        "can_import": len(can_import),
+        "missing_mp3": len(missing),
+        "extra_mp3": len(extra),
+        "first_missing": missing[:20],
+        "first_extra": extra[:20],
+    }
+
+
 def _current_paths(root: Path) -> tuple[Path, Path, Path]:
     current = (root / _CURRENT_ROOT).resolve()
     texts = (current / _CURRENT_TEXTS).resolve()
@@ -374,178 +530,6 @@ def _build_current_folder(root: Path, batch_root: Path, manifest: dict[str, Any]
         "index_csv": str(index_csv),
         "collisions": sorted(collisions),
         "items_count": len(mapping),
-    }
-
-
-def _resolve_drive_dir(root: Path, explicit: Path | None, cfg_val: str, fallback_rel: str) -> Path:
-    if explicit is not None:
-        return (explicit if explicit.is_absolute() else (root / explicit)).resolve()
-    if cfg_val.strip():
-        p = Path(cfg_val.strip())
-        return (p if p.is_absolute() else (root / p)).resolve()
-    return (root / fallback_rel).resolve()
-
-
-def export_drive_texts(
-    root_dir: Path,
-    *,
-    limit: int | None = None,
-    texts_dir: Path | None = None,
-) -> dict[str, Any]:
-    root = root_dir.resolve()
-    site_root = (root / "output" / "site").resolve()
-    if not site_root.is_dir():
-        return {"ok": False, "message": f"site output not found: {site_root}"}
-    settings = load_site_tts_settings(root)
-    target_texts = _resolve_drive_dir(root, texts_dir, settings.google_drive_texts_dir, "ContentFactory_TTS/texts")
-    target_texts.mkdir(parents=True, exist_ok=True)
-    drive_root = target_texts.parent
-    index_csv = drive_root / "STORIES_INDEX.csv"
-
-    lim = None if limit is None or int(limit) <= 0 else int(limit)
-    rows: list[list[str]] = []
-    copied = 0
-    skipped: list[dict[str, str]] = []
-
-    for folder in _iter_story_dirs(site_root):
-        src, err = _resolve_story_tts_source(folder)
-        if src is None:
-            skipped.append({"story_folder": folder.name, "reason": err or "unknown"})
-            continue
-        if src.has_mp3:
-            skipped.append({"story_folder": src.story_id, "reason": "has_mp3"})
-            continue
-        out_txt = target_texts / src.tts_text_path.name
-        out_txt.write_text(src.tts_text_path.read_text(encoding="utf-8"), encoding="utf-8")
-        expected_mp3 = Path(src.tts_text_path.name).with_suffix(".mp3").name
-        rows.append(
-            [
-                f"{copied + 1:03d}",
-                src.story_id,
-                src.tts_text_path.name,
-                expected_mp3,
-                str(src.expected_output_mp3),
-                src.voice_type,
-            ]
-        )
-        copied += 1
-        if lim is not None and copied >= lim:
-            break
-
-    with index_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["number", "story_folder", "source_txt", "expected_mp3", "final_output_path", "voice"])
-        w.writerows(rows)
-
-    readme = drive_root / "README.txt"
-    readme.write_text(
-        "\n".join(
-            [
-                "Google Drive Kokoro workflow",
-                "",
-                "1) Upload/sync all TXT from texts/ to Google Drive Colab environment.",
-                "2) Colab generates MP3 with same basenames into mp3/.",
-                "3) Run local import-drive to place MP3 back into output/site story folders.",
-                "",
-                "Commands:",
-                "python -m orchestrator site-tts kokoro-colab import-drive --mp3-dir \"<...>/ContentFactory_TTS/mp3\"",
-                "python -m orchestrator site-tts kokoro-colab verify-drive --texts-dir \"<...>/ContentFactory_TTS/texts\" --mp3-dir \"<...>/ContentFactory_TTS/mp3\"",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    return {
-        "ok": True,
-        "texts_dir": str(target_texts),
-        "mp3_dir_suggested": str(drive_root / "mp3"),
-        "index_csv": str(index_csv),
-        "copied": copied,
-        "skipped": len(skipped),
-        "message": "TXT copied to Google Drive texts folder",
-    }
-
-
-def import_drive_mp3(
-    root_dir: Path,
-    *,
-    mp3_dir: Path | None = None,
-    force: bool = False,
-) -> dict[str, Any]:
-    root = root_dir.resolve()
-    settings = load_site_tts_settings(root)
-    src_mp3_dir = _resolve_drive_dir(root, mp3_dir, settings.google_drive_mp3_dir, "ContentFactory_TTS/mp3")
-    site_root = (root / "output" / "site").resolve()
-    if not src_mp3_dir.is_dir():
-        return {"ok": False, "message": f"mp3 dir not found: {src_mp3_dir}"}
-
-    imported = 0
-    skipped_existing = 0
-    extra = 0
-    errors = 0
-    details: list[dict[str, str]] = []
-    for mp3 in sorted(src_mp3_dir.glob("*.mp3")):
-        base = mp3.stem
-        story_folder = base
-        m = re.match(r"^(.*)__[MFU]$", base, flags=re.IGNORECASE)
-        if m:
-            story_folder = m.group(1)
-        target_story = site_root / story_folder
-        target_mp3 = target_story / f"{story_folder}.mp3"
-        if not target_story.is_dir():
-            extra += 1
-            details.append({"status": "extra", "mp3": str(mp3), "story_folder": story_folder})
-            continue
-        if target_mp3.is_file() and not force:
-            skipped_existing += 1
-            details.append({"status": "skipped_existing", "path": str(target_mp3)})
-            continue
-        try:
-            target_story.mkdir(parents=True, exist_ok=True)
-            target_mp3.write_bytes(mp3.read_bytes())
-            imported += 1
-            details.append({"status": "imported", "path": str(target_mp3)})
-        except OSError as exc:
-            errors += 1
-            details.append({"status": "error", "mp3": str(mp3), "reason": str(exc)})
-
-    return {
-        "ok": True,
-        "mp3_dir": str(src_mp3_dir),
-        "imported": imported,
-        "skipped_existing": skipped_existing,
-        "extra": extra,
-        "errors": errors,
-        "details": details,
-    }
-
-
-def verify_drive_folders(
-    root_dir: Path,
-    *,
-    texts_dir: Path | None = None,
-    mp3_dir: Path | None = None,
-) -> dict[str, Any]:
-    root = root_dir.resolve()
-    settings = load_site_tts_settings(root)
-    tdir = _resolve_drive_dir(root, texts_dir, settings.google_drive_texts_dir, "ContentFactory_TTS/texts")
-    mdir = _resolve_drive_dir(root, mp3_dir, settings.google_drive_mp3_dir, "ContentFactory_TTS/mp3")
-    txt_names = {p.stem for p in tdir.glob("*.txt")} if tdir.is_dir() else set()
-    mp3_names = {p.stem for p in mdir.glob("*.mp3")} if mdir.is_dir() else set()
-    missing = sorted(txt_names - mp3_names)
-    extra = sorted(mp3_names - txt_names)
-    return {
-        "ok": True,
-        "texts_dir": str(tdir),
-        "mp3_dir": str(mdir),
-        "texts_count": len(txt_names),
-        "mp3_count": len(mp3_names),
-        "can_import": len(txt_names & mp3_names),
-        "missing_mp3": len(missing),
-        "extra_mp3": len(extra),
-        "first_missing": missing[:20],
-        "first_extra": extra[:20],
     }
 
 

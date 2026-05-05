@@ -184,9 +184,9 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_exp = st_cc_sub.add_parser("export", help="Собрать batch для Colab без локального TTS")
     st_cc_exp.add_argument("--limit", type=int, default=0, help="Макс. количество историй (0 = без лимита)")
     st_cc_exp.add_argument("--batch-id", default="", help="Идентификатор batch (по умолчанию timestamp)")
-    st_cc_exp_drive = st_cc_sub.add_parser("export-drive", help="Простой Google Drive export: txt -> texts folder")
+    st_cc_exp_drive = st_cc_sub.add_parser("export-drive", help="Google Drive flow: копировать txt в одну папку texts/")
     st_cc_exp_drive.add_argument("--limit", type=int, default=0, help="Макс. количество историй (0 = без лимита)")
-    st_cc_exp_drive.add_argument("--texts-dir", type=Path, default=None, help="Google Drive texts dir (ContentFactory_TTS/texts)")
+    st_cc_exp_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
     st_cc_imp = st_cc_sub.add_parser("import", help="Импортировать mp3-результаты Colab в output/site")
     st_cc_imp.add_argument("--batch-id", default="", help="ID batch в runs/tts_colab_batches/")
     st_cc_imp.add_argument("--batch-dir", type=Path, default=None, help="Явный путь к batch-папке")
@@ -194,17 +194,17 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_imp.add_argument("--latest", action="store_true", help="Взять последний handoff из _COLAB_EXPORTS/")
     st_cc_imp.add_argument("--current", action="store_true", help="Импортировать mp3 из COLAB_TTS_CURRENT/MP3_FROM_COLAB")
     st_cc_imp.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
-    st_cc_imp_drive = st_cc_sub.add_parser("import-drive", help="Google Drive import: mp3 folder -> output/site")
-    st_cc_imp_drive.add_argument("--mp3-dir", type=Path, default=None, help="Google Drive mp3 dir (ContentFactory_TTS/mp3)")
+    st_cc_imp_drive = st_cc_sub.add_parser("import-drive", help="Google Drive flow: импорт mp3 из одной папки mp3/")
+    st_cc_imp_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
     st_cc_imp_drive.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
     st_cc_ver = st_cc_sub.add_parser("verify", help="Проверить покрытие mp3 и (опционально) статус batch")
     st_cc_ver.add_argument("--batch-id", default="", help="ID batch для проверки статуса результатов")
     st_cc_ver.add_argument("--handoff-dir", type=Path, default=None, help="Путь к _COLAB_EXPORTS/<handoff-folder>")
     st_cc_ver.add_argument("--latest", action="store_true", help="Взять последний handoff из _COLAB_EXPORTS/")
     st_cc_ver.add_argument("--current", action="store_true", help="Проверить COLAB_TTS_CURRENT (TXT/MP3/mapping)")
-    st_cc_ver_drive = st_cc_sub.add_parser("verify-drive", help="Google Drive verify: texts/mp3 status")
-    st_cc_ver_drive.add_argument("--texts-dir", type=Path, default=None, help="Google Drive texts dir (ContentFactory_TTS/texts)")
-    st_cc_ver_drive.add_argument("--mp3-dir", type=Path, default=None, help="Google Drive mp3 dir (ContentFactory_TTS/mp3)")
+    st_cc_ver_drive = st_cc_sub.add_parser("verify-drive", help="Google Drive flow: сравнить texts/ и mp3/")
+    st_cc_ver_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
+    st_cc_ver_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
 
     return p
 
@@ -324,10 +324,10 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
         from orchestrator.site_tts.colab_batch import (
             export_kokoro_colab_batch,
             export_drive_texts,
-            import_drive_mp3,
             import_kokoro_colab_results,
-            verify_drive_folders,
+            import_drive_mp3,
             verify_mp3_coverage,
+            verify_drive_status,
         )
 
         sub = str(getattr(args, "site_tts_colab_cmd", "") or "").strip().lower()
@@ -357,15 +357,15 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
         if sub == "export-drive":
             lim = int(getattr(args, "limit", 0) or 0)
             tdir = getattr(args, "texts_dir", None)
-            res = export_drive_texts(cfg.root_dir, limit=(lim if lim > 0 else None), texts_dir=tdir)
-            if not res.get("ok", False):
-                print(res.get("message", "export-drive failed"))
+            try:
+                res = export_drive_texts(cfg.root_dir, texts_dir=tdir, limit=(lim if lim > 0 else None))
+            except ValueError as exc:
+                print(str(exc))
                 return 2
-            print(res.get("message", "TXT copied to Google Drive texts folder"))
+            print(res.get("message", "ok"))
             print(f"texts_dir={res.get('texts_dir')}")
-            print(f"mp3_dir={res.get('mp3_dir_suggested')}")
             print(f"stories_index={res.get('index_csv')}")
-            print(f"copied={res.get('copied')}")
+            print(f"exported={res.get('exported')}")
             print(f"skipped={res.get('skipped')}")
             return 0
 
@@ -406,14 +406,15 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
         if sub == "import-drive":
             mdir = getattr(args, "mp3_dir", None)
             force = bool(getattr(args, "force", False))
-            res = import_drive_mp3(cfg.root_dir, mp3_dir=mdir, force=force)
-            if not res.get("ok", False):
-                print(res.get("message", "import-drive failed"))
+            try:
+                res = import_drive_mp3(cfg.root_dir, mp3_dir=mdir, force=force)
+            except ValueError as exc:
+                print(str(exc))
                 return 2
             print(f"mp3_dir={res.get('mp3_dir')}")
             print(f"imported={res.get('imported')}")
             print(f"skipped_existing={res.get('skipped_existing')}")
-            print(f"extra={res.get('extra')}")
+            print(f"missing_story={res.get('missing_story')}")
             print(f"errors={res.get('errors')}")
             return 0 if int(res.get("errors", 0) or 0) == 0 else 2
 
@@ -460,19 +461,13 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
         if sub == "verify-drive":
             tdir = getattr(args, "texts_dir", None)
             mdir = getattr(args, "mp3_dir", None)
-            res = verify_drive_folders(cfg.root_dir, texts_dir=tdir, mp3_dir=mdir)
-            if not res.get("ok", False):
-                print(res.get("message", "verify-drive failed"))
+            try:
+                res = verify_drive_status(cfg.root_dir, texts_dir=tdir, mp3_dir=mdir)
+            except ValueError as exc:
+                print(str(exc))
                 return 2
-            print(f"texts_dir={res.get('texts_dir')}")
-            print(f"mp3_dir={res.get('mp3_dir')}")
-            print(f"texts_count={res.get('texts_count')}")
-            print(f"mp3_count={res.get('mp3_count')}")
-            print(f"can_import={res.get('can_import')}")
-            print(f"missing_mp3={res.get('missing_mp3')}")
-            print(f"extra_mp3={res.get('extra_mp3')}")
-            print(f"first_missing={res.get('first_missing')}")
-            print(f"first_extra={res.get('first_extra')}")
+            for k in ("texts_dir", "mp3_dir", "texts_count", "mp3_count", "can_import", "missing_mp3", "extra_mp3", "first_missing", "first_extra"):
+                print(f"{k}={res.get(k)}")
             return 0
 
     print("Неизвестная подкоманда site-tts")

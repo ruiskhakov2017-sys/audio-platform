@@ -126,26 +126,31 @@ Orchestrator writes service data outside legacy runtime paths:
 - `.orchestrator/reports/phase_b_<story_id>/phase_b_summary.json`
 - `.orchestrator/reports/phase_b_<story_id>/runtime_modes_snapshot.json`
 
-## Site TTS Kokoro Colab flow (safe, main: Google Drive folders)
+## Site TTS Kokoro Colab flow (safe, main = Google Drive folders)
 
 - Queue view (safe, no write): `python -m orchestrator site-tts scan --limit 20`
 - Missing queue dry-run (safe, no mp3 write): `python -m orchestrator site-tts missing-mp3 --limit 20`
 - Export for Colab (safe, no local TTS): `python -m orchestrator site-tts kokoro-colab export --limit 20`
 
-Main user workflow (Google Drive folders):
-- Export to Google Drive texts:
-  - `python -m orchestrator site-tts kokoro-colab export-drive --limit 100 --texts-dir "<MyDrive>/ContentFactory_TTS/texts"`
-- Run Colab code:
+Main user workflow (Google Drive):
+- Export txt to Drive:
+  - `python -m orchestrator site-tts kokoro-colab export-drive --limit 100 --texts-dir "<GoogleDrive>/ContentFactory_TTS/texts"`
+- Colab script:
   - `Content-Factory/colab/kokoro_google_drive_colab.py`
-- Colab writes mp3 into:
-  - `<MyDrive>/ContentFactory_TTS/mp3`
-- Import locally:
-  - `python -m orchestrator site-tts kokoro-colab import-drive --mp3-dir "<MyDrive>/ContentFactory_TTS/mp3"`
-- Verify:
-  - `python -m orchestrator site-tts kokoro-colab verify-drive --texts-dir "<MyDrive>/ContentFactory_TTS/texts" --mp3-dir "<MyDrive>/ContentFactory_TTS/mp3"`
+- Colab writes mp3 to:
+  - `<GoogleDrive>/ContentFactory_TTS/mp3`
+- Import mp3 back:
+  - `python -m orchestrator site-tts kokoro-colab import-drive --mp3-dir "<GoogleDrive>/ContentFactory_TTS/mp3"`
+- Verify Drive status:
+  - `python -m orchestrator site-tts kokoro-colab verify-drive --texts-dir "<GoogleDrive>/ContentFactory_TTS/texts" --mp3-dir "<GoogleDrive>/ContentFactory_TTS/mp3"`
 
-Local simple fallback (still available):
-- `COLAB_TTS_CURRENT/` with `--current` commands.
+Optional config-based dirs in `configs/site_tts.yaml`:
+- `google_drive_texts_dir`
+- `google_drive_mp3_dir`
+Then commands can be called without path flags:
+- `python -m orchestrator site-tts kokoro-colab export-drive --limit 100`
+- `python -m orchestrator site-tts kokoro-colab import-drive`
+- `python -m orchestrator site-tts kokoro-colab verify-drive`
 
 Legacy/internal workflow (optional):
 - `--batch-id`, `--handoff-dir`, `--latest`
