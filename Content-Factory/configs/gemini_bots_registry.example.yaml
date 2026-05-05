@@ -1,0 +1,45 @@
+gemini_bots:
+  - email: ru.iskhakov2017@gmail.com
+    general_selection: https://gemini.google.com/gem/ada3e736032c
+    site_info_builder: https://gemini.google.com/gem/ef342be5afa7
+    youtube_selection: https://gemini.google.com/gem/58c69ffea8d6
+    youtube_safe_text: https://gemini.google.com/gem/4c2759712902
+    youtube_characters: https://gemini.google.com/gem/8f21a94294eb
+    youtube_scene_prompts: https://gemini.google.com/gem/ae09c90070ca
+    youtube_ad_point: https://gemini.google.com/gem/c89e1ab6a1c5
+
+  - email: isi.cordeiro@gmail.com
+    general_selection: https://gemini.google.com/gem/8853dff960d9
+    site_info_builder: https://gemini.google.com/gem/39506fd2e088
+    youtube_selection: https://gemini.google.com/gem/7bd74172a025
+    youtube_safe_text: https://gemini.google.com/gem/cc83b7ab68d8
+    youtube_characters: https://gemini.google.com/gem/4fa20d3d01e6
+    youtube_scene_prompts: https://gemini.google.com/gem/23ab5e8af1ce
+    youtube_ad_point: https://gemini.google.com/gem/80f6885207ad
+
+  - email: iheuko119@gmail.com
+    general_selection: https://gemini.google.com/gem/d6c7039ff80b
+    site_info_builder: https://gemini.google.com/gem/ca381fe3b9c3
+    youtube_selection: https://gemini.google.com/gem/bca606b780cc
+    youtube_safe_text: https://gemini.google.com/gem/90f4d0ef7309
+    youtube_characters: https://gemini.google.com/gem/590a8fe7e18b
+    youtube_scene_prompts: https://gemini.google.com/gem/ebd9a4e57f10
+    youtube_ad_point: https://gemini.google.com/gem/35be1dacd16a
+
+  - email: goegoeseijin@gmail.com
+    general_selection: https://gemini.google.com/gem/3658246c297f
+    site_info_builder: https://gemini.google.com/gem/1718c40dc603
+    youtube_selection: https://gemini.google.com/gem/81e49824c856
+    youtube_safe_text: https://gemini.google.com/gem/67e9e22f3255
+    youtube_characters: https://gemini.google.com/gem/a98d4bb31d0c
+    youtube_scene_prompts: https://gemini.google.com/gem/269facbdccf3
+    youtube_ad_point: https://gemini.google.com/gem/800da775b297
+
+  - email: suteadodesun6@gmail.com
+    general_selection: https://gemini.google.com/gem/301d293665c3
+    site_info_builder: https://gemini.google.com/gem/6f2dbfff7e8e
+    youtube_selection: https://gemini.google.com/gem/9e7b3360a0a8
+    youtube_safe_text: https://gemini.google.com/gem/cb0fd01669a4
+    youtube_characters: https://gemini.google.com/gem/91f5c48139a7
+    youtube_scene_prompts: https://gemini.google.com/gem/13ce70436822
+    youtube_ad_point: https://gemini.google.com/gem/74eb43ce6b24

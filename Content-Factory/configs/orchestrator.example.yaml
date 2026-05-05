@@ -1,0 +1,33 @@
+root_dir: .
+
+orchestrator:
+  service_dir: .orchestrator
+
+pre_filter:
+  min_minutes: 15
+  words_per_minute: 150
+  story_extensions: .txt
+
+run_policy:
+  default_profile: full-real
+  real_stage_whitelist: length_filter,bulk_text_cleaner,gemini_auto,site_tts,content_combiner,autopublisher,youtube_selection,youtube_safe_text,director20,youtube_tts,autovideo
+
+# Runtime modes are stored in configs/runtime_modes.yaml.
+# Allowed values (site):
+# - site_tts_runtime: disabled | runpod | local
+# - site_tts_engine: kokoro | elevenlabs | fish_audio_s2_pro | vibevoice | edge_tts | fish_audio
+# Голоса/скорость Kokoro: configs/site_tts.yaml
+# YouTube (legacy меню):
+# - youtube_tts_engine: elevenlabs | edge_tts | fish_audio
+
+legacy_entrypoints:
+  bulk_text_cleaner: legacy/bulk-text-cleaner/clean_stories.py
+  gemini_auto: legacy/Gemini_Auto/gemini_auto.py
+  site_tts: legacy/ElevenLabs/main.py
+  youtube_tts: legacy/ElevenLabs/main.py
+  content_combiner: legacy/content_combiner/content_combiner.py
+  youtube_selection: legacy/youtube_selection/gemini_auto.py
+  youtube_safe_text: legacy/youtube_tts/gemini_auto.py
+  director20: legacy/director_2_0/main.py
+  autovideo: legacy/AutoVideo/main.py
+  autopublisher: legacy/autopublisher/publish_stories.py

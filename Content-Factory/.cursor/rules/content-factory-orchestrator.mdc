@@ -1,0 +1,9 @@
+# Content-Factory Orchestrator Rules
+
+- Оркестратор — тонкий управляющий слой поверх legacy.
+- Wrapper через subprocess/adapter предпочтительнее копирования или переноса legacy-кода.
+- Wrapper обязан иметь контракт: входы, выходы, риск, side effects, preconditions.
+- Wrapper обязан поддерживать dry-run и писать события в общий лог.
+- Preflight обязателен перед run, особенно для unsafe стадий.
+- Статусы должны быть прозрачны: story_id, pipeline, stage, state, timestamp, message.
+- Event-log должен быть независим от legacy-модулей и храниться в отдельной служебной директории.

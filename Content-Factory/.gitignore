@@ -1,0 +1,54 @@
+# Content-Factory — локальные игноры (действуют только под этой папкой в монорепо).
+# Исходники orchestrator/, docs/, configs/, .cursor/, tests/, tools/ — НЕ перечислять здесь как ignore.
+
+# Виртуальные окружения
+.venv-tts/
+.venv/
+venv/
+
+# Выходы пайплайна и служебные деревья
+output/
+runs/
+archive/
+.orchestrator/
+logs/
+
+# Локальные веса / большие данные (дерево models/)
+models/
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Логи и lock-файлы
+*.log
+*.lock
+
+# Медиа и тяжёлые артефакты
+*.mp3
+*.wav
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Модели и чекпойнты
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Секреты (шаблоны — см. исключения ниже; корневой .gitignore с .env* может требовать ! в корне)
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.template

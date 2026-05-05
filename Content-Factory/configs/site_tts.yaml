@@ -1,0 +1,12 @@
+# Локальный site TTS (Kokoro). Движок и runtime дублируются в runtime_modes.yaml — там источник для phase_b/orchestrator.run.
+site_tts_engine: kokoro
+site_tts_runtime: local
+kokoro_lang_code: ""
+kokoro_voice_male: am_michael
+kokoro_voice_female: af_bella
+kokoro_voice_neutral: af_heart
+kokoro_speed: 0.92
+kokoro_chunk_max_chars: 480
+kokoro_pause_between_chunks_sec: 0.35
+keep_tts_chunks: false
+vibevoice_enabled: false

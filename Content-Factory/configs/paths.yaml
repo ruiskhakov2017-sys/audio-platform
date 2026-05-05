@@ -1,0 +1,21 @@
+legacy_modules:
+  gemini_auto: legacy/Gemini_Auto
+  cleaner: legacy/bulk-text-cleaner
+  elevenlabs: legacy/ElevenLabs
+  autopublisher: legacy/autopublisher
+  autovideo: legacy/AutoVideo
+  content_combiner: legacy/content_combiner
+  youtube_selection: legacy/youtube_selection
+  youtube_tts: legacy/youtube_tts
+  director_2_0: legacy/director_2_0
+
+data_dirs:
+  input_stories: stories/input
+  runs: runs
+  output: output
+  logs: logs
+  archive: archive
+
+# Registered paths for heavy ML weights (not run artifacts; not scanned as generated trash)
+models:
+  fish_audio_s2_pro: models/fish_audio/fish-s2-pro

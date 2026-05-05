@@ -1,0 +1,9 @@
+# Content-Factory Safety Rules
+
+- Default режим любых запусков: dry-run.
+- Реальное выполнение разрешено только через явный execute-флаг.
+- Этапы с delete/move/upload/cleanup/trash/archive/внешними записями считаются unsafe по умолчанию.
+- Unsafe-этапы без execute-флага не выполняются.
+- На ранних этапах интеграции unsafe-модули подключать как contract-stub, dry-run-only или preflight-only.
+- Не выполнять destructive действия без preflight-проверок.
+- Не логировать секреты, ключи и чувствительные токены в event-log.

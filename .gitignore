@@ -9,3 +9,7 @@ __pycache__/
 *.sqlite3
 # Large data folder (optional: remove to track)
 AudioProject/
+
+# Content-Factory: шаблоны .env (корневое правило .env* иначе скрывает *.example в legacy)
+!Content-Factory/**/.env.example
+!Content-Factory/**/.env.template
