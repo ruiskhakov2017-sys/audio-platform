@@ -109,9 +109,11 @@ def site_tts_execute_lock(service_dir: Path) -> Iterator[None]:
                 data = _read_lock(path)
                 pid = int((data or {}).get("pid", 0) or 0)
                 exe = (data or {}).get("executable", "?")
+                module = (data or {}).get("windows_module_path", "?")
+                argv = (data or {}).get("argv", [])
                 raise RuntimeError(
                     "site-tts уже выполняется с --execute (другой процесс держит lock). "
-                    f"PID={pid}, interpreter={exe}. "
+                    f"PID={pid}, interpreter={exe}, module={module}, argv={argv}. "
                     f"Дождитесь завершения или удалите вручную: {path}"
                 )
         try:

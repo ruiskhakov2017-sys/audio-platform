@@ -11,6 +11,19 @@ from typing import Any
 from orchestrator.config import OrchestratorConfig
 
 
+def _windows_module_path() -> str | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(32768)
+        n = ctypes.windll.kernel32.GetModuleFileNameW(None, buf, len(buf))
+        return buf.value if n else None
+    except Exception:
+        return None
+
+
 def log_site_tts_bootstrap(cfg: OrchestratorConfig, *, execute: bool) -> None:
     """
     Одна строка JSON в service_dir/logs/site_tts_bootstrap.log при каждом входе в site-tts CLI
@@ -47,6 +60,7 @@ def log_site_tts_bootstrap(cfg: OrchestratorConfig, *, execute: bool) -> None:
         "pid": os.getpid(),
         "ppid": os.getppid(),
         "sys_executable": sys.executable,
+        "windows_module_path": _windows_module_path(),
         "argv": sys.argv,
         "mp_start_method": start_method,
         "mp_current_process_name": multiprocessing.current_process().name,
@@ -60,6 +74,7 @@ def log_site_tts_bootstrap(cfg: OrchestratorConfig, *, execute: bool) -> None:
         fh.write(line + "\n")
     print(
         f"[site-tts bootstrap] pid={record['pid']} ppid={record['ppid']} "
-        f"mp_name={record['mp_current_process_name']} exe={record['sys_executable']}",
+        f"mp_name={record['mp_current_process_name']} exe={record['sys_executable']} "
+        f"module={record['windows_module_path']}",
         flush=True,
     )
