@@ -415,6 +415,7 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             print(f"imported={res.get('imported')}")
             print(f"skipped_existing={res.get('skipped_existing')}")
             print(f"missing_story={res.get('missing_story')}")
+            print(f"invalid_mp3={res.get('invalid_mp3')}")
             print(f"errors={res.get('errors')}")
             return 0 if int(res.get("errors", 0) or 0) == 0 else 2
 
@@ -466,7 +467,20 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             except ValueError as exc:
                 print(str(exc))
                 return 2
-            for k in ("texts_dir", "mp3_dir", "texts_count", "mp3_count", "can_import", "missing_mp3", "extra_mp3", "first_missing", "first_extra"):
+            for k in (
+                "texts_dir",
+                "mp3_dir",
+                "texts_count",
+                "mp3_count",
+                "valid_mp3_count",
+                "invalid_mp3_count",
+                "can_import",
+                "missing_mp3",
+                "extra_mp3",
+                "first_missing",
+                "first_extra",
+                "first_invalid",
+            ):
                 print(f"{k}={res.get(k)}")
             return 0
 

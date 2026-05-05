@@ -190,9 +190,20 @@ def import_drive_mp3(
     imported = 0
     skipped_existing = 0
     missing_story = 0
+    invalid_mp3 = 0
     errors = 0
     details: list[dict[str, str]] = []
     for mp3 in sorted(source.glob("*.mp3")):
+        try:
+            size = mp3.stat().st_size
+        except OSError as exc:
+            errors += 1
+            details.append({"status": "error", "file": mp3.name, "reason": str(exc)})
+            continue
+        if size <= 0:
+            invalid_mp3 += 1
+            details.append({"status": "invalid_mp3", "file": mp3.name, "reason": "empty_file"})
+            continue
         story, _voice = _split_story_voice(mp3.stem)
         story = _safe_name(story)
         folder = site_root / story
@@ -219,6 +230,7 @@ def import_drive_mp3(
         "imported": imported,
         "skipped_existing": skipped_existing,
         "missing_story": missing_story,
+        "invalid_mp3": invalid_mp3,
         "errors": errors,
         "details": details,
     }
@@ -239,22 +251,34 @@ def verify_drive_status(
 
     txt_files = sorted([p for p in texts.glob("*.txt") if p.is_file()])
     mp3_files = sorted([p for p in mp3.glob("*.mp3") if p.is_file()])
+    valid_mp3_stems: set[str] = set()
+    invalid_mp3_names: list[str] = []
+    for p in mp3_files:
+        try:
+            if p.stat().st_size > 0:
+                valid_mp3_stems.add(p.stem)
+            else:
+                invalid_mp3_names.append(p.name)
+        except OSError:
+            invalid_mp3_names.append(p.name)
     txt_set = {p.stem for p in txt_files}
-    mp3_set = {p.stem for p in mp3_files}
-    missing = sorted(txt_set - mp3_set)
-    extra = sorted(mp3_set - txt_set)
-    can_import = sorted(txt_set & mp3_set)
+    missing = sorted(txt_set - valid_mp3_stems)
+    extra = sorted(valid_mp3_stems - txt_set)
+    can_import = sorted(txt_set & valid_mp3_stems)
     return {
         "ok": True,
         "texts_dir": str(texts),
         "mp3_dir": str(mp3),
         "texts_count": len(txt_set),
-        "mp3_count": len(mp3_set),
+        "mp3_count": len(mp3_files),
+        "valid_mp3_count": len(valid_mp3_stems),
+        "invalid_mp3_count": len(invalid_mp3_names),
         "can_import": len(can_import),
         "missing_mp3": len(missing),
         "extra_mp3": len(extra),
         "first_missing": missing[:20],
         "first_extra": extra[:20],
+        "first_invalid": invalid_mp3_names[:20],
     }
 
 
