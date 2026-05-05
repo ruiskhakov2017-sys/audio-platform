@@ -10,3 +10,5 @@ kokoro_chunk_max_chars: 480
 kokoro_pause_between_chunks_sec: 0.35
 keep_tts_chunks: false
 vibevoice_enabled: false
+google_drive_texts_dir: ""
+google_drive_mp3_dir: ""

@@ -21,6 +21,8 @@ class SiteTtsSettings:
     kokoro_pause_between_chunks_sec: float
     keep_tts_chunks: bool
     vibevoice_enabled: bool
+    google_drive_texts_dir: str
+    google_drive_mp3_dir: str
 
 
 def _minimal_yaml(text: str) -> dict[str, Any]:
@@ -78,4 +80,6 @@ def load_site_tts_settings(root: Path, path: Path | None = None) -> SiteTtsSetti
         kokoro_pause_between_chunks_sec=float(g("kokoro_pause_between_chunks_sec", 0.35)),
         keep_tts_chunks=bool(g("keep_tts_chunks", False)),
         vibevoice_enabled=bool(g("vibevoice_enabled", False)),
+        google_drive_texts_dir=str(g("google_drive_texts_dir", "") or "").strip(),
+        google_drive_mp3_dir=str(g("google_drive_mp3_dir", "") or "").strip(),
     )

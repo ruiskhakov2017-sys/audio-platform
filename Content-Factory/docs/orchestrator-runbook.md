@@ -126,19 +126,26 @@ Orchestrator writes service data outside legacy runtime paths:
 - `.orchestrator/reports/phase_b_<story_id>/phase_b_summary.json`
 - `.orchestrator/reports/phase_b_<story_id>/runtime_modes_snapshot.json`
 
-## Site TTS Kokoro Colab flow (safe)
+## Site TTS Kokoro Colab flow (safe, main: Google Drive folders)
 
 - Queue view (safe, no write): `python -m orchestrator site-tts scan --limit 20`
 - Missing queue dry-run (safe, no mp3 write): `python -m orchestrator site-tts missing-mp3 --limit 20`
 - Export for Colab (safe, no local TTS): `python -m orchestrator site-tts kokoro-colab export --limit 20`
 
-Main user workflow (folder-based):
-- Work directory: `COLAB_TTS_CURRENT/`
-- Exported text files: `COLAB_TTS_CURRENT/TEXTS_TO_COLAB/`
-- Put Colab mp3 files into: `COLAB_TTS_CURRENT/MP3_FROM_COLAB/`
-- Import: `python -m orchestrator site-tts kokoro-colab import --current`
-- Verify: `python -m orchestrator site-tts kokoro-colab verify --current`
-- Helpers: `COLAB_TTS_CURRENT/IMPORT_MP3.bat`, `COLAB_TTS_CURRENT/VERIFY_MP3.bat`
+Main user workflow (Google Drive folders):
+- Export to Google Drive texts:
+  - `python -m orchestrator site-tts kokoro-colab export-drive --limit 100 --texts-dir "<MyDrive>/ContentFactory_TTS/texts"`
+- Run Colab code:
+  - `Content-Factory/colab/kokoro_google_drive_colab.py`
+- Colab writes mp3 into:
+  - `<MyDrive>/ContentFactory_TTS/mp3`
+- Import locally:
+  - `python -m orchestrator site-tts kokoro-colab import-drive --mp3-dir "<MyDrive>/ContentFactory_TTS/mp3"`
+- Verify:
+  - `python -m orchestrator site-tts kokoro-colab verify-drive --texts-dir "<MyDrive>/ContentFactory_TTS/texts" --mp3-dir "<MyDrive>/ContentFactory_TTS/mp3"`
+
+Local simple fallback (still available):
+- `COLAB_TTS_CURRENT/` with `--current` commands.
 
 Legacy/internal workflow (optional):
 - `--batch-id`, `--handoff-dir`, `--latest`
