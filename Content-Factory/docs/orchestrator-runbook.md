@@ -21,6 +21,10 @@ It does not rewrite legacy logic and defaults to dry-run behavior.
 - `python -m orchestrator show-modes`
 - `python -m orchestrator set-mode --key site_tts_runtime --value colab`
 - `python -m orchestrator reset-modes`
+- `python -m orchestrator site-tts scan --limit 1`
+- `python -m orchestrator site-tts missing-mp3 --limit 1`
+- `python -m orchestrator site-tts kokoro-colab export --limit 1`
+- `python -m orchestrator site-tts kokoro-colab verify`
 
 ## Safety model
 
@@ -121,3 +125,23 @@ Orchestrator writes service data outside legacy runtime paths:
 - `.orchestrator/reports/phase_b_<story_id>/story_state_manifest.json`
 - `.orchestrator/reports/phase_b_<story_id>/phase_b_summary.json`
 - `.orchestrator/reports/phase_b_<story_id>/runtime_modes_snapshot.json`
+
+## Site TTS Kokoro Colab flow (safe)
+
+- Queue view (safe, no write): `python -m orchestrator site-tts scan --limit 20`
+- Missing queue dry-run (safe, no mp3 write): `python -m orchestrator site-tts missing-mp3 --limit 20`
+- Export batch for Colab (safe, no local TTS): `python -m orchestrator site-tts kokoro-colab export --limit 20`
+- Verify coverage (safe): `python -m orchestrator site-tts kokoro-colab verify`
+- Verify a specific batch: `python -m orchestrator site-tts kokoro-colab verify --batch-id <batch_id>`
+- Import Colab results into `output/site`:
+  - `python -m orchestrator site-tts kokoro-colab import --batch-id <batch_id>`
+  - optional overwrite: add `--force`
+
+Batch directory:
+- `runs/tts_colab_batches/<batch_id>/`
+- Expected structure: `manifest.json`, `README_COLAB.md`, `stories/`, `chunks/`, `results/`
+- Colab must write files as `results/item_XXXXXX.mp3` (exact `item_id` from `manifest.json`)
+
+Safety:
+- Allowed by default: `scan`, `missing-mp3` (without `--execute`), `kokoro-colab export|verify`
+- Forbidden without explicit approval: `site-tts sync --execute`, `site-tts missing-mp3 --execute`

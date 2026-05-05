@@ -164,6 +164,7 @@ def _parser() -> argparse.ArgumentParser:
     st_miss.add_argument("--voice", default="", help="Фильтр Тип голоса из info.txt: M,F,U через запятую; пусто = все")
     st_miss.add_argument("--folder-suffix", default="", help="Только папки, имя оканчивается на _M / _F / _U (одна буква)")
     st_scan = st_sub.add_parser("scan", help="Показать все папки output/site: очередь, mp3, голос из info.txt")
+    st_scan.add_argument("--limit", type=int, default=0, help="Показать только первые N строк (0 = все)")
     st_scan.add_argument("--voice", default="", help="Подсветка фильтра M,F,U (для колонки in_queue); пусто = без фильтра по голосу")
     st_scan.add_argument("--folder-suffix", default="", help="Учитывать суффикс _M/_F/_U в имени папки при in_queue")
     st_sync = st_sub.add_parser("sync", help="Поток: очередь без mp3; существующий mp3 пропускается (без --force)")
@@ -256,13 +257,18 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
         vf = _voice_arg()
         fs = _suffix_arg()
         rows = scan_site_tts_queue(site_root, voice_types=vf, folder_suffix=fs)
+        lim = int(getattr(args, "limit", 0) or 0)
+        shown = rows[:lim] if lim > 0 else rows
         print("story\tvoice\thas_mp3\thas_cleaned\tin_queue\tskip")
-        for r in rows:
+        for r in shown:
             print(
                 f"{r['story']}\t{r['voice']}\t{r['has_mp3']}\t{r['has_cleaned']}\t{r['need_tts']}\t{r['skip']}"
             )
         nq = sum(1 for r in rows if r["need_tts"])
-        print(f"# in_queue={nq} (фильтры: voice={vf or 'все'}, folder_suffix={fs or 'нет'})")
+        print(
+            f"# shown={len(shown)}/{len(rows)} in_queue={nq} "
+            f"(фильтры: voice={vf or 'все'}, folder_suffix={fs or 'нет'})"
+        )
         return 0
 
     def _run_queue(cmd_label: str, *, lim: int | None) -> int:
