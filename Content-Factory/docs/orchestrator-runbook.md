@@ -130,15 +130,19 @@ Orchestrator writes service data outside legacy runtime paths:
 
 - Queue view (safe, no write): `python -m orchestrator site-tts scan --limit 20`
 - Missing queue dry-run (safe, no mp3 write): `python -m orchestrator site-tts missing-mp3 --limit 20`
-- Export batch for Colab (safe, no local TTS): `python -m orchestrator site-tts kokoro-colab export --limit 20`
-- Verify coverage (safe): `python -m orchestrator site-tts kokoro-colab verify`
-- Verify a specific batch: `python -m orchestrator site-tts kokoro-colab verify --batch-id <batch_id>`
-- Verify latest handoff: `python -m orchestrator site-tts kokoro-colab verify --latest`
-- Import Colab results into `output/site`:
-  - `python -m orchestrator site-tts kokoro-colab import --batch-id <batch_id>`
-  - `python -m orchestrator site-tts kokoro-colab import --handoff-dir "_COLAB_EXPORTS/<handoff_folder>"`
-  - `python -m orchestrator site-tts kokoro-colab import --latest`
-  - optional overwrite: add `--force`
+- Export for Colab (safe, no local TTS): `python -m orchestrator site-tts kokoro-colab export --limit 20`
+
+Main user workflow (folder-based):
+- Work directory: `COLAB_TTS_CURRENT/`
+- Exported text files: `COLAB_TTS_CURRENT/TEXTS_TO_COLAB/`
+- Put Colab mp3 files into: `COLAB_TTS_CURRENT/MP3_FROM_COLAB/`
+- Import: `python -m orchestrator site-tts kokoro-colab import --current`
+- Verify: `python -m orchestrator site-tts kokoro-colab verify --current`
+- Helpers: `COLAB_TTS_CURRENT/IMPORT_MP3.bat`, `COLAB_TTS_CURRENT/VERIFY_MP3.bat`
+
+Legacy/internal workflow (optional):
+- `--batch-id`, `--handoff-dir`, `--latest`
+- useful for troubleshooting and low-level batch inspection.
 
 Batch directory:
 - `runs/tts_colab_batches/<batch_id>/`

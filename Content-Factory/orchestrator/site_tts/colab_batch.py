@@ -3,6 +3,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
+import re
+import shutil
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +17,9 @@ from orchestrator.site_tts.text_chunking import pack_paragraph_chunks
 
 _HANDOFF_ROOT = "_COLAB_EXPORTS"
 _HANDOFF_RESULTS_DIR = "results_drop_here"
+_CURRENT_ROOT = "COLAB_TTS_CURRENT"
+_CURRENT_TEXTS = "TEXTS_TO_COLAB"
+_CURRENT_MP3 = "MP3_FROM_COLAB"
 
 
 def _utc_now_iso() -> str:
@@ -88,6 +94,25 @@ def _iter_story_dirs(site_root: Path) -> list[Path]:
     if not site_root.is_dir():
         return []
     return sorted([p for p in site_root.iterdir() if p.is_dir()], key=lambda x: x.name.lower())
+
+
+def _safe_name(name: str) -> str:
+    out = re.sub(r'[<>:"/\\|?*]+', "_", (name or "").strip())
+    out = out.replace("\n", "_").replace("\r", "_")
+    return out or "story"
+
+
+def _current_paths(root: Path) -> tuple[Path, Path, Path]:
+    current = (root / _CURRENT_ROOT).resolve()
+    texts = (current / _CURRENT_TEXTS).resolve()
+    mp3 = (current / _CURRENT_MP3).resolve()
+    return current, texts, mp3
+
+
+def _clear_dir(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def _latest_handoff_dir(root: Path) -> Path | None:
@@ -214,6 +239,141 @@ def _create_handoff_package(root: Path, batch_root: Path, manifest: dict[str, An
         "handoff_upload_zip": str(upload_zip),
         "handoff_results_drop": str(handoff_dir / _HANDOFF_RESULTS_DIR),
         "handoff_internal_manifest": str(handoff_dir / "internal_manifest.json"),
+    }
+
+
+def _build_current_folder(root: Path, batch_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    current_dir, texts_dir, mp3_dir = _current_paths(root)
+    _clear_dir(texts_dir)
+    mp3_dir.mkdir(parents=True, exist_ok=True)
+
+    items = list(manifest.get("items", []))
+    index_csv = current_dir / "STORIES_INDEX.csv"
+    mapping: list[dict[str, str]] = []
+    collisions: set[str] = set()
+    used_names: set[str] = set()
+    rows: list[list[str]] = []
+
+    for i, item in enumerate(items, start=1):
+        story_id = str(item.get("story_id", "")).strip()
+        voice = str(item.get("voice_type", "U")).strip().upper()[:1] or "U"
+        source_rel = str(item.get("source_text_path", "")).strip()
+        source_path = (root / source_rel).resolve() if source_rel else None
+        base = _safe_name(story_id)
+        txt_name = f"{base}__{voice}.txt"
+        if txt_name in used_names:
+            txt_name = f"{base}__{voice}__{i:03d}.txt"
+            collisions.add(story_id)
+        used_names.add(txt_name)
+        mp3_name = Path(txt_name).with_suffix(".mp3").name
+        out_rel = str(item.get("expected_output_mp3", "")).strip()
+
+        if source_path is not None and source_path.is_file():
+            (texts_dir / txt_name).write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+            (texts_dir / txt_name).write_text("", encoding="utf-8")
+
+        rows.append(
+            [
+                f"{i:03d}",
+                story_id,
+                txt_name,
+                mp3_name,
+                out_rel,
+                voice,
+                str(item.get("status", "pending")),
+            ]
+        )
+        mapping.append(
+            {
+                "story_folder": story_id,
+                "source_txt": txt_name,
+                "expected_mp3": mp3_name,
+                "expected_output_mp3": out_rel,
+                "voice": voice,
+            }
+        )
+
+    with index_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["number", "story_folder", "source_txt", "expected_mp3", "final_output_path", "voice", "status"])
+        w.writerows(rows)
+
+    readme = current_dir / "README.txt"
+    readme.write_text(
+        "\n".join(
+            [
+                "COLAB_TTS_CURRENT quick flow",
+                "",
+                "1) Upload all TXT files from TEXTS_TO_COLAB/ into Colab.",
+                "2) Generate MP3 with the same basenames.",
+                "3) Put MP3 files into MP3_FROM_COLAB/.",
+                "4) Run import:",
+                "   python -m orchestrator site-tts kokoro-colab import --current",
+                "5) Run verify:",
+                "   python -m orchestrator site-tts kokoro-colab verify --current",
+                "",
+                "Important:",
+                "- Keep filenames unchanged between TXT and MP3.",
+                "- Local sync --execute is NOT required for this flow.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    py_cmd = "py -3"
+    import_bat = current_dir / "IMPORT_MP3.bat"
+    import_bat.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "setlocal EnableExtensions DisableDelayedExpansion",
+                "cd /d \"%~dp0\\..\"",
+                f"set \"PY_CMD={py_cmd}\"",
+                "where py >nul 2>nul || set \"PY_CMD=python\"",
+                "%PY_CMD% -m orchestrator site-tts kokoro-colab import --current",
+                "pause",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    verify_bat = current_dir / "VERIFY_MP3.bat"
+    verify_bat.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "setlocal EnableExtensions DisableDelayedExpansion",
+                "cd /d \"%~dp0\\..\"",
+                f"set \"PY_CMD={py_cmd}\"",
+                "where py >nul 2>nul || set \"PY_CMD=python\"",
+                "%PY_CMD% -m orchestrator site-tts kokoro-colab verify --current",
+                "pause",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    internal = {
+        "schema_version": 1,
+        "batch_id": str(manifest.get("batch_id", batch_root.name)),
+        "batch_dir": str(batch_root),
+        "created_at": manifest.get("created_at", _utc_now_iso()),
+        "items_count": len(mapping),
+        "mapping": mapping,
+    }
+    (current_dir / "internal_manifest.json").write_text(json.dumps(internal, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "current_dir": str(current_dir),
+        "texts_dir": str(texts_dir),
+        "mp3_dir": str(mp3_dir),
+        "index_csv": str(index_csv),
+        "collisions": sorted(collisions),
+        "items_count": len(mapping),
     }
 
 
@@ -369,6 +529,7 @@ def export_kokoro_colab_batch(
         encoding="utf-8",
     )
     handoff = _create_handoff_package(root, batch_root, manifest)
+    current = _build_current_folder(root, batch_root, manifest)
     return {
         "ok": True,
         "batch_id": batch,
@@ -377,6 +538,7 @@ def export_kokoro_colab_batch(
         "skipped": len(skipped),
         "manifest_path": str(batch_root / "manifest.json"),
         **handoff,
+        **current,
     }
 
 
@@ -405,9 +567,64 @@ def import_kokoro_colab_results(
     batch_dir: Path | None = None,
     handoff_dir: Path | None = None,
     latest: bool = False,
+    current: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
+    if current:
+        current_dir, _texts_dir, mp3_dir = _current_paths(root)
+        internal_path = current_dir / "internal_manifest.json"
+        if not internal_path.is_file():
+            return {"ok": False, "message": f"current manifest not found: {internal_path}"}
+        try:
+            meta = json.loads(internal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {"ok": False, "message": f"failed to read {internal_path}: {exc}"}
+        mapping = list(meta.get("mapping", []))
+        imported = 0
+        skipped_existing = 0
+        missing_result = 0
+        errors = 0
+        details: list[dict[str, str]] = []
+        for m in mapping:
+            expected_mp3 = str(m.get("expected_mp3", "")).strip()
+            out_rel = str(m.get("expected_output_mp3", "")).strip()
+            if not expected_mp3 or not out_rel:
+                errors += 1
+                details.append({"status": "error", "reason": "mapping missing expected_mp3/output", "story": str(m.get("story_folder", ""))})
+                continue
+            src = (mp3_dir / expected_mp3).resolve()
+            dst = (root / out_rel).resolve()
+            if not src.is_file():
+                missing_result += 1
+                details.append({"status": "missing_result", "path": str(src), "story": str(m.get("story_folder", ""))})
+                continue
+            if dst.is_file() and not force:
+                skipped_existing += 1
+                details.append({"status": "skipped_existing", "path": str(dst), "story": str(m.get("story_folder", ""))})
+                continue
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(src.read_bytes())
+                imported += 1
+                details.append({"status": "imported", "path": str(dst), "story": str(m.get("story_folder", ""))})
+            except OSError as exc:
+                errors += 1
+                details.append({"status": "error", "reason": str(exc), "story": str(m.get("story_folder", ""))})
+        return {
+            "ok": True,
+            "mode": "current",
+            "current_dir": str(current_dir),
+            "results_drop_dir": str(mp3_dir),
+            "batch_dir": str(meta.get("batch_dir", "")),
+            "imported": imported,
+            "skipped_existing": skipped_existing,
+            "missing_result": missing_result,
+            "errors": errors,
+            "force": bool(force),
+            "details": details,
+        }
+
     handoff = _resolve_handoff_dir(root, handoff_dir, latest)
     bdir = _resolve_batch_dir(root, batch_id, batch_dir, handoff=handoff)
     manifest_path = bdir / "manifest.json"
@@ -493,6 +710,7 @@ def verify_mp3_coverage(
     batch_id: str | None = None,
     handoff_dir: Path | None = None,
     latest: bool = False,
+    current: bool = False,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     site_root = (root / "output" / "site").resolve()
@@ -530,6 +748,47 @@ def verify_mp3_coverage(
         "skipped_no_tts_file": skipped_no_tts,
         "ambiguous_tts_files": ambiguous_tts,
     }
+
+    if current:
+        current_dir, texts_dir, mp3_dir = _current_paths(root)
+        internal_path = current_dir / "internal_manifest.json"
+        if not internal_path.is_file():
+            out["current"] = {"error": f"current manifest not found: {internal_path}"}
+            return out
+        try:
+            meta = json.loads(internal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            out["current"] = {"error": f"failed to read {internal_path}: {exc}"}
+            return out
+        mapping = list(meta.get("mapping", []))
+        txt_count = len([p for p in texts_dir.glob("*.txt") if p.is_file()])
+        expected_mp3 = {str(m.get("expected_mp3", "")).strip() for m in mapping if str(m.get("expected_mp3", "")).strip()}
+        found_mp3 = {p.name for p in mp3_dir.glob("*.mp3") if p.is_file()}
+        can_import = 0
+        missing: list[str] = []
+        for m in mapping:
+            name = str(m.get("expected_mp3", "")).strip()
+            out_rel = str(m.get("expected_output_mp3", "")).strip()
+            if not name:
+                continue
+            if name in found_mp3:
+                can_import += 1
+            else:
+                missing.append(name)
+        extra = sorted(found_mp3 - expected_mp3)
+        out["current"] = {
+            "current_dir": str(current_dir),
+            "texts_exported": txt_count,
+            "mapping_items": len(mapping),
+            "mp3_found": len(found_mp3),
+            "can_import": can_import,
+            "missing_mp3": len(missing),
+            "extra_mp3": len(extra),
+            "first_missing": missing[:10],
+            "first_extra": extra[:10],
+            "batch_id": str(meta.get("batch_id", "")),
+        }
+        return out
 
     handoff = _resolve_handoff_dir(root, handoff_dir, latest)
     if (batch_id or "").strip() or handoff is not None:
