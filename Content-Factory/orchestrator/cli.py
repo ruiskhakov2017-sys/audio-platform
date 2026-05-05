@@ -187,9 +187,13 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_imp = st_cc_sub.add_parser("import", help="Импортировать mp3-результаты Colab в output/site")
     st_cc_imp.add_argument("--batch-id", default="", help="ID batch в runs/tts_colab_batches/")
     st_cc_imp.add_argument("--batch-dir", type=Path, default=None, help="Явный путь к batch-папке")
+    st_cc_imp.add_argument("--handoff-dir", type=Path, default=None, help="Путь к _COLAB_EXPORTS/<handoff-folder>")
+    st_cc_imp.add_argument("--latest", action="store_true", help="Взять последний handoff из _COLAB_EXPORTS/")
     st_cc_imp.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
     st_cc_ver = st_cc_sub.add_parser("verify", help="Проверить покрытие mp3 и (опционально) статус batch")
     st_cc_ver.add_argument("--batch-id", default="", help="ID batch для проверки статуса результатов")
+    st_cc_ver.add_argument("--handoff-dir", type=Path, default=None, help="Путь к _COLAB_EXPORTS/<handoff-folder>")
+    st_cc_ver.add_argument("--latest", action="store_true", help="Взять последний handoff из _COLAB_EXPORTS/")
 
     return p
 
@@ -325,26 +329,50 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             print(f"exported={res.get('exported')}")
             print(f"skipped={res.get('skipped')}")
             print(f"manifest={res.get('manifest_path')}")
+            if res.get("handoff_dir"):
+                print(f"handoff_dir={res.get('handoff_dir')}")
+                print(f"upload_zip={res.get('handoff_upload_zip')}")
+                print(f"results_drop_here={res.get('handoff_results_drop')}")
+                print(
+                    "import_cmd="
+                    f"python -m orchestrator site-tts kokoro-colab import --handoff-dir \"{res.get('handoff_dir')}\""
+                )
             return 0
 
         if sub == "import":
             bid = str(getattr(args, "batch_id", "") or "").strip() or None
             bdir = getattr(args, "batch_dir", None)
+            hdir = getattr(args, "handoff_dir", None)
+            latest = bool(getattr(args, "latest", False))
             force = bool(getattr(args, "force", False))
-            res = import_kokoro_colab_results(cfg.root_dir, batch_id=bid, batch_dir=bdir, force=force)
+            res = import_kokoro_colab_results(
+                cfg.root_dir,
+                batch_id=bid,
+                batch_dir=bdir,
+                handoff_dir=hdir,
+                latest=latest,
+                force=force,
+            )
             if not res.get("ok", False):
                 print(res.get("message", "import failed"))
                 return 2
             print(f"batch_dir={res.get('batch_dir')}")
+            if res.get("handoff_dir"):
+                print(f"handoff_dir={res.get('handoff_dir')}")
+                print(f"results_drop_dir={res.get('results_drop_dir')}")
             print(f"imported={res.get('imported')}")
             print(f"skipped_existing={res.get('skipped_existing')}")
             print(f"missing_result={res.get('missing_result')}")
             print(f"errors={res.get('errors')}")
+            if int(res.get("missing_result", 0) or 0) > 0:
+                print("hint=Проверьте results_drop_here или runs/tts_colab_batches/<batch_id>/results")
             return 0 if int(res.get("errors", 0) or 0) == 0 else 2
 
         if sub == "verify":
             bid = str(getattr(args, "batch_id", "") or "").strip() or None
-            res = verify_mp3_coverage(cfg.root_dir, batch_id=bid)
+            hdir = getattr(args, "handoff_dir", None)
+            latest = bool(getattr(args, "latest", False))
+            res = verify_mp3_coverage(cfg.root_dir, batch_id=bid, handoff_dir=hdir, latest=latest)
             print(f"source_root={res.get('source_root')}")
             print(f"total_story_dirs={res.get('total_story_dirs')}")
             print(f"with_tts_text_file={res.get('with_tts_text_file')}")
@@ -355,7 +383,20 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             batch = res.get("batch")
             if isinstance(batch, dict):
                 print("-- batch --")
-                for k in ("batch_id", "batch_dir", "exported_items", "results_found", "already_imported", "missing_results", "error"):
+                for k in (
+                    "batch_id",
+                    "batch_dir",
+                    "handoff_dir",
+                    "exported_items",
+                    "waiting_mp3",
+                    "results_found",
+                    "results_found_in_batch_results",
+                    "results_found_in_handoff_drop",
+                    "already_imported",
+                    "missing_results",
+                    "first_problems",
+                    "error",
+                ):
                     if k in batch:
                         print(f"{k}={batch[k]}")
             return 0

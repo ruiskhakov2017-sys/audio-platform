@@ -133,14 +133,26 @@ Orchestrator writes service data outside legacy runtime paths:
 - Export batch for Colab (safe, no local TTS): `python -m orchestrator site-tts kokoro-colab export --limit 20`
 - Verify coverage (safe): `python -m orchestrator site-tts kokoro-colab verify`
 - Verify a specific batch: `python -m orchestrator site-tts kokoro-colab verify --batch-id <batch_id>`
+- Verify latest handoff: `python -m orchestrator site-tts kokoro-colab verify --latest`
 - Import Colab results into `output/site`:
   - `python -m orchestrator site-tts kokoro-colab import --batch-id <batch_id>`
+  - `python -m orchestrator site-tts kokoro-colab import --handoff-dir "_COLAB_EXPORTS/<handoff_folder>"`
+  - `python -m orchestrator site-tts kokoro-colab import --latest`
   - optional overwrite: add `--force`
 
 Batch directory:
 - `runs/tts_colab_batches/<batch_id>/`
 - Expected structure: `manifest.json`, `README_COLAB.md`, `stories/`, `chunks/`, `results/`
 - Colab must write files as `results/item_XXXXXX.mp3` (exact `item_id` from `manifest.json`)
+
+Human-friendly handoff directory (recommended):
+- `_COLAB_EXPORTS/<batch_id>__site_tts__<N>_stories/`
+- Contains:
+  - `00_README_START_HERE.txt`
+  - `01_STORIES_INDEX.csv`
+  - `02_UPLOAD_THIS_TO_COLAB.zip`
+  - `results_drop_here/` (put downloaded mp3 files here)
+  - `internal_manifest.json`
 
 Safety:
 - Allowed by default: `scan`, `missing-mp3` (without `--execute`), `kokoro-colab export|verify`

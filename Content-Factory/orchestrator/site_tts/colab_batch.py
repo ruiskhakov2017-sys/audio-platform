@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +11,9 @@ from typing import Any
 
 from orchestrator.site_tts.config import load_site_tts_settings
 from orchestrator.site_tts.text_chunking import pack_paragraph_chunks
+
+_HANDOFF_ROOT = "_COLAB_EXPORTS"
+_HANDOFF_RESULTS_DIR = "results_drop_here"
 
 
 def _utc_now_iso() -> str:
@@ -83,6 +88,129 @@ def _iter_story_dirs(site_root: Path) -> list[Path]:
     if not site_root.is_dir():
         return []
     return sorted([p for p in site_root.iterdir() if p.is_dir()], key=lambda x: x.name.lower())
+
+
+def _latest_handoff_dir(root: Path) -> Path | None:
+    base = (root / _HANDOFF_ROOT).resolve()
+    if not base.is_dir():
+        return None
+    candidates = [p for p in base.iterdir() if p.is_dir()]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+
+def _resolve_handoff_dir(root: Path, handoff_dir: Path | None, latest: bool) -> Path | None:
+    if handoff_dir is not None:
+        return (handoff_dir if handoff_dir.is_absolute() else (root / handoff_dir)).resolve()
+    if latest:
+        return _latest_handoff_dir(root)
+    return None
+
+
+def _read_handoff_manifest(handoff: Path) -> dict[str, Any]:
+    path = handoff / "internal_manifest.json"
+    if not path.is_file():
+        raise ValueError(f"internal_manifest.json not found: {path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to read handoff manifest: {path} ({exc})") from exc
+
+
+def _create_handoff_package(root: Path, batch_root: Path, manifest: dict[str, Any]) -> dict[str, str]:
+    batch_id = str(manifest.get("batch_id", batch_root.name))
+    total_items = int(manifest.get("total_items", 0) or 0)
+    handoff_name = f"{batch_id}__site_tts__{total_items}_stories"
+    handoff_dir = (root / _HANDOFF_ROOT / handoff_name).resolve()
+    handoff_dir.mkdir(parents=True, exist_ok=False)
+
+    index_csv = handoff_dir / "01_STORIES_INDEX.csv"
+    with index_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(
+            [
+                "human_number",
+                "story_id",
+                "story_title_or_folder",
+                "voice",
+                "chunks_count",
+                "expected_result_filename",
+                "expected_output_mp3",
+                "status",
+            ]
+        )
+        for i, item in enumerate(list(manifest.get("items", [])), start=1):
+            exp = str(item.get("expected_result_mp3", "")).strip()
+            w.writerow(
+                [
+                    f"{i:03d}",
+                    item.get("story_id", ""),
+                    item.get("story_folder", ""),
+                    item.get("voice_type", ""),
+                    item.get("chunks_count", ""),
+                    Path(exp).name if exp else "",
+                    item.get("expected_output_mp3", ""),
+                    item.get("status", ""),
+                ]
+            )
+
+    internal_manifest = {
+        "schema_version": 1,
+        "batch_id": batch_id,
+        "batch_dir": str(batch_root),
+        "created_at": manifest.get("created_at", _utc_now_iso()),
+        "items_count": total_items,
+    }
+    (handoff_dir / "internal_manifest.json").write_text(
+        json.dumps(internal_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    (handoff_dir / "00_README_START_HERE.txt").write_text(
+        "\n".join(
+            [
+                "Kokoro Colab Site TTS handoff (START HERE)",
+                "",
+                "1) Upload 02_UPLOAD_THIS_TO_COLAB.zip to Colab and run generation there.",
+                "2) Download produced MP3 files from Colab.",
+                "3) Put resulting MP3 files into results_drop_here/ in this folder.",
+                f"4) Run import:",
+                f"   python -m orchestrator site-tts kokoro-colab import --handoff-dir \"{handoff_dir}\"",
+                "5) Verify status:",
+                f"   python -m orchestrator site-tts kokoro-colab verify --handoff-dir \"{handoff_dir}\"",
+                "",
+                "Notes:",
+                "- Keep MP3 names matching item_id (example: item_000001.mp3).",
+                "- No local sync --execute is required for this flow.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (handoff_dir / _HANDOFF_RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+
+    upload_zip = handoff_dir / "02_UPLOAD_THIS_TO_COLAB.zip"
+    with zipfile.ZipFile(upload_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for rel in ("manifest.json", "README_COLAB.md"):
+            p = batch_root / rel
+            if p.is_file():
+                zf.write(p, arcname=rel)
+        for sub in ("stories", "chunks"):
+            base = batch_root / sub
+            if not base.is_dir():
+                continue
+            for p in sorted(base.rglob("*")):
+                if p.is_file():
+                    zf.write(p, arcname=str(p.relative_to(batch_root)).replace("\\", "/"))
+
+    return {
+        "handoff_dir": str(handoff_dir),
+        "handoff_index_csv": str(index_csv),
+        "handoff_upload_zip": str(upload_zip),
+        "handoff_results_drop": str(handoff_dir / _HANDOFF_RESULTS_DIR),
+        "handoff_internal_manifest": str(handoff_dir / "internal_manifest.json"),
+    }
 
 
 def export_kokoro_colab_batch(
@@ -236,6 +364,7 @@ def export_kokoro_colab_batch(
         + "\n",
         encoding="utf-8",
     )
+    handoff = _create_handoff_package(root, batch_root, manifest)
     return {
         "ok": True,
         "batch_id": batch,
@@ -243,10 +372,20 @@ def export_kokoro_colab_batch(
         "exported": len(items),
         "skipped": len(skipped),
         "manifest_path": str(batch_root / "manifest.json"),
+        **handoff,
     }
 
 
-def _resolve_batch_dir(root: Path, batch_id: str | None, batch_dir: Path | None) -> Path:
+def _resolve_batch_dir(root: Path, batch_id: str | None, batch_dir: Path | None, handoff: Path | None = None) -> Path:
+    if handoff is not None:
+        meta = _read_handoff_manifest(handoff)
+        bid = str(meta.get("batch_id", "")).strip()
+        if bid:
+            return (root / "runs" / "tts_colab_batches" / bid).resolve()
+        bdir = str(meta.get("batch_dir", "")).strip()
+        if bdir:
+            return Path(bdir).resolve()
+        raise ValueError("handoff manifest does not contain batch_id/batch_dir")
     if batch_dir is not None:
         return (batch_dir if batch_dir.is_absolute() else (root / batch_dir)).resolve()
     bid = (batch_id or "").strip()
@@ -260,15 +399,19 @@ def import_kokoro_colab_results(
     *,
     batch_id: str | None = None,
     batch_dir: Path | None = None,
+    handoff_dir: Path | None = None,
+    latest: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
-    bdir = _resolve_batch_dir(root, batch_id, batch_dir)
+    handoff = _resolve_handoff_dir(root, handoff_dir, latest)
+    bdir = _resolve_batch_dir(root, batch_id, batch_dir, handoff=handoff)
     manifest_path = bdir / "manifest.json"
     if not manifest_path.is_file():
         return {"ok": False, "message": f"manifest not found: {manifest_path}"}
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     items = list(manifest.get("items", []))
+    handoff_results = (handoff / _HANDOFF_RESULTS_DIR).resolve() if handoff is not None else None
 
     imported = 0
     skipped_existing = 0
@@ -279,7 +422,11 @@ def import_kokoro_colab_results(
     for item in items:
         item_id = str(item.get("item_id", "")).strip()
         result_rel = str(item.get("expected_result_mp3", "")).strip() or f"results/{item_id}.mp3"
-        result_mp3 = (bdir / result_rel).resolve()
+        result_candidates = [(bdir / result_rel).resolve()]
+        if handoff_results is not None:
+            result_candidates.append((handoff_results / Path(result_rel).name).resolve())
+            result_candidates.append((handoff_results / f"{item_id}.mp3").resolve())
+        result_mp3 = next((p for p in result_candidates if p.is_file()), None)
         out_rel = str(item.get("expected_output_mp3", "")).strip()
         out_mp3 = (root / out_rel).resolve() if out_rel else None
         if out_mp3 is None:
@@ -287,10 +434,16 @@ def import_kokoro_colab_results(
             item["status"] = "error"
             details.append({"item_id": item_id, "status": "error", "reason": "missing_expected_output_mp3"})
             continue
-        if not result_mp3.is_file():
+        if result_mp3 is None:
             missing_result += 1
             item["status"] = "missing_result"
-            details.append({"item_id": item_id, "status": "missing_result", "path": str(result_mp3)})
+            details.append(
+                {
+                    "item_id": item_id,
+                    "status": "missing_result",
+                    "searched": [str(p) for p in result_candidates],
+                }
+            )
             continue
         if out_mp3.is_file() and not force:
             skipped_existing += 1
@@ -323,13 +476,19 @@ def import_kokoro_colab_results(
         "details": details,
     }
     (bdir / "import_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"ok": True, "batch_dir": str(bdir), **report}
+    out: dict[str, Any] = {"ok": True, "batch_dir": str(bdir), **report}
+    if handoff is not None:
+        out["handoff_dir"] = str(handoff)
+        out["results_drop_dir"] = str(handoff_results) if handoff_results is not None else ""
+    return out
 
 
 def verify_mp3_coverage(
     root_dir: Path,
     *,
     batch_id: str | None = None,
+    handoff_dir: Path | None = None,
+    latest: bool = False,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     site_root = (root / "output" / "site").resolve()
@@ -368,28 +527,52 @@ def verify_mp3_coverage(
         "ambiguous_tts_files": ambiguous_tts,
     }
 
-    if (batch_id or "").strip():
-        bdir = (root / "runs" / "tts_colab_batches" / str(batch_id).strip()).resolve()
+    handoff = _resolve_handoff_dir(root, handoff_dir, latest)
+    if (batch_id or "").strip() or handoff is not None:
+        bdir = _resolve_batch_dir(root, batch_id, None, handoff=handoff)
         manifest_path = bdir / "manifest.json"
+        handoff_results = (handoff / _HANDOFF_RESULTS_DIR).resolve() if handoff is not None else None
         if manifest_path.is_file():
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             items = list(manifest.get("items", []))
-            results_found = 0
+            results_found_in_batch = 0
+            results_found_in_handoff = 0
             already_imported = 0
+            missing_item_ids: list[str] = []
             for it in items:
-                rid = str(it.get("expected_result_mp3", "")).strip()
+                item_id = str(it.get("item_id", "")).strip()
+                rid = str(it.get("expected_result_mp3", "")).strip() or f"results/{item_id}.mp3"
                 out_rel = str(it.get("expected_output_mp3", "")).strip()
-                if rid and (bdir / rid).is_file():
-                    results_found += 1
+                in_batch = bool(rid and (bdir / rid).is_file())
+                in_handoff = bool(
+                    handoff_results is not None
+                    and (
+                        (handoff_results / Path(rid).name).is_file()
+                        or (handoff_results / f"{item_id}.mp3").is_file()
+                    )
+                )
+                if in_batch:
+                    results_found_in_batch += 1
+                if in_handoff:
+                    results_found_in_handoff += 1
+                if not in_batch and not in_handoff:
+                    missing_item_ids.append(item_id)
                 if out_rel and (root / out_rel).is_file():
                     already_imported += 1
+            results_found = max(results_found_in_batch, len(items) - len(missing_item_ids))
+            waiting_mp3 = max(0, len(items) - already_imported)
             out["batch"] = {
                 "batch_id": manifest.get("batch_id", bdir.name),
                 "batch_dir": str(bdir),
+                "handoff_dir": str(handoff) if handoff is not None else "",
                 "exported_items": len(items),
                 "results_found": results_found,
+                "results_found_in_batch_results": results_found_in_batch,
+                "results_found_in_handoff_drop": results_found_in_handoff,
                 "already_imported": already_imported,
                 "missing_results": max(0, len(items) - results_found),
+                "waiting_mp3": waiting_mp3,
+                "first_problems": missing_item_ids[:10],
             }
         else:
             out["batch"] = {"batch_id": str(batch_id), "error": f"manifest not found: {manifest_path}"}
