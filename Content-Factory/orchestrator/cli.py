@@ -104,6 +104,7 @@ def _parser() -> argparse.ArgumentParser:
     phb.add_argument("--promo-intro-en", default="promo_intro_en")
     phb.add_argument("--promo-mid-en", default="promo_mid_en")
     phb.add_argument("--promo-outro-en", default="promo_outro_en")
+    phb.add_argument("--branch", choices=["all", "site"], default="all", help="phase-b route: all|site")
     phb.add_argument("--allow-scaffold", action="store_true")
 
     show_modes = sub.add_parser("show-modes")
@@ -807,6 +808,7 @@ def main() -> int:
                 promo_intro_en=args.promo_intro_en,
                 promo_mid_en=args.promo_mid_en,
                 promo_outro_en=args.promo_outro_en,
+                branch=str(args.branch).strip().lower() or "all",
                 allow_scaffold=bool(args.allow_scaffold),
             ),
         )

@@ -76,6 +76,28 @@ Notes:
 - Runtime modes are loaded from `configs/runtime_modes.yaml`.
 - Mode snapshot is saved in each Phase B run as `runtime_modes_snapshot.json`.
 
+### Site-only route
+
+- `phase-a --run-branch site`
+- `phase-b --branch site` (site-only, no YouTube stages)
+- `run --pipeline site`
+
+In `phase-b --branch site` only site-oriented scaffold steps are used:
+- `general_selection`
+- `site_info_builder`
+
+YouTube-specific steps are disabled for this route:
+- `youtube_top_tier_selection`
+- `youtube_safe_text`
+- `youtube_ad_point`
+- `youtube_characters`
+- `youtube_scene_prompts`
+
+### YouTube route
+
+- Uses the broader Phase B scaffold (`phase-b --branch all`) and YouTube-specific stages.
+- Not used in Site Kokoro Drive scenario.
+
 ## Length filter behavior
 
 - Processes only text files by extension (default: `.txt`).

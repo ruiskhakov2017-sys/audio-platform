@@ -24,6 +24,7 @@ class PhaseBOptions:
     promo_mid_en: str = "promo_mid_en"
     promo_outro_en: str = "promo_outro_en"
     allow_scaffold: bool = False
+    branch: str = "all"
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -199,6 +200,9 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
         return {"ok": False, "message": msg}
 
+    branch = str(options.branch or "all").strip().lower()
+    site_only = branch == "site"
+
     run_root = _resolve_phase_b_run_root(
         config,
         options.deferred_manifest,
@@ -208,6 +212,7 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
     run_root.mkdir(parents=True, exist_ok=True)
     print(f"[PHASE B] started: story_id={options.story_id}", flush=True)
     print(f"[PHASE B] reports: {run_root}", flush=True)
+    print(f"[PHASE B] branch={'site_only' if site_only else 'all'}", flush=True)
 
     deferred_payload = json.loads(options.deferred_manifest.read_text(encoding="utf-8"))
     deferred_items = _normalize_deferred_items(deferred_payload)
@@ -229,6 +234,13 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         },
     )
     _write_json(run_root / "runtime_modes_snapshot.json", {"modes": modes})
+
+    stage_list_site_only = ["general_selection", "site_info_builder"]
+    banned_tokens = ("youtube", "safe_text", "characters", "scenes", "frames", "video", "autovideo", "director")
+    if site_only and any(any(tok in s for tok in banned_tokens) for s in stage_list_site_only):
+        msg = "site-only phase-b: invalid stage list contains forbidden youtube/video tokens"
+        status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
+        return {"ok": False, "message": msg}
 
     story_states: dict[str, dict[str, str]] = {}
     general_rows: list[dict[str, Any]] = []
@@ -303,6 +315,11 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         info_path = info_dir / f"{story_key}.info.json"
         _write_json(info_path, info_obj)
         info_rows.append({"source_path": src_str, "info_output": str(info_path)})
+
+        if site_only:
+            print(f"[B][{i+1}/{total_items}] site_ready (branch=site_only)", flush=True)
+            story_states[src_str] = {"state": "site_ready", "reason": "site_only_branch"}
+            continue
 
         # 3) youtube_top_tier_selection
         y_decision = "youtube_selected" if word_count >= 700 else "site_only"
@@ -413,17 +430,9 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
     # artifacts
     _write_jsonl(run_root / "general_selection_results.jsonl", general_rows)
     _write_jsonl(run_root / "info_outputs_results.jsonl", info_rows)
-    _write_jsonl(run_root / "youtube_selection_results.jsonl", youtube_rows)
-    _write_jsonl(run_root / "safe_text_results.jsonl", safe_rows)
-    _write_jsonl(run_root / "youtube_ad_point_results.jsonl", ad_rows)
-    _write_jsonl(run_root / "promo_applied_results.jsonl", promo_rows)
-    _write_jsonl(run_root / "characters_results.jsonl", characters_rows)
-    _write_jsonl(run_root / "scene_prompts_results.jsonl", scene_rows)
-
     _write_json(run_root / "routing_rejected.json", {"items": rejected})
     _write_json(run_root / "routing_manual_review.json", {"items": manual_review})
     _write_json(run_root / "routing_site_ready.json", {"items": site_ready})
-    _write_json(run_root / "routing_youtube_ready.json", {"items": youtube_ready})
     _write_json(
         run_root / "site_visual_plan.json",
         {
@@ -435,17 +444,25 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
             ),
         },
     )
-    _write_json(
-        run_root / "youtube_publish_plan.json",
-        {
-            "mode": modes.get("youtube_publish", "api"),
-            "action": (
-                "prepare_manual_publish_package"
-                if modes.get("youtube_publish") == "manual"
-                else "publish_via_api"
-            ),
-        },
-    )
+    if not site_only:
+        _write_jsonl(run_root / "youtube_selection_results.jsonl", youtube_rows)
+        _write_jsonl(run_root / "safe_text_results.jsonl", safe_rows)
+        _write_jsonl(run_root / "youtube_ad_point_results.jsonl", ad_rows)
+        _write_jsonl(run_root / "promo_applied_results.jsonl", promo_rows)
+        _write_jsonl(run_root / "characters_results.jsonl", characters_rows)
+        _write_jsonl(run_root / "scene_prompts_results.jsonl", scene_rows)
+        _write_json(run_root / "routing_youtube_ready.json", {"items": youtube_ready})
+        _write_json(
+            run_root / "youtube_publish_plan.json",
+            {
+                "mode": modes.get("youtube_publish", "api"),
+                "action": (
+                    "prepare_manual_publish_package"
+                    if modes.get("youtube_publish") == "manual"
+                    else "publish_via_api"
+                ),
+            },
+        )
     _write_json(
         run_root / "story_state_manifest.json",
         {
@@ -455,30 +472,37 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
     _write_json(
         run_root / "phase_b_summary.json",
         {
+            "branch": "site_only" if site_only else "all",
             "deferred_in": len(deferred_items),
             "rejected": len(rejected),
             "manual_review": len(manual_review),
             "site_ready": len(site_ready),
-            "youtube_ready": len(youtube_ready),
+            "youtube_ready": (0 if site_only else len(youtube_ready)),
             "errors": len(errors),
             "run_root": str(run_root),
-            "phase_b_order": [
-                "general_selection",
-                "site_info_builder",
-                "youtube_top_tier_selection",
-                "youtube_safe_text",
-                "youtube_ad_point",
-                "promo_insertion",
-                "youtube_characters",
-                "youtube_scene_prompts",
-            ],
+            "phase_b_order": (
+                stage_list_site_only
+                if site_only
+                else [
+                    "general_selection",
+                    "site_info_builder",
+                    "youtube_top_tier_selection",
+                    "youtube_safe_text",
+                    "youtube_ad_point",
+                    "promo_insertion",
+                    "youtube_characters",
+                    "youtube_scene_prompts",
+                ]
+            ),
             "placeholder_note": "Gemini bots runtime is not connected yet; results are scaffolded for integration tests.",
         },
     )
 
     summary = (
-        f"phase B done; deferred={len(deferred_items)} rejected={len(rejected)} "
-        f"review={len(manual_review)} site_ready={len(site_ready)} youtube_ready={len(youtube_ready)}"
+        f"phase B done; branch={'site_only' if site_only else 'all'} "
+        f"deferred={len(deferred_items)} rejected={len(rejected)} "
+        f"review={len(manual_review)} site_ready={len(site_ready)} "
+        f"youtube_ready={(0 if site_only else len(youtube_ready))}"
     )
     status.append(
         story_id=options.story_id,

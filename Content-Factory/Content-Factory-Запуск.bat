@@ -147,7 +147,7 @@ if "%STORIES_DIR%"=="" goto :MAIN_MENU
 set /p RUN_ID=Run id (Enter = site-drive-run): 
 if "%RUN_ID%"=="" set "RUN_ID=site-drive-run"
 echo.
-echo Steps: [1/3] phase-a site  [2/3] phase-b  [3/3] run --pipeline site ^(site_tts_engine=kokoro_colab_drive^)
+echo Steps: [1/3] phase-a site  [2/3] phase-b site-only  [3/3] run --pipeline site ^(site_tts_engine=kokoro_colab_drive^)
 choice /c YN /n /m "Confirm? [Y/N]: "
 if errorlevel 2 goto :MAIN_MENU
 echo.
@@ -165,6 +165,12 @@ if not exist "%PIPELINE_REPORT_DIR%" mkdir "%PIPELINE_REPORT_DIR%"
   echo started=%DATE% %TIME%
 ) > "%PIPELINE_REPORT_FILE%"
 call :PRINT_SITE_PIPELINE_DIAGNOSTICS "%STORIES_DIR%" "kokoro_colab_drive"
+echo [DIAG] SITE ONLY PIPELINE
+echo [DIAG] phase_a=site
+echo [DIAG] phase_b=site_only
+echo [DIAG] pipeline=site
+echo [DIAG] youtube_stages_enabled=false
+echo [DIAG] tts_engine=kokoro_colab_drive
 %PY_CMD% -m orchestrator set-mode --key site_tts_engine --value kokoro_colab_drive
 if errorlevel 1 (
   echo [ERROR] failed to set site_tts_engine=kokoro_colab_drive
@@ -191,8 +197,8 @@ if errorlevel 1 (
 )
 echo [OK] phase-a
 call :PRINT_PHASE_A_STATS "%RUN_ID%-a"
-echo [2/3] phase-b...
-%PY_CMD% -m orchestrator phase-b --story-id "%RUN_ID%-b" --deferred-manifest "runs\site\%RUN_ID%-a\_phase_a\ready_queues\deferred.json" --gemini-registry "configs\gemini_bots_registry.example.yaml"
+echo [2/3] phase-b site-only...
+%PY_CMD% -m orchestrator phase-b --branch site --story-id "%RUN_ID%-b" --deferred-manifest "runs\site\%RUN_ID%-a\_phase_a\ready_queues\deferred.json" --gemini-registry "configs\gemini_bots_registry.example.yaml"
 if errorlevel 1 (
   echo [ERROR] phase-b failed
   set "PIPELINE_STATUS=failed"
