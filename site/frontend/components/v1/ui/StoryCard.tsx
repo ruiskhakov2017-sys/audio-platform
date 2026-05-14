@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Story } from '@/types/story';
 import { getDisplayTags } from '@/lib/stories';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 import { PREMIUM_STORY_FROM_PRICE_RUB, formatRub } from '@/config/pricing';
 import { Play, Crown, ChevronRight, Flame, Sparkles } from 'lucide-react';
 import { usePlayerStore } from '@/store/playerStore';
@@ -23,7 +24,8 @@ export const StoryCard = ({ story, variant = 'default' }: StoryCardProps) => {
   const isCurrentTrack = currentTrack?.id === story.id;
   const isPlayingCurrent = isCurrentTrack && isPlaying;
   const isPremium =
-    story.isPremium || getDisplayTags(story).some((t) => t.toLowerCase() === 'premium');
+    !ALL_STORIES_FREE_TO_LISTEN &&
+    (story.isPremium || getDisplayTags(story).some((t) => t.toLowerCase() === 'premium'));
   const isNew = story.id >= 6;
   const isHot = story.id <= 3 && story.id >= 1;
 

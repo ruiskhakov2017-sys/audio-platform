@@ -47,6 +47,7 @@ echo === %date% %time% === > "%TMPLOG%"
 echo === Folder: %CD% >> "%TMPLOG%"
 echo. >> "%TMPLOG%"
 
+set PYTHONIOENCODING=utf-8
 ".venv\Scripts\python.exe" "publish_stories.py" >> "%TMPLOG%" 2>&1
 set EXIT_CODE=%errorlevel%
 echo. >> "%TMPLOG%"

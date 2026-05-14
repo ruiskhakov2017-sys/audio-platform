@@ -1,4 +1,5 @@
 import type { Story } from '@/types/story';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 const AUTH_ACCESS_KEY = 'auth_access_token';
@@ -38,7 +39,7 @@ export function mapDjangoStoryToStory(row: DjangoStory): Story {
     coverImage: row.cover_image_url ?? '',
     audioSrc: row.audio_file_url ?? '',
     durationSec: Number(row.duration) || 0,
-    isPremium: Boolean(row.is_premium),
+    isPremium: ALL_STORIES_FREE_TO_LISTEN ? false : Boolean(row.is_premium),
     genres,
     tags: [],
   };

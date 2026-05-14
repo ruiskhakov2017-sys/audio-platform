@@ -5,19 +5,25 @@ import { mapRowToStory } from '@/lib/stories';
 import type { Story } from '@/types/story';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const SUPABASE_SERVICE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
 
-/** Загрузка списка рассказов из Supabase для каталога (с service role, обходит RLS). */
+const SECURE_VIEW = 'secure_stories_view';
+
+function getPublicClient() {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
+
 export async function getStoriesForCatalog(): Promise<Story[]> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return [];
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return [];
+  const supabase = getPublicClient();
   const PAGE_SIZE = 1000;
   const all: Story[] = [];
   let from = 0;
   while (true) {
     const { data, error } = await supabase
-      .from('stories')
+      .from(SECURE_VIEW)
       .select('*')
       .order('created_at', { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
@@ -29,12 +35,11 @@ export async function getStoriesForCatalog(): Promise<Story[]> {
   return all;
 }
 
-/** Топ-12 по прослушиваниям (listens_count desc, created_at desc). Если колонки listens_count нет или все 0 — по дате добавления. */
 export async function getTopStories(limit = 12): Promise<Story[]> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return [];
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return [];
+  const supabase = getPublicClient();
   const { data: byListens, error: errListens } = await supabase
-    .from('stories')
+    .from(SECURE_VIEW)
     .select('*')
     .order('listens_count', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
@@ -43,7 +48,7 @@ export async function getTopStories(limit = 12): Promise<Story[]> {
     return byListens.map((row: Record<string, unknown>) => mapRowToStory(row as Parameters<typeof mapRowToStory>[0]));
   }
   const { data: byDate, error: errDate } = await supabase
-    .from('stories')
+    .from(SECURE_VIEW)
     .select('*')
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -53,11 +58,10 @@ export async function getTopStories(limit = 12): Promise<Story[]> {
 
 export type BrowseFilter = 'popular' | 'new' | 'free' | 'editor' | 'premium' | 'trending';
 
-/** Список рассказов для страницы каталога по выбранному фильтру. */
 export async function getStoriesForBrowse(filter: BrowseFilter): Promise<Story[]> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return [];
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  let query = supabase.from('stories').select('*');
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return [];
+  const supabase = getPublicClient();
+  let query = supabase.from(SECURE_VIEW).select('*');
 
   switch (filter) {
     case 'popular':
@@ -107,12 +111,11 @@ const TOP100_GENRES = [
   '18 лет', 'А в попку лучше', 'Би', 'В первый раз', 'Ваши рассказы', 'Гетеросексуалы', 'Группа', 'Драма', 'Жена шлюшка', 'Зрелый возраст', 'Измена', 'Инцест', 'Классика', 'Кунилингус', 'Куколд', 'Лесби', 'Мастурбация', 'Минет', 'Наблюдатели', 'Непорно', 'Перевод', 'Пикап-истории', 'По принуждению', 'Подчинение', 'Романтика', 'Свингеры', 'Секс-туризм', 'Сексвайф', 'Случайный роман', 'Служебный роман', 'Студенты', 'Фантазии', 'Фантастика',
 ];
 
-/** Топ-100: по 3 самых популярных (listens_count) из каждого жанра, общий список по убыванию популярности. */
 export async function getTop100Stories(): Promise<Story[]> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return [];
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return [];
+  const supabase = getPublicClient();
   const { data: rows, error } = await supabase
-    .from('stories')
+    .from(SECURE_VIEW)
     .select('*')
     .order('listens_count', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
@@ -131,7 +134,6 @@ export async function getTop100Stories(): Promise<Story[]> {
   return combined.slice(0, 100);
 }
 
-/** Инкремент счётчика прослушиваний у рассказа (при открытии страницы или при нажатии Play). */
 export async function incrementListensCount(storyId: string | number): Promise<void> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);

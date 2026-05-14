@@ -84,7 +84,6 @@ type EditStoryDrawerProps = {
 export function EditStoryDrawer({ story, onClose, onSaved }: EditStoryDrawerProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [content, setContent] = useState('');
   const [isPremium, setIsPremium] = useState(false);
   const [genres, setGenres] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
@@ -98,7 +97,6 @@ export function EditStoryDrawer({ story, onClose, onSaved }: EditStoryDrawerProp
     if (!story) return;
     setTitle(story.title);
     setDescription(story.description ?? '');
-    setContent(story.content ?? '');
     setIsPremium(story.isPremium);
     setGenres(story.genres ?? []);
     setTags(story.tags ?? []);
@@ -166,7 +164,6 @@ export function EditStoryDrawer({ story, onClose, onSaved }: EditStoryDrawerProp
       const payload: Parameters<typeof updateStory>[1] = {
         title: title.trim(),
         description: description.trim() || undefined,
-        content: content.trim() || undefined,
         is_premium: isPremium,
         genres: genres.length ? genres : undefined,
         tags: tags.length ? tags : undefined,
@@ -258,17 +255,6 @@ export function EditStoryDrawer({ story, onClose, onSaved }: EditStoryDrawerProp
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
               className="w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white focus:border-cyan-600 focus:outline-none text-sm resize-y"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-zinc-400 mb-1">Текст рассказа</label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={12}
-              className="w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white focus:border-cyan-600 focus:outline-none text-sm resize-y font-mono text-sm"
-              placeholder="Полный текст истории (если хранится в БД)"
             />
           </div>
 

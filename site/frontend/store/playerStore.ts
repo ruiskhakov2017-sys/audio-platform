@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 import type { Story } from '@/types/story';
 
 type PlayerState = {
@@ -82,7 +83,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   play: (story, queue = []) => {
-    if (story.isPremium && !get().isPremiumUser) {
+    if (!ALL_STORIES_FREE_TO_LISTEN && story.isPremium && !get().isPremiumUser) {
       set({ isPaywallOpen: true });
       return;
     }
@@ -95,7 +96,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
   setTrack: (story) => {
-    if (story.isPremium && !get().isPremiumUser) {
+    if (!ALL_STORIES_FREE_TO_LISTEN && story.isPremium && !get().isPremiumUser) {
       set({ isPaywallOpen: true });
       return;
     }
@@ -107,7 +108,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
   setStory: (story) => {
-    if (story.isPremium && !get().isPremiumUser) {
+    if (!ALL_STORIES_FREE_TO_LISTEN && story.isPremium && !get().isPremiumUser) {
       set({ isPaywallOpen: true });
       return;
     }

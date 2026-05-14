@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 import { usePlayerStore } from '@/store/playerStore';
 import { useFavoritesStore } from '@/store/favoritesStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
@@ -74,9 +75,10 @@ export function GlobalPlayerBar() {
 
   if (!currentTrack) return null;
 
-  const isLocked =
-    currentTrack.isPremium &&
-    (!currentTrack.audioSrc?.trim() || !isPremiumUser);
+  const isLocked = ALL_STORIES_FREE_TO_LISTEN
+    ? !currentTrack.audioSrc?.trim()
+    : currentTrack.isPremium &&
+        (!currentTrack.audioSrc?.trim() || !isPremiumUser);
   const progress = duration > 0 ? (position / duration) * 100 : 0;
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {

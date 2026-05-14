@@ -3,14 +3,22 @@
 import { useEffect, useRef } from 'react';
 import { usePlayerStore } from '@/store/playerStore';
 import { useHistoryStore } from '@/store/historyStore';
+import {
+  trackAudioPlayStart,
+  trackAudioMilestone,
+  trackAudioComplete,
+} from '@/lib/analytics';
 import type { Story } from '@/types/story';
 
 const SAVE_INTERVAL_MS = 6000;
+const MILESTONES = [25, 50, 75, 100] as const;
 
 const useAudioEngine = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastSavedRef = useRef(0);
   const trackRef = useRef<Story | null>(null);
+  const playStartSentForTrackId = useRef<number | null>(null);
+  const milestonesSent = useRef<Set<string>>(new Set());
 
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
@@ -32,6 +40,11 @@ const useAudioEngine = () => {
   useEffect(() => {
     trackRef.current = currentTrack;
   }, [currentTrack]);
+
+  useEffect(() => {
+    playStartSentForTrackId.current = null;
+    milestonesSent.current.clear();
+  }, [currentTrack?.id]);
 
   const next = usePlayerStore((state) => state.next);
   const isAutoPlay = usePlayerStore((state) => state.isAutoPlay);
@@ -57,9 +70,29 @@ const useAudioEngine = () => {
       if (isFinite(audio.duration)) {
         setDuration(audio.duration);
       }
-      
+
       const track = trackRef.current;
       if (!track) return;
+
+      const dur = audio.duration;
+      const pos = audio.currentTime || 0;
+      if (isFinite(dur) && dur > 0) {
+        const pct = (pos / dur) * 100;
+        for (const m of MILESTONES) {
+          if (pct >= m - 0.5) {
+            const key = `${track.id}-${m}`;
+            if (!milestonesSent.current.has(key)) {
+              milestonesSent.current.add(key);
+              trackAudioMilestone({
+                storyId: track.id,
+                percent: m,
+                positionSec: pos,
+                durationSec: dur,
+              });
+            }
+          }
+        }
+      }
 
       const now = Date.now();
       if (now - lastSavedRef.current > SAVE_INTERVAL_MS) {
@@ -79,6 +112,10 @@ const useAudioEngine = () => {
     };
 
     const handleEnded = () => {
+      const endedTrack = trackRef.current;
+      if (endedTrack) {
+        trackAudioComplete({ storyId: endedTrack.id, title: endedTrack.title });
+      }
       if (isAutoPlay) {
         next();
       } else {
@@ -143,7 +180,21 @@ const useAudioEngine = () => {
     const audio = audioRef.current;
     if (!audio || !currentTrack?.audioSrc) return;
     if (isPlaying) {
-      audio.play().catch(() => null);
+      audio
+        .play()
+        .then(() => {
+          const t = trackRef.current;
+          if (!t?.audioSrc?.trim()) return;
+          if (playStartSentForTrackId.current === t.id) return;
+          playStartSentForTrackId.current = t.id;
+          trackAudioPlayStart({
+            storyId: t.id,
+            title: t.title,
+            isPremium: t.isPremium,
+            durationSec: t.durationSec,
+          });
+        })
+        .catch(() => null);
     } else {
       audio.pause();
     }

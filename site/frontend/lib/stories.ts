@@ -1,21 +1,23 @@
 import type { Story } from '@/types/story';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 
 export type StoryRow = {
   id: number;
-  slug?: string | null;
   title: string;
   author?: string | null;
+  description?: string | null;
   genre?: string | null;
-  genres?: string[] | null;
+  tags?: string[] | null;
   image_url: string;
-  audio_url: string;
+  audio_url: string | null;
   duration: number;
   is_premium: boolean;
-  description?: string | null;
-  tags?: string[] | null;
-  content?: string | null;
+  plays_count?: number | null;
   created_at?: string;
+  genres?: string[] | null;
   listens_count?: number | null;
+  is_editors_choice?: boolean | null;
+  text_url?: string | null;
 };
 
 function slugFromTitle(title: string): string {
@@ -45,9 +47,8 @@ export function mapRowToStory(row: StoryRow): Story {
       id = hash || 1;
     }
   }
-  const safeSlug = String(row.slug ?? '').trim();
   const generatedSlug = slugFromTitle(String(row.title ?? ''));
-  const slug = safeSlug || `${generatedSlug}-${id}`;
+  const slug = `${generatedSlug}-${id}`;
   return {
     id,
     rawId,
@@ -56,12 +57,11 @@ export function mapRowToStory(row: StoryRow): Story {
     description: String(row.description ?? ''),
     authorName: String(row.author ?? ''),
     coverImage: String(row.image_url ?? ''),
-    audioSrc: String(row.audio_url ?? ''),
+    audioSrc: row.audio_url ? String(row.audio_url) : '',
     durationSec: Number(row.duration) || 0,
-    isPremium: Boolean(row.is_premium),
+    isPremium: ALL_STORIES_FREE_TO_LISTEN ? false : Boolean(row.is_premium),
     genres,
     tags: tagList,
-    ...(row.content != null && { content: String(row.content) }),
     ...(row.listens_count != null && { listensCount: Number(row.listens_count) || 0 }),
   };
 }

@@ -14,6 +14,7 @@ import { useFavoritesStore } from '@/store/favoritesStore';
 import { useAuthStore } from '@/store/authStore';
 import { toggleFavoriteApi } from '@/lib/favoritesApi';
 import { fetchReviewsByStoryId, submitReviewApi, type ReviewItem } from '@/lib/reviewsApi';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 import { toast } from 'sonner';
 import { Play, Pause, Heart, Share2, SkipBack, SkipForward, Lock, Star, ArrowLeft, ThumbsUp, Flag, X } from 'lucide-react';
 import type { Story } from '@/types/story';
@@ -118,7 +119,7 @@ export default function StoryPage() {
       return;
     }
     supabase
-      .from('stories')
+      .from('secure_stories_view')
       .select('*')
       .order('created_at', { ascending: false })
       .then(({ data, error }) => {
@@ -161,7 +162,7 @@ export default function StoryPage() {
   const { toggleLike, isLiked } = useFavoritesStore();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
-  const isPremiumLocked = story?.isPremium && !isPremiumUser;
+  const isPremiumLocked = !ALL_STORIES_FREE_TO_LISTEN && story?.isPremium && !isPremiumUser;
   const isFavorite = story ? isLiked(String(story.id)) : false;
 
   const isCurrentTrack = Boolean(
@@ -173,7 +174,7 @@ export default function StoryPage() {
 
   const handlePlay = () => {
     if (!story) return;
-    if (story.isPremium && !isPremiumUser) {
+    if (!ALL_STORIES_FREE_TO_LISTEN && story.isPremium && !isPremiumUser) {
       router.push('/pricing');
       return;
     }

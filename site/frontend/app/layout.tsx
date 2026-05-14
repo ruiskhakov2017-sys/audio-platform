@@ -10,6 +10,7 @@ import { AuthInitializer } from '@/components/auth/AuthInitializer';
 import { ToasterSonner } from '@/components/ui/ToasterSonner';
 import { Footer } from '@/components/layout/Footer';
 import { ClientErrorBoundary } from '@/components/ClientErrorBoundary';
+import { AnalyticsScripts } from '@/components/analytics/AnalyticsScripts';
 
 const philosopher = Philosopher({
   subsets: ['cyrillic', 'latin'],
@@ -59,6 +60,7 @@ export default function RootLayout({
       >
         {/* Debug: если в консоли мобилки не видно — скрипт падает до гидрации React */}
         <script dangerouslySetInnerHTML={{ __html: 'console.log("App starting...");' }} />
+        <AnalyticsScripts />
         <AuthInitializer />
         <div className="flex flex-col flex-1 min-h-screen">
           <main className="flex-grow">

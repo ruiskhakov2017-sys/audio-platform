@@ -81,7 +81,6 @@ export async function saveStoryToSupabase(payload: SaveStoryPayload): Promise<Sa
 export type UpdateStoryPayload = {
   title?: string;
   description?: string;
-  content?: string;
   image_url?: string;
   audio_url?: string;
   duration?: number;
@@ -100,7 +99,6 @@ export async function updateStory(id: string | number, payload: UpdateStoryPaylo
   const updates: Record<string, unknown> = {};
   if (payload.title !== undefined) updates.title = payload.title;
   if (payload.description !== undefined) updates.description = payload.description;
-  if (payload.content !== undefined) updates.content = payload.content;
   if (payload.image_url !== undefined) updates.image_url = payload.image_url;
   if (payload.audio_url !== undefined) updates.audio_url = payload.audio_url;
   if (payload.duration !== undefined) updates.duration = payload.duration;

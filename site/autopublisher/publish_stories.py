@@ -16,8 +16,18 @@ GUI-автопаблишер: сканирует To_Publish, загружает 
 """
 import os
 import re
+import sys
 import time
 import threading
+
+# Принудительно UTF-8 для stdout/stderr — иначе print() падает с UnicodeEncodeError
+# когда stdout перенаправлен в файл через >> в start.bat (Windows cp1252)
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 import queue
 import json
 import urllib.request
@@ -243,12 +253,14 @@ def insert_story_to_supabase(url: str, service_key: str, row: dict) -> None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             if resp.status not in (200, 201, 204):
                 raise RuntimeError(f"HTTP {resp.status}")
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
         raise RuntimeError(f"Supabase HTTP {e.code}: {body or e.reason}")
+    except TimeoutError:
+        raise RuntimeError("Supabase не ответил за 30 секунд (таймаут)")
 
 
 def publish_one(
@@ -314,11 +326,11 @@ def publish_one(
         report("  Загрузка текста рассказа в R2 (бэкап)...")
         text_url = upload_file_to_r2(r2_client, text_path, "text/plain; charset=utf-8", text_key)
         if text_url:
-            report(f"✅ Текст рассказа успешно сохранен в R2 (для бэкапа): {text_url}")
+            report(f"[OK] Текст рассказа сохранен в R2 (бэкап): {text_url}")
         else:
-            report("  ⚠️  Не удалось загрузить текст рассказа в R2.")
+            report("  [!] Не удалось загрузить текст рассказа в R2.")
     else:
-        report("  ℹ️  Файл с текстом рассказа не найден, пропускаем загрузку в R2.")
+        report("  [i] Файл с текстом рассказа не найден, пропускаем загрузку в R2.")
 
     duration = get_audio_duration_seconds(audio_path)
     genres = meta["genres"] or ["Без жанра"]
@@ -349,7 +361,7 @@ def publish_one(
         # PostgREST возвращает ошибку если колонка text_url ещё не добавлена в таблицу
         if "text_url" in err_str and text_url:
             report(
-                "  ⚠️  WARNING: текст рассказа загружен в R2, но в таблице stories нет колонки text_url — "
+                "  [WARNING] текст рассказа загружен в R2, но в таблице stories нет колонки text_url — "
                 "ссылка не сохранена в БД. Добавьте колонку: ALTER TABLE stories ADD COLUMN text_url TEXT;"
             )
             _console(
@@ -391,7 +403,15 @@ SENTINEL = None  # конец работы воркера
 
 def _console(msg: str) -> None:
     """Печать в консоль (и в лог при запуске через start.bat)."""
-    print(msg, flush=True)
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        try:
+            # Убираем всё что не ASCII — крайний случай
+            safe = msg.encode("ascii", errors="replace").decode("ascii")
+            print(safe, flush=True)
+        except Exception:
+            pass
 
 
 def worker_run(status_queue: queue.Queue) -> None:
@@ -516,7 +536,6 @@ def main_gui() -> None:
 
 
 if __name__ == "__main__":
-    import sys
     import traceback
 
     def _wait():
