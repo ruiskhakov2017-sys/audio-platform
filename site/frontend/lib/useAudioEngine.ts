@@ -8,6 +8,7 @@ import {
   trackAudioMilestone,
   trackAudioComplete,
 } from '@/lib/analytics';
+import { ALL_STORIES_FREE_TO_LISTEN } from '@/config/access';
 import type { Story } from '@/types/story';
 
 const SAVE_INTERVAL_MS = 6000;
@@ -19,6 +20,7 @@ const useAudioEngine = () => {
   const trackRef = useRef<Story | null>(null);
   const playStartSentForTrackId = useRef<number | null>(null);
   const milestonesSent = useRef<Set<string>>(new Set());
+  const audioResolveFailedRef = useRef<Set<string>>(new Set());
 
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
@@ -44,6 +46,7 @@ const useAudioEngine = () => {
   useEffect(() => {
     playStartSentForTrackId.current = null;
     milestonesSent.current.clear();
+    audioResolveFailedRef.current.clear();
   }, [currentTrack?.id]);
 
   const next = usePlayerStore((state) => state.next);
@@ -57,6 +60,35 @@ const useAudioEngine = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, [checkSleepTimer]);
+
+  /** Режим «все бесплатно»: при пустом audio_url из view — догружаем URL с /api/story-audio (нужен SUPABASE_SERVICE_ROLE_KEY на сервере). */
+  useEffect(() => {
+    if (!ALL_STORIES_FREE_TO_LISTEN || !currentTrack) return;
+    if (currentTrack.audioSrc?.trim()) return;
+
+    const key = String(currentTrack.rawId ?? currentTrack.id);
+    if (audioResolveFailedRef.current.has(key)) return;
+
+    let cancelled = false;
+    fetch(`/api/story-audio?id=${encodeURIComponent(key)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json() as Promise<{ audio_url?: string }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const url = data.audio_url?.trim();
+        if (!url) throw new Error('empty');
+        usePlayerStore.getState().patchTrackAudioSrc(currentTrack.id, url);
+      })
+      .catch(() => {
+        if (!cancelled) audioResolveFailedRef.current.add(key);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id, currentTrack?.rawId, currentTrack?.audioSrc]);
 
   useEffect(() => {
     if (!audioRef.current) {
@@ -138,13 +170,24 @@ const useAudioEngine = () => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    if (!currentTrack || !currentTrack.audioSrc) {
+    if (!currentTrack) {
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
       setPosition(0);
       setDuration(0);
       if (isPlaying) pause();
+      return;
+    }
+
+    if (!currentTrack.audioSrc?.trim()) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      setPosition(0);
+      setDuration(0);
+      const waitForFreeResolve = ALL_STORIES_FREE_TO_LISTEN;
+      if (isPlaying && !waitForFreeResolve) pause();
       return;
     }
 
@@ -162,7 +205,7 @@ const useAudioEngine = () => {
       setPosition(0);
       setDuration(currentTrack.durationSec || 0);
     }
-  }, [currentTrack?.audioSrc, pause, setDuration, setPosition]); // Only depend on audioSrc, not the whole track object
+  }, [currentTrack, currentTrack?.audioSrc, isPlaying, pause, setDuration, setPosition]); // Only depend on audioSrc, not the whole track object
 
   useEffect(() => {
     const audio = audioRef.current;

@@ -178,9 +178,10 @@ export default function StoryPage() {
       router.push('/pricing');
       return;
     }
+    const fallbackAudio = ALL_STORIES_FREE_TO_LISTEN ? '' : TEST_AUDIO_SRC;
     const storyWithSrc = {
       ...story,
-      audioSrc: story.audioSrc?.trim() || TEST_AUDIO_SRC,
+      audioSrc: story.audioSrc?.trim() || fallbackAudio,
     };
     if (isCurrentTrack) {
       togglePlay();
@@ -192,7 +193,7 @@ export default function StoryPage() {
         storyWithSrc,
         ...similar.map((s) => ({
           ...s,
-          audioSrc: s.audioSrc?.trim() || TEST_AUDIO_SRC,
+          audioSrc: s.audioSrc?.trim() || fallbackAudio,
         })),
       ];
       play(storyWithSrc, queue);

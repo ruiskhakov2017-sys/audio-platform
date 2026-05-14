@@ -40,6 +40,8 @@ type PlayerState = {
   seekTarget: number | null;
   setSeekTarget: (v: number | null) => void;
   seek: (position: number) => void;
+  /** Подставить реальный audio_url (режим «все бесплатно» + догрузка с API). */
+  patchTrackAudioSrc: (storyId: string | number, audioSrc: string) => void;
 };
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -150,4 +152,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   seekTarget: null,
   setSeekTarget: (v) => set({ seekTarget: v }),
   seek: (position) => set({ seekTarget: position }),
+  patchTrackAudioSrc: (storyId, audioSrc) => {
+    const sid = String(storyId);
+    const { currentTrack, queue } = get();
+    const patch = (s: Story | null): Story | null => {
+      if (!s || String(s.id) !== sid) return s;
+      return { ...s, audioSrc };
+    };
+    set({
+      currentTrack: patch(currentTrack),
+      queue: queue.map((s) => (String(s.id) === sid ? { ...s, audioSrc } : s)),
+    });
+  },
 }));
