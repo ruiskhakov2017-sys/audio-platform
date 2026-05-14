@@ -27,6 +27,7 @@ models/
 
 # Медиа и тяжёлые артефакты
 *.mp3
+!orchestrator/site_tts/_silent_stub.mp3
 *.wav
 *.mp4
 *.mov
@@ -52,3 +53,14 @@ models/
 **/.env.*
 !**/.env.example
 !**/.env.template
+
+# Локальный флаг: обход зависшего ожидания mp3 на Drive (Content-Factory-Запуск.bat)
+/SKIP_DRIVE_MP3_WAIT.flag
+
+# Gemini / browser live profiles - do not commit
+legacy/Gemini_Auto/user_data/
+legacy/Gemini_Auto/user_data_*/
+
+# Gemini / browser live profiles - do not commit
+legacy/Gemini_Auto/user_data/
+legacy/Gemini_Auto/user_data_*/

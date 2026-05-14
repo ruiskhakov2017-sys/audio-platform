@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import html
 import hashlib
 import json
+import os
 import re
 import shutil
 import time
@@ -12,7 +14,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from orchestrator.human_launch_layout import (
+    D02_04_TTS,
+    D02_SITE,
+    D05_RASSKAZY,
+    D06_OTCHETY,
+)
+from orchestrator.site_tts.cleaned_text_guard import validate_cleaned_text_for_tts
 from orchestrator.site_tts.config import load_site_tts_settings
+from orchestrator.site_tts.batch import iter_human_launch_story_dirs
+from orchestrator.site_tts.contract import SiteTtsPaths
+from orchestrator.site_tts.drive_voice_resolve import VOICE_MANIFEST_FILENAME, write_kokoro_voices_job_json
+from orchestrator.site_tts.info_parser import resolve_voice_letter_from_info_content
 from orchestrator.site_tts.text_chunking import pack_paragraph_chunks
 
 _HANDOFF_ROOT = "_COLAB_EXPORTS"
@@ -20,6 +33,176 @@ _HANDOFF_RESULTS_DIR = "results_drop_here"
 _CURRENT_ROOT = "COLAB_TTS_CURRENT"
 _CURRENT_TEXTS = "TEXTS_TO_COLAB"
 _CURRENT_MP3 = "MP3_FROM_COLAB"
+_EXPORT_DIAG_JSONL = "EXPORT_DIAG.jsonl"
+_DRIVE_EXPORT_CLEAN_STAGE = "drive_tts_final_cleaner_v2"
+
+# URL-like: schemes, messengers, reddit/discord, forum.* hosts, common TLD hosts (not bare .txt/.pdf etc. as “domains”).
+_URL_TLD = (
+    r"com|net|org|io|ru|co|ai|app|dev|info|biz|me|tv|xyz|site|online|store|blog|pro|live|link|cc|"
+    r"uk|de|fr|jp|cn|gov|edu|mil|int|su|by|kz|ua|pl|nl|se|no|fi|dk|ch|at|be|cz|sk|hu|ro|bg|hr|rs|si|"
+    r"lt|lv|ee|ie|is|in|br|au|ca|us|nz|mx|ar|cl|es|pt|it|gr|tr|il|ae|za|ng|vn|th|id|ph|my|sg|hk|tw|kr|"
+    r"pk|bd|ge|am|az|tm|ws|to|im|gg|je|sh|ac|cx|tk|ml|ga|cf|gq|pw|top|club|space|host|tech|news|world|"
+    r"today|click|help|support|wiki|cat|museum"
+)
+_URL_LIKE_RE = re.compile(
+    rf"(?i)(?:https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+|\b(?:old\.)?reddit\.com/\S+|\bdiscord\.(?:gg|com)/\S+"
+    rf"|\bforum\.[a-z0-9.-]+\.[a-z]{{2,24}}\b"
+    rf"|\b[a-z0-9][a-z0-9-]{{0,62}}\.(?:{_URL_TLD})(?:/\S*)?)"
+)
+
+# Legacy one-line UI noise (anchored; avoid matching “source” inside prose).
+_NOISE_LINE_RE = re.compile(
+    r"(?i)^(read\s*more|click\s*here|navigation|footer|comments?|subscribe|archive|breadcrumbs?|"
+    r"log\s*in|login)\b[\s:.,!-]*$"
+)
+
+# RU/EN meta / forum boilerplate: whole trimmed line.
+_SERVICE_META_LINE_RE = re.compile(
+    r"(?i)^(?:"
+    r"источник\s*:.+|ссылка\s*:.+|форум\s*:.+|читать\s+дальше\s*:.+|читать\s+полностью\s*:.+|"
+    r"опубликовано\s*:.+|автор\s*:.+|комментарии\s*:.+|обсуждение\s*:.+|тема\s+форума\s*:.+|"
+    r"скопировано\s+с\s*:.+|взято\s+с\s*:.+|продолжение\s+на\s+сайте\s*:.+|полная\s+версия\s*:.+|"
+    r"зарегистрируйтесь\b.*|войдите,\s*чтобы\s+оставить\s+комментарий\s*$|"
+    r"(?:original\s+)?source\s*:.+|forum\s*:.+|read\s+more\s*:.+|continue\s+reading\s*:.+|"
+    r"full\s+version\s*:.+|posted\s+by\s*:.+|posted\s+on\s*:.+|comments?\s*:.+|reply\s*:.+|thread\s*:.+|"
+    r"login\s+to\s+comment\s*:.+|register\s+to\s+continue\s*:.+|more\s+stories\s*:.+|visit\s*:.*|"
+    r"login\s+to\s+comment\s*$|register\s+to\s+continue\s*$"
+    r")$"
+)
+
+# Leading-only chapter/part markers (trimmed line, whole line).
+_LEADING_SERVICE_HEADER_RE = re.compile(
+    r"(?i)^(?:"
+    r"глава\s+(?:\d+|0\d+|первая|вторая|третья|четвёртая|четвертая|пят(?:ая|ой)|шест(?:ая|ой)|"
+    r"седьм(?:ая|ой)|восьм(?:ая|ой)|девят(?:ая|ой)|десят(?:ая|ой))\s*"
+    r"|часть\s+(?:\d+|0\d+|первая|вторая|третья|четвёртая|четвертая|пят(?:ая|ой))\s*"
+    r"|раздел\s+\d+\s*|эпизод\s+\d+\s*|продолжение\s*|начало\s*"
+    r"|chapter\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*"
+    r"|ch\.\s*\d+\s*|part\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*"
+    r"|episode\s+\d+\s*|section\s+\d+\s*"
+    r")$"
+)
+
+_TTS_PARA_MAX = 1400
+_TTS_PARA_SOFT_MIN = 700
+
+_HTML_TAG_RE = re.compile(r"(?is)<[^>]+>")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_MARKDOWN_FENCE_RE = re.compile(r"(?ms)^\s*```.*?^\s*```\s*")
+_MARKDOWN_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_SEPARATOR_LINE_RE = re.compile(r"^\s*[-_=*]{3,}\s*$")
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"[ \t]+([.,!?:;])")
+_NEEDS_SPACE_AFTER_PUNCT_RE = re.compile(r"([.,!?:;])(?=[A-Za-zА-Яа-яЁё0-9])")
+
+
+def _drive_tts_drop_boilerplate_line(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return False
+    return bool(_NOISE_LINE_RE.match(s) or _SERVICE_META_LINE_RE.match(s))
+
+
+def _strip_leading_service_headers(text: str) -> tuple[str, int]:
+    if not (text or "").strip():
+        return text or "", 0
+    lines = text.split("\n")
+    removed = 0
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if s == "":
+            i += 1
+            continue
+        if _LEADING_SERVICE_HEADER_RE.match(s):
+            removed += 1
+            i += 1
+            continue
+        break
+    return "\n".join(lines[i:]).lstrip("\n"), removed
+
+
+def _split_sentences_for_tts(para: str) -> list[str]:
+    p = para.strip()
+    if not p:
+        return []
+    parts = re.split(r"(?<=[.!?…])(?:\s+|$)", p)
+    return [x.strip() for x in parts if x.strip()]
+
+
+def _hard_wrap_plain_text(segment: str, max_chars: int) -> list[str]:
+    if len(segment) <= max_chars:
+        return [segment] if segment.strip() else []
+    out: list[str] = []
+    start = 0
+    while start < len(segment):
+        end = min(start + max_chars, len(segment))
+        chunk = segment[start:end]
+        if end < len(segment):
+            cut = chunk.rfind(" ")
+            if cut > max_chars // 2:
+                chunk = chunk[:cut]
+                end = start + len(chunk)
+        piece = chunk.strip()
+        if piece:
+            out.append(piece)
+        if end <= start:
+            end = start + max_chars
+        start = end
+    return out
+
+
+def _pack_sentences_into_paragraphs(sentences: list[str]) -> list[str]:
+    if not sentences:
+        return []
+    paras: list[str] = []
+    buf: list[str] = []
+
+    def flush() -> None:
+        if buf:
+            paras.append(" ".join(buf))
+            buf.clear()
+
+    for s in sentences:
+        if len(s) > _TTS_PARA_MAX:
+            flush()
+            paras.extend(_hard_wrap_plain_text(s, _TTS_PARA_MAX))
+            continue
+        add_len = len(s) + (1 if buf else 0)
+        buf_len = len(" ".join(buf)) if buf else 0
+        if buf and buf_len + add_len > _TTS_PARA_MAX:
+            flush()
+        buf.append(s)
+    flush()
+    return paras
+
+
+def _reshape_oversized_paragraph_block(block: str) -> list[str]:
+    b = block.strip()
+    if not b:
+        return []
+    if len(b) <= _TTS_PARA_MAX:
+        return [b]
+    sents = _split_sentences_for_tts(b)
+    if len(sents) <= 1:
+        return _hard_wrap_plain_text(b, _TTS_PARA_MAX)
+    return _pack_sentences_into_paragraphs(sents)
+
+
+def _normalize_tts_paragraphs(text: str) -> str:
+    t = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    t = t.strip()
+    if not t:
+        return ""
+    blocks = re.split(r"\n\n+", t)
+    rebuilt: list[str] = []
+    for raw_block in blocks:
+        bk = raw_block.strip()
+        if not bk:
+            continue
+        rebuilt.extend(_reshape_oversized_paragraph_block(bk))
+    return "\n\n".join(rebuilt).strip()
 
 
 def _utc_now_iso() -> str:
@@ -63,6 +246,28 @@ class StoryTtsSource:
     expected_output_mp3: Path
 
 
+def _site_has_final_mp3(story_folder: Path, story_id: str) -> bool:
+    """
+    True if this site story already has a non-empty canonical mp3 (import/Kokoro contract).
+    Accepts both raw folder name and _safe_name() variants — export uses _safe_name for Drive keys.
+    """
+    safe_id = _safe_name(story_id)
+    for name in {story_id, safe_id}:
+        if not name:
+            continue
+        p = story_folder / f"{name}.mp3"
+        if p.is_file() and p.stat().st_size > 0:
+            return True
+    folder_key = safe_id
+    for p in story_folder.glob("*.mp3"):
+        if not p.is_file() or p.stat().st_size <= 0:
+            continue
+        base, _v = _split_story_voice(p.stem)
+        if _safe_name(base) == folder_key:
+            return True
+    return False
+
+
 def _resolve_story_tts_source(story_folder: Path) -> tuple[StoryTtsSource | None, str | None]:
     story_id = story_folder.name
     expected_mp3 = story_folder / f"{story_id}.mp3"
@@ -83,7 +288,7 @@ def _resolve_story_tts_source(story_folder: Path) -> tuple[StoryTtsSource | None
             story_folder=story_folder,
             tts_text_path=path,
             voice_type=vt,
-            has_mp3=expected_mp3.is_file(),
+            has_mp3=_site_has_final_mp3(story_folder, story_id),
             expected_output_mp3=expected_mp3,
         ),
         None,
@@ -94,6 +299,114 @@ def _iter_story_dirs(site_root: Path) -> list[Path]:
     if not site_root.is_dir():
         return []
     return sorted([p for p in site_root.iterdir() if p.is_dir()], key=lambda x: x.name.lower())
+
+
+def _resolve_story_human_colab_source(launch: Path, story_dir: Path) -> tuple[StoryTtsSource | None, str | None]:
+    """Human-launch: cleaned_story.txt + info.txt → Colab job (без story__M.txt в output/site)."""
+    story_id = story_dir.name
+    paths = SiteTtsPaths.from_human_launch_story(launch, story_id, ensure_dirs=False)
+    if not paths.cleaned_story_txt.is_file():
+        return None, "missing_cleaned_txt"
+    if not paths.info_txt.is_file():
+        return None, "no_info"
+    try:
+        has_mp3 = paths.output_mp3.is_file() and paths.output_mp3.stat().st_size > 0
+    except OSError:
+        has_mp3 = False
+    if has_mp3:
+        return None, "has_mp3"
+    try:
+        txt = paths.cleaned_story_txt.read_text(encoding="utf-8")
+    except OSError:
+        return None, "cleaned_read_error"
+    ok_txt, bad_reason = validate_cleaned_text_for_tts(txt)
+    if not ok_txt:
+        return None, f"cleaned_text_rejected:{bad_reason}"
+    letter, _, _ = resolve_voice_letter_from_info_content(paths.info_txt.read_text(encoding="utf-8"))
+    human_story_root = paths.story_folder.parent.parent
+    return (
+        StoryTtsSource(
+            story_id=story_id,
+            story_folder=human_story_root,
+            tts_text_path=paths.cleaned_story_txt,
+            voice_type=letter,
+            has_mp3=False,
+            expected_output_mp3=paths.output_mp3,
+        ),
+        None,
+    )
+
+
+def _copy_colab_report_to_launch_sidecars(launch: Path, batch_id: str, report_src: Path, stem: str) -> None:
+    """Дубли отчёта в 06_Отчёты и 02_Сайт/04_Озвучка_для_сайта."""
+    name = f"{stem}_{batch_id}.json"
+    for sub in (Path(D06_OTCHETY), Path(D02_SITE) / D02_04_TTS):
+        dst = (launch.resolve() / sub / name).resolve()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(report_src, dst)
+
+
+def _mirror_human_drive_export_to_colab_current(
+    root: Path,
+    drive_texts_dir: Path,
+    index_csv: Path,
+    exported_rows: list[list[str]],
+    *,
+    job_batch_id: str,
+) -> None:
+    """Дублировать выгрузку на Drive в COLAB_TTS_CURRENT (debug / import --current без zip-batch)."""
+    if not exported_rows:
+        return
+    current_dir, texts_dir, mp3_dir = _current_paths(root)
+    drive_texts_res = drive_texts_dir.resolve()
+    if drive_texts_res == texts_dir.resolve():
+        return
+    mp3_dir.mkdir(parents=True, exist_ok=True)
+    _clear_dir(texts_dir)
+    mapping: list[dict[str, str]] = []
+    for row in exported_rows:
+        if len(row) < 5:
+            continue
+        sid, txt_name, mp3_name, dest_cell = row[1], row[2], row[3], row[4]
+        src_txt = drive_texts_res / txt_name
+        if src_txt.is_file():
+            shutil.copy2(src_txt, texts_dir / txt_name)
+        voice = row[5] if len(row) > 5 else "U"
+        mapping.append(
+            {
+                "story_folder": str(sid),
+                "source_txt": str(txt_name),
+                "expected_mp3": str(mp3_name),
+                "expected_output_mp3": str(dest_cell),
+                "voice": str(voice),
+            }
+        )
+    if index_csv.is_file():
+        shutil.copy2(index_csv, current_dir / "STORIES_INDEX.csv")
+    internal = {
+        "schema_version": 1,
+        "batch_id": job_batch_id,
+        "batch_dir": "",
+        "created_at": _utc_now_iso(),
+        "items_count": len(mapping),
+        "mapping": mapping,
+    }
+    (current_dir / "internal_manifest.json").write_text(json.dumps(internal, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _human_story_dir_for_drive_mp3_name(launch: Path, mp3_basename: str) -> Path | None:
+    """Сопоставить имя mp3 на Drive (safeName__V.mp3) с папкой рассказа в 05_Рассказы."""
+    stem = Path(mp3_basename).stem
+    if "__" not in stem:
+        return None
+    safe_story, _vt = stem.rsplit("__", 1)
+    safe_story = (safe_story or "").strip()
+    if not safe_story:
+        return None
+    for folder in iter_human_launch_story_dirs(launch):
+        if _safe_name(folder.name) == safe_story:
+            return folder
+    return None
 
 
 def _safe_name(name: str) -> str:
@@ -155,6 +468,71 @@ def _drive_dir_from(root: Path, settings: Any, key: str, default_sub: str) -> Pa
     )
 
 
+def _count_url_like(text: str) -> int:
+    return len(_URL_LIKE_RE.findall(text or ""))
+
+
+def _clean_text_for_drive_tts(raw_text: str) -> tuple[str, int, int, int]:
+    text = (raw_text or "").replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+    url_before = _count_url_like(text)
+
+    text = html.unescape(text)
+    text = _MARKDOWN_FENCE_RE.sub(" ", text)
+    text = _MARKDOWN_IMAGE_RE.sub(" ", text)
+    text = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = _MARKDOWN_INLINE_CODE_RE.sub(r"\1", text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = text.replace("&nbsp;", " ")
+
+    kept_lines: list[str] = []
+    removed_lines = 0
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            kept_lines.append("")
+            continue
+        if _SEPARATOR_LINE_RE.match(line):
+            removed_lines += 1
+            continue
+        if _URL_LIKE_RE.search(line):
+            removed_lines += 1
+            continue
+        if _drive_tts_drop_boilerplate_line(line):
+            removed_lines += 1
+            continue
+        cleaned_line = _URL_LIKE_RE.sub(" ", line)
+        cleaned_line = re.sub(r"\s+", " ", cleaned_line).strip()
+        if cleaned_line:
+            kept_lines.append(cleaned_line)
+        else:
+            removed_lines += 1
+
+    text = "\n".join(kept_lines)
+    text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
+    text = _NEEDS_SPACE_AFTER_PUNCT_RE.sub(r"\1 ", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+
+    text, hdr_rm = _strip_leading_service_headers(text)
+    removed_lines += hdr_rm
+
+    text = _normalize_tts_paragraphs(text)
+    text = text.strip()
+
+    url_after = _count_url_like(text)
+    return text, url_before, url_after, removed_lines
+
+
+def _append_export_diag(diag_path: Path, payload: dict[str, Any]) -> None:
+    diag_path.parent.mkdir(parents=True, exist_ok=True)
+    row: dict[str, Any] = {"clean_stage": _DRIVE_EXPORT_CLEAN_STAGE}
+    row.update(payload)
+    with diag_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def _load_expected_files(job_dir: Path) -> list[str]:
     p = job_dir / "EXPECTED_FILES.txt"
     if not p.is_file():
@@ -167,14 +545,104 @@ def _load_expected_files(job_dir: Path) -> list[str]:
     return names
 
 
+def _read_local_job_status(job_dir: Path) -> dict[str, Any] | None:
+    p = job_dir / "LOCAL_STATUS.json"
+    if not p.is_file():
+        return None
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _should_skip_redundant_drive_export(*, texts_dir: Path, job_dir: Path, site_root: Path) -> tuple[bool, str]:
+    """
+    If the previous batch is still waiting for mp3 and all expected txt are already on the synced
+    Drive texts folder, do not re-copy dozens of files on every orchestrator run.
+    If the user removed txt from Drive, this returns (False, ...) so export runs again.
+    """
+    if os.environ.get("CONTENT_FACTORY_FORCE_DRIVE_REEXPORT", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False, ""
+    st = _read_local_job_status(job_dir)
+    if not st or str(st.get("state", "")).strip() != "exported_waiting_mp3":
+        return False, ""
+    expected_mp3 = _load_expected_files(job_dir)
+    if not expected_mp3:
+        return False, ""
+    all_txt_ok = True
+    any_missing_local_mp3 = False
+    for m in expected_mp3:
+        txt_path = texts_dir / Path(m).with_suffix(".txt").name
+        if not txt_path.is_file() or txt_path.stat().st_size <= 0:
+            all_txt_ok = False
+            break
+        story_raw, _v = _split_story_voice(Path(m).stem)
+        story = _safe_name(story_raw)
+        out_mp3 = site_root / story / f"{story}.mp3"
+        if not out_mp3.is_file() or out_mp3.stat().st_size <= 0:
+            any_missing_local_mp3 = True
+    if all_txt_ok and any_missing_local_mp3:
+        return True, "pending_job_txts_still_on_drive"
+    return False, ""
+
+
+def _run_combiner_distribute_images(
+    root_dir: Path,
+    *,
+    site_output_root: Path,
+    artifact_root: Path | None,
+) -> tuple[bool, str]:
+    from orchestrator.wrappers.content_combiner import run_content_combiner_modes
+
+    ar = artifact_root if artifact_root is not None else root_dir
+    return run_content_combiner_modes(
+        root_dir=root_dir,
+        modes=["distribute-images"],
+        site_stories_dir=site_output_root.resolve(),
+        artifact_root=ar.resolve(),
+        capture_output=False,
+    )
+
+
+def _human_mirror_site_artifacts_after_import(site_output_root: Path, expected_mp3_basenames: list[str]) -> None:
+    """Дубликаты mp3/info/txt в Запуски/<имя>/02_Сайт/01…02…04 (если site под изолированным запуском)."""
+    from orchestrator.human_launch_layout import launch_dir_from_site_output_root, mirror_site_story_outputs_from_legacy_site
+
+    launch_h = launch_dir_from_site_output_root(site_output_root)
+    if launch_h is None:
+        return
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for name in expected_mp3_basenames:
+        story_raw, _v = _split_story_voice(Path(name).stem)
+        story = _safe_name(story_raw)
+        if story and story not in seen:
+            seen.add(story)
+            ordered.append(story)
+    if not ordered:
+        return
+    mirror_site_story_outputs_from_legacy_site(launch_h, site_output_root, ordered)
+    print(f"[site_tts] зеркало артефактов в {launch_h / '02_Сайт'} (01_Очистка, 02_Информация, 04_Озвучка)", flush=True)
+
+
 def export_drive_texts(
     root_dir: Path,
     *,
     texts_dir: Path | None = None,
     limit: int | None = None,
+    stories_filter_dir: Path | None = None,
+    site_root: Path | None = None,
+    human_launch: Path | None = None,
 ) -> dict[str, Any]:
+    """
+    stories_filter_dir: если задан и не пуст по *.txt, экспортируются только папки output/site,
+    чьё normalize_site_story_name(folder) совпадает с одним из стемов в этом каталоге
+    (тот же контракт, что у site-tts batch для *-site). Иначе — вся очередь без mp3 (старое поведение).
+    """
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
+    hl = human_launch.resolve() if human_launch is not None else None
     target = (
         (texts_dir if texts_dir.is_absolute() else (root / texts_dir)).resolve()
         if texts_dir is not None
@@ -194,25 +662,281 @@ def export_drive_texts(
     job_dir.mkdir(parents=True, exist_ok=True)
     mp3_dir.mkdir(parents=True, exist_ok=True)
 
-    site_root = (root / "output" / "site").resolve()
+    if hl is not None and not (hl / D05_RASSKAZY).is_dir():
+        return {
+            "ok": False,
+            "texts_dir": str(target),
+            "mp3_dir": str(mp3_dir),
+            "drive_root": str(drive_root),
+            "job_dir": str(job_dir),
+            "index_csv": str(index_csv),
+            "exported": 0,
+            "skipped": 0,
+            "stories_filter_applied": False,
+            "voices_job_json": "",
+            "message": f"human launch has no {D05_RASSKAZY}: {hl}",
+        }
+
+    site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
+    allowed_story_keys: frozenset[str] | None = None
+    _normalize_site_story_name = None
+    if hl is None and stories_filter_dir is not None:
+        sfd = (stories_filter_dir if stories_filter_dir.is_absolute() else (root / stories_filter_dir)).resolve()
+        if sfd.is_dir():
+            from orchestrator.site_tts.batch import normalize_site_story_name as _normalize_site_story_name
+
+            tmp_keys = {
+                _normalize_site_story_name(p.stem).lower()
+                for p in sfd.iterdir()
+                if p.is_file() and p.suffix.lower() == ".txt"
+            }
+            if tmp_keys:
+                allowed_story_keys = frozenset(tmp_keys)
+
+    skip = False
+    skip_reason = ""
+    if hl is None and allowed_story_keys is None:
+        skip, skip_reason = _should_skip_redundant_drive_export(texts_dir=target, job_dir=job_dir, site_root=site_output_root)
+    if skip:
+        from orchestrator.wrappers.content_combiner import run_content_combiner_modes
+
+        ok_pr_h, err_pr_h = run_content_combiner_modes(
+            root_dir=root,
+            modes=["export-prompts"],
+            site_stories_dir=site_output_root,
+            artifact_root=None,
+            capture_output=False,
+        )
+        if not ok_pr_h:
+            print(f"[WARN] export-prompts (resume, без повторного export): {err_pr_h}", flush=True)
+        else:
+            print("[site_tts] stories_export.csv/xlsx обновлены (export-prompts) при resume ожидания mp3.", flush=True)
+        return {
+            "ok": True,
+            "texts_dir": str(target),
+            "mp3_dir": str(mp3_dir),
+            "drive_root": str(drive_root),
+            "job_dir": str(job_dir),
+            "index_csv": str(index_csv),
+            "exported": 0,
+            "skipped": 0,
+            "resume_wait_for_pending_job": True,
+            "skipped_reason": skip_reason,
+            "voices_job_json": "",
+            "message": "Пакет txt уже на Drive; повторный export пропущен — продолжаем ожидание mp3/import.",
+            "stories_filter_applied": bool(allowed_story_keys),
+        }
+
+    from orchestrator.wrappers.content_combiner import run_content_combiner_modes
+
+    if hl is None:
+        ok_pr, err_pr = run_content_combiner_modes(
+            root_dir=root,
+            modes=["export-prompts"],
+            site_stories_dir=site_output_root,
+            artifact_root=None,
+            capture_output=False,
+        )
+        if not ok_pr:
+            return {
+                "ok": False,
+                "texts_dir": str(target),
+                "mp3_dir": str(mp3_dir),
+                "drive_root": str(drive_root),
+                "job_dir": str(job_dir),
+                "index_csv": str(index_csv),
+                "exported": 0,
+                "skipped": 0,
+                "stories_filter_applied": bool(allowed_story_keys),
+                "voices_job_json": "",
+                "message": f"content_combiner export-prompts failed: {err_pr}",
+            }
+        print(
+            "[site_tts] stories_export.csv/xlsx обновлены (export-prompts) перед выгрузкой txt на Drive. "
+            "Пути к Excel и к папке для обложек — в файлах ЧИТАЙ_МЕНЯ_*.txt рядом с таблицей и в IMAGES_IN.",
+            flush=True,
+        )
+    else:
+        print(
+            "[site_tts] human-launch export-drive: export-prompts пропущен (источник — 05_Рассказы, не legacy output/site).",
+            flush=True,
+        )
+
+    export_diag_path = job_dir / _EXPORT_DIAG_JSONL
+    export_diag_path.write_text("", encoding="utf-8")
     exported_rows: list[list[str]] = []
     skipped_rows: list[list[str]] = []
     lim = None if limit is None or int(limit) <= 0 else int(limit)
     exported = 0
-    for i, story_folder in enumerate(_iter_story_dirs(site_root), start=1):
-        src, err = _resolve_story_tts_source(story_folder)
+    _story_iter = iter_human_launch_story_dirs(hl) if hl is not None else _iter_story_dirs(site_output_root)
+    for i, story_folder in enumerate(_story_iter, start=1):
+        if hl is not None:
+            src, err = _resolve_story_human_colab_source(hl, story_folder)
+        else:
+            src, err = _resolve_story_tts_source(story_folder)
         if src is None:
             skipped_rows.append([f"{i:03d}", story_folder.name, "", "", "", f"skip:{err or 'unknown'}"])
+            _append_export_diag(
+                export_diag_path,
+                {
+                    "story_id": story_folder.name,
+                    "source_path": "",
+                    "dest_path": "",
+                    "raw_chars": 0,
+                    "cleaned_chars": 0,
+                    "url_like_count_before": 0,
+                    "url_like_count_after": 0,
+                    "removed_lines_count": 0,
+                    "preview_500": "",
+                    "expected_files_entry": "",
+                    "status": "error",
+                    "reason": f"resolve_source_failed:{err or 'unknown'}",
+                },
+            )
             continue
-        if src.has_mp3:
+        if hl is None and allowed_story_keys is not None and _normalize_site_story_name is not None:
+            key = _normalize_site_story_name(src.story_id).lower()
+            if key not in allowed_story_keys:
+                skipped_rows.append(
+                    [f"{i:03d}", src.story_id, src.tts_text_path.name, "", "", "skip:not_in_stories_filter_dir"]
+                )
+                _append_export_diag(
+                    export_diag_path,
+                    {
+                        "story_id": src.story_id,
+                        "source_path": str(src.tts_text_path),
+                        "dest_path": "",
+                        "raw_chars": 0,
+                        "cleaned_chars": 0,
+                        "url_like_count_before": 0,
+                        "url_like_count_after": 0,
+                        "removed_lines_count": 0,
+                        "preview_500": "",
+                        "expected_files_entry": "",
+                        "status": "skipped",
+                        "reason": "skip:not_in_stories_filter_dir",
+                    },
+                )
+                continue
+        if hl is None and src.has_mp3:
             skipped_rows.append([f"{i:03d}", src.story_id, src.tts_text_path.name, f"{src.story_id}__{src.voice_type}.mp3", str(src.expected_output_mp3), "skip:has_mp3"])
+            _append_export_diag(
+                export_diag_path,
+                {
+                    "story_id": src.story_id,
+                    "source_path": str(src.tts_text_path),
+                    "dest_path": "",
+                    "raw_chars": 0,
+                    "cleaned_chars": 0,
+                    "url_like_count_before": 0,
+                    "url_like_count_after": 0,
+                    "removed_lines_count": 0,
+                    "preview_500": "",
+                    "expected_files_entry": "",
+                    "status": "error",
+                    "reason": "skip:has_mp3",
+                },
+            )
             continue
         txt_name = f"{_safe_name(src.story_id)}__{src.voice_type}.txt"
         mp3_name = f"{_safe_name(src.story_id)}__{src.voice_type}.mp3"
+        if Path(txt_name).stem != Path(mp3_name).stem:
+            skipped_rows.append([f"{i:03d}", src.story_id, src.tts_text_path.name, mp3_name, str(src.expected_output_mp3), "skip:stem_mismatch"])
+            _append_export_diag(
+                export_diag_path,
+                {
+                    "story_id": src.story_id,
+                    "source_path": str(src.tts_text_path),
+                    "dest_path": "",
+                    "raw_chars": 0,
+                    "cleaned_chars": 0,
+                    "url_like_count_before": 0,
+                    "url_like_count_after": 0,
+                    "removed_lines_count": 0,
+                    "preview_500": "",
+                    "expected_files_entry": mp3_name,
+                    "status": "error",
+                    "reason": "txt_mp3_stem_mismatch",
+                },
+            )
+            print(
+                f"[WARN] export-drive skipped: story={src.story_id} reason=txt_mp3_stem_mismatch txt={txt_name} mp3={mp3_name}",
+                flush=True,
+            )
+            continue
         dst = target / txt_name
-        dst.write_text(src.tts_text_path.read_text(encoding="utf-8"), encoding="utf-8")
+        raw_text = src.tts_text_path.read_text(encoding="utf-8")
+        cleaned_text, url_before, url_after, removed_lines = _clean_text_for_drive_tts(raw_text)
+        if url_after > 0:
+            skipped_rows.append([f"{i:03d}", src.story_id, src.tts_text_path.name, mp3_name, str(src.expected_output_mp3), "skip:dirty_after_clean"])
+            _append_export_diag(
+                export_diag_path,
+                {
+                    "story_id": src.story_id,
+                    "source_path": str(src.tts_text_path),
+                    "dest_path": str(dst),
+                    "raw_chars": len(raw_text),
+                    "cleaned_chars": len(cleaned_text),
+                    "url_like_count_before": url_before,
+                    "url_like_count_after": url_after,
+                    "removed_lines_count": removed_lines,
+                    "preview_500": cleaned_text[:500],
+                    "expected_files_entry": mp3_name,
+                    "status": "skipped_dirty",
+                    "reason": "url_or_domain_patterns_left_after_clean",
+                },
+            )
+            print(
+                f"[WARN] export-drive skipped dirty text: story={src.story_id} source={src.tts_text_path} remaining_url_like={url_after}",
+                flush=True,
+            )
+            continue
+        if not cleaned_text.strip():
+            skipped_rows.append([f"{i:03d}", src.story_id, src.tts_text_path.name, mp3_name, str(src.expected_output_mp3), "skip:empty_after_clean"])
+            _append_export_diag(
+                export_diag_path,
+                {
+                    "story_id": src.story_id,
+                    "source_path": str(src.tts_text_path),
+                    "dest_path": str(dst),
+                    "raw_chars": len(raw_text),
+                    "cleaned_chars": 0,
+                    "url_like_count_before": url_before,
+                    "url_like_count_after": 0,
+                    "removed_lines_count": removed_lines,
+                    "preview_500": "",
+                    "expected_files_entry": mp3_name,
+                    "status": "error",
+                    "reason": "empty_after_clean",
+                },
+            )
+            print(
+                f"[WARN] export-drive skipped empty text after clean: story={src.story_id} source={src.tts_text_path}",
+                flush=True,
+            )
+            continue
+        dst.write_text(cleaned_text, encoding="utf-8")
         exported += 1
-        exported_rows.append([f"{exported:03d}", src.story_id, txt_name, mp3_name, str(src.expected_output_mp3), src.voice_type])
+        dest_cell = str(src.expected_output_mp3) if hl is None else _rel_posix(
+            SiteTtsPaths.from_human_launch_story(hl, src.story_id, ensure_dirs=False).output_mp3, root
+        )
+        exported_rows.append([f"{exported:03d}", src.story_id, txt_name, mp3_name, dest_cell, src.voice_type])
+        _append_export_diag(
+            export_diag_path,
+            {
+                "story_id": src.story_id,
+                "source_path": str(src.tts_text_path),
+                "dest_path": str(dst),
+                "raw_chars": len(raw_text),
+                "cleaned_chars": len(cleaned_text),
+                "url_like_count_before": url_before,
+                "url_like_count_after": 0,
+                "removed_lines_count": removed_lines,
+                "preview_500": cleaned_text[:500],
+                "expected_files_entry": mp3_name,
+                "status": "exported",
+            },
+        )
         if lim is not None and exported >= lim:
             break
 
@@ -226,6 +950,14 @@ def export_drive_texts(
             w.writerows(skipped_rows[:200])
 
     expected_files = [r[3] for r in exported_rows]
+    write_kokoro_voices_job_json(
+        project_root=root,
+        job_dir=job_dir,
+        site_root=site_output_root,
+        exported_rows=exported_rows,
+        settings=settings,
+        human_launch=hl,
+    )
     job = {
         "job_id": datetime.now().strftime("%Y%m%d_%H%M%S"),
         "created_at": _utc_now_iso(),
@@ -252,7 +984,54 @@ def export_drive_texts(
         encoding="utf-8",
     )
 
-    return {
+    if hl is not None and exported_rows:
+        try:
+            _mirror_human_drive_export_to_colab_current(
+                root, target, index_csv, exported_rows, job_batch_id=str(job["job_id"])
+            )
+        except OSError as exc:
+            print(f"[WARN] COLAB_TTS_CURRENT mirror (human Drive export): {exc}", flush=True)
+
+    if hl is not None and exported_rows:
+        side = {
+            "mode": "human_launch_drive_export",
+            "launch": str(hl),
+            "job_id": job["job_id"],
+            "texts_dir": str(target),
+            "mp3_dir": str(mp3_dir),
+            "job_dir": str(job_dir),
+            "exported": len(exported_rows),
+            "expected_files": expected_files,
+        }
+        tmp = hl / D06_OTCHETY / f"kokoro_drive_export_{job['job_id']}.json"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(side, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            _copy_colab_report_to_launch_sidecars(hl, str(job["job_id"]), tmp, "kokoro_drive_export")
+        except OSError:
+            pass
+
+    launch_h = None
+    try:
+        from orchestrator.human_launch_layout import launch_dir_from_site_output_root, mirror_exported_drive_txt_to_human_clean
+
+        launch_h = hl if hl is not None else launch_dir_from_site_output_root(site_output_root)
+        if launch_h is not None and exported_rows:
+            for row in exported_rows:
+                if len(row) < 3:
+                    continue
+                _n, sid, txt_name = row[0], row[1], row[2]
+                mirror_exported_drive_txt_to_human_clean(
+                    launch_h,
+                    drive_texts_dir=target,
+                    story_folder_name=str(sid),
+                    txt_name=str(txt_name),
+                )
+            print(f"[site_tts] копии txt для Colab → {launch_h / '02_Сайт' / '01_Очистка_текста'}", flush=True)
+    except OSError as exc:
+        print(f"[WARN] human mirror export txt: {exc}", flush=True)
+
+    out_ret: dict[str, Any] = {
         "ok": True,
         "texts_dir": str(target),
         "mp3_dir": str(mp3_dir),
@@ -261,8 +1040,16 @@ def export_drive_texts(
         "index_csv": str(index_csv),
         "exported": exported,
         "skipped": len(skipped_rows),
+        "stories_filter_applied": bool(allowed_story_keys),
+        "voices_job_json": str((job_dir / VOICE_MANIFEST_FILENAME).resolve()) if exported_rows else "",
         "message": "TXT copied to Google Drive texts folder",
     }
+    if hl is not None:
+        cdir, ctexts, cmp3 = _current_paths(root)
+        out_ret["colab_current_dir"] = str(cdir)
+        out_ret["colab_current_texts"] = str(ctexts)
+        out_ret["colab_current_mp3"] = str(cmp3)
+    return out_ret
 
 
 def import_drive_mp3(
@@ -270,6 +1057,8 @@ def import_drive_mp3(
     *,
     mp3_dir: Path | None = None,
     force: bool = False,
+    site_root: Path | None = None,
+    human_launch: Path | None = None,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
@@ -281,7 +1070,8 @@ def import_drive_mp3(
     source.mkdir(parents=True, exist_ok=True)
     job_dir = _drive_dir_from(root, settings, "job", "job")
     expected = set(_load_expected_files(job_dir))
-    site_root = (root / "output" / "site").resolve()
+    site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
+    hl = human_launch.resolve() if human_launch is not None else None
 
     imported = 0
     skipped_existing = 0
@@ -304,28 +1094,54 @@ def import_drive_mp3(
             invalid_mp3 += 1
             details.append({"status": "invalid_mp3", "file": mp3.name, "reason": "empty_file"})
             continue
-        story, _voice = _split_story_voice(mp3.stem)
-        story = _safe_name(story)
-        folder = site_root / story
-        if not folder.is_dir():
-            missing_story += 1
-            details.append({"status": "extra_mp3", "file": mp3.name, "reason": "story_folder_not_found"})
-            continue
-        dst = folder / f"{story}.mp3"
+        if hl is not None:
+            hf = _human_story_dir_for_drive_mp3_name(hl, mp3.name)
+            if hf is None:
+                missing_story += 1
+                details.append({"status": "extra_mp3", "file": mp3.name, "reason": "human_story_folder_not_found"})
+                continue
+            story_folder_for_detail = hf.name
+            dst = SiteTtsPaths.from_human_launch_story(hl, hf.name, ensure_dirs=True).output_mp3
+        else:
+            story, _voice = _split_story_voice(mp3.stem)
+            story = _safe_name(story)
+            story_folder_for_detail = story
+            folder = site_output_root / story
+            if not folder.is_dir():
+                missing_story += 1
+                details.append({"status": "extra_mp3", "file": mp3.name, "reason": "story_folder_not_found"})
+                continue
+            dst = folder / f"{story}.mp3"
+        need_write = True
         if dst.is_file() and not force:
+            try:
+                if dst.stat().st_size == size:
+                    need_write = False
+            except OSError:
+                need_write = True
+        if not need_write:
             skipped_existing += 1
-            details.append({"status": "skipped_existing", "file": mp3.name, "path": str(dst)})
+            details.append(
+                {"status": "skipped_identical", "file": mp3.name, "path": str(dst), "story_folder": story_folder_for_detail}
+            )
             continue
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(mp3.read_bytes())
             imported += 1
-            details.append({"status": "imported", "file": mp3.name, "path": str(dst)})
+            details.append(
+                {"status": "imported", "file": mp3.name, "path": str(dst), "story_folder": story_folder_for_detail}
+            )
         except OSError as exc:
             errors += 1
             details.append({"status": "error", "file": mp3.name, "reason": str(exc)})
-    return {
-        "ok": True,
+    handled = {d["file"] for d in details if d.get("status") in ("imported", "skipped_identical")}
+    missing_after: list[str] = []
+    if expected:
+        missing_after = sorted(expected - handled)
+    ok_import = errors == 0 and not missing_after
+    out: dict[str, Any] = {
+        "ok": ok_import,
         "mp3_dir": str(source),
         "job_dir": str(job_dir),
         "imported": imported,
@@ -334,7 +1150,30 @@ def import_drive_mp3(
         "invalid_mp3": invalid_mp3,
         "errors": errors,
         "details": details,
+        "missing_after_import": missing_after,
     }
+    if hl is not None:
+        try:
+            tag = _utc_now_iso().replace(":", "-")
+            p = hl / D06_OTCHETY / f"kokoro_drive_import_{tag}.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            _copy_colab_report_to_launch_sidecars(hl, tag, p, "kokoro_drive_import")
+            imp_items = [d for d in details if d.get("status") == "imported" and d.get("story_folder")]
+            if imp_items:
+                st_path = hl / D06_OTCHETY / f"kokoro_drive_imported_stories_{tag}.json"
+                st_payload = {"updated_at": _utc_now_iso(), "items": imp_items}
+                st_path.write_text(json.dumps(st_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                _copy_colab_report_to_launch_sidecars(hl, tag, st_path, "kokoro_drive_imported_stories")
+                latest = hl / D06_OTCHETY / "kokoro_drive_imported_stories_latest.json"
+                latest.write_text(json.dumps(st_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                try:
+                    _copy_colab_report_to_launch_sidecars(hl, "state", latest, "kokoro_drive_imported_stories_latest")
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return out
 
 
 def verify_drive_status(
@@ -398,6 +1237,112 @@ def verify_drive_status(
     }
 
 
+_SILENT_STUB_MP3 = Path(__file__).resolve().parent / "_silent_stub.mp3"
+
+
+def drive_mp3_wait_skip_requested() -> bool:
+    """
+    True — не ждать mp3 на Drive: локальные stub + снять pending (см. resolve_pending_drive_mp3_job_with_local_stub).
+
+    Одноразово при зависшем job: CONTENT_FACTORY_SKIP_DRIVE_MP3_WAIT=1 (или флаг рядом с bat).
+    По умолчанию без этой переменной — обычное ожидание Colab/Drive и import.
+    """
+    v = (os.environ.get("CONTENT_FACTORY_SKIP_DRIVE_MP3_WAIT") or "").strip().lower()
+    return v in {"1", "true", "yes", "on", "y"}
+
+
+def resolve_pending_drive_mp3_job_with_local_stub(
+    root_dir: Path,
+    *,
+    site_root: Path,
+    artifact_root: Path | None = None,
+) -> dict[str, Any]:
+    """
+    Обход зависшего ожидания Colab/Drive: для каждой строки в job/EXPECTED_FILES.txt кладём локальный
+    короткий silent .mp3 в output/site/<story>/<story>.mp3 и снимаем pending на Drive (удаляем EXPECTED_FILES.txt).
+
+    Вызывается только при CONTENT_FACTORY_SKIP_DRIVE_MP3_WAIT=1 (см. SiteTtsStageWrapper).
+    """
+    root = root_dir.resolve()
+    site_output_root = site_root.resolve()
+    stub = _SILENT_STUB_MP3.resolve()
+    if not stub.is_file():
+        return {
+            "ok": False,
+            "message": (
+                f"stub mp3 missing: {stub} "
+                "(ffmpeg: ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t 0.05 -q:a 9 -acodec libmp3lame _silent_stub.mp3)"
+            ),
+        }
+    settings = load_site_tts_settings(root)
+    job_dir = _drive_dir_from(root, settings, "job", "job")
+    expected = _load_expected_files(job_dir)
+    if not expected:
+        return {
+            "ok": True,
+            "skipped_drive_wait": True,
+            "stories": [],
+            "message": "EXPECTED_FILES пуст или отсутствует — обход не нужен",
+        }
+    stub_bytes = stub.read_bytes()
+    placed: list[str] = []
+    for name in expected:
+        story_raw, _v = _split_story_voice(Path(name).stem)
+        story = _safe_name(story_raw)
+        folder = site_output_root / story
+        if not folder.is_dir():
+            return {
+                "ok": False,
+                "message": f"нет папки истории для {name!r}: {folder}",
+            }
+        dst = folder / f"{story}.mp3"
+        dst.write_bytes(stub_bytes)
+        placed.append(story)
+    exp_path = job_dir / "EXPECTED_FILES.txt"
+    try:
+        if exp_path.is_file():
+            exp_path.unlink()
+    except OSError:
+        pass
+    try:
+        (job_dir / "LOCAL_STATUS.json").write_text(
+            json.dumps(
+                {
+                    "state": "skipped_drive_wait_local_stub_mp3",
+                    "expected_count": len(expected),
+                    "stories": placed,
+                    "updated_at": _utc_now_iso(),
+                    "note": "CONTENT_FACTORY_SKIP_DRIVE_MP3_WAIT — локальный stub без mp3 с Drive; при необходимости замени аудио.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return {"ok": False, "message": f"не удалось записать LOCAL_STATUS.json: {exc}"}
+    print(
+        "[WARN] CONTENT_FACTORY_SKIP_DRIVE_MP3_WAIT: локальные stub .mp3 для "
+        f"{len(placed)} историй; EXPECTED_FILES.txt на Drive удалён. Список: {placed}",
+        flush=True,
+    )
+    ok_di, err_di = _run_combiner_distribute_images(root, site_output_root=site_output_root, artifact_root=artifact_root)
+    if not ok_di:
+        return {
+            "ok": False,
+            "skipped_drive_wait": True,
+            "stories": placed,
+            "message": f"stub mp3 ok, distribute-images failed: {err_di}",
+        }
+    _human_mirror_site_artifacts_after_import(site_output_root, list(expected))
+    return {
+        "ok": True,
+        "skipped_drive_wait": True,
+        "stories": placed,
+        "message": "локальные stub mp3; ожидание Drive пропущено; distribute-images выполнен",
+    }
+
+
 def setup_drive_workspace(root_dir: Path) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
@@ -438,6 +1383,8 @@ def wait_drive_mp3_and_import(
     wait_interval_minutes: int | None = None,
     max_wait_hours: int | None = None,
     force: bool = False,
+    site_root: Path | None = None,
+    artifact_root: Path | None = None,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
@@ -482,21 +1429,28 @@ def wait_drive_mp3_and_import(
             return {"ok": False, "message": "max wait time exceeded", "status": last_status, "missing_files": missing[:50], "zero_size_files": zero_size[:50]}
         time.sleep(interval * 60)
 
-    imp = import_drive_mp3(root, mp3_dir=source, force=force)
+    site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
+    imp = import_drive_mp3(root, mp3_dir=source, force=force, site_root=site_output_root)
     if not imp.get("ok", False) or int(imp.get("errors", 0) or 0) > 0:
         return {"ok": False, "message": "import-drive failed", "import": imp, "status": last_status}
 
+    ok_di, err_di = _run_combiner_distribute_images(root, site_output_root=site_output_root, artifact_root=artifact_root)
+    if not ok_di:
+        return {"ok": False, "message": f"distribute-images failed: {err_di}", "import": imp, "status": last_status}
+    print("[site_tts] distribute-images выполнен после import mp3 с Drive.", flush=True)
+
     # post-check: expected output files exist and non-zero
-    site_root = (root / "output" / "site").resolve()
     failed_local: list[str] = []
     for name in expected:
         story, _v = _split_story_voice(Path(name).stem)
         story = _safe_name(story)
-        out_mp3 = site_root / story / f"{story}.mp3"
+        out_mp3 = site_output_root / story / f"{story}.mp3"
         if not out_mp3.is_file() or out_mp3.stat().st_size <= 0:
             failed_local.append(story)
     if failed_local:
         return {"ok": False, "message": "local post-check failed", "failed_stories": failed_local[:50], "import": imp}
+
+    _human_mirror_site_artifacts_after_import(site_output_root, list(expected))
 
     cleaned = {"texts_deleted": 0, "mp3_deleted": 0}
     if settings.google_drive_cleanup_after_success:
@@ -825,7 +1779,8 @@ def export_kokoro_colab_batch(
     chunk_max = int(settings.kokoro_chunk_max_chars)
     speed = float(settings.kokoro_speed)
     batch = (batch_id or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
-    batch_root = (root / "runs" / "tts_colab_batches" / batch).resolve()
+    batches_parent = (root / "runs" / "tts_colab_batches").resolve()
+    batch_root = (batches_parent / batch).resolve()
     if batch_root.exists():
         return {"ok": False, "message": f"batch already exists: {batch_root}"}
 
@@ -918,49 +1873,29 @@ def export_kokoro_colab_batch(
         json.dumps(export_report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (batch_root / "README_COLAB.md").write_text(
-        "\n".join(
-            [
-                "# Kokoro Colab Batch",
-                "",
-                "Эта папка создана командой:",
-                "- `python -m orchestrator site-tts kokoro-colab export --limit <N>`",
-                "",
-                "Цель: сгенерировать MP3 в Colab (GPU) и импортировать их обратно в `output/site` без локального TTS.",
-                "",
-                "## Что внутри",
-                "- `manifest.json` — список item-ов и куда вернуть итоговые mp3.",
-                "- `stories/` — полный текст item-а (удобно для отладки).",
-                "- `chunks/<item_id>/chunk_*.txt` — чанки в правильном порядке.",
-                "- `results/` — сюда Colab должен сохранить `item_XXXXXX.mp3`.",
-                "",
-                "## Шаги в Colab",
-                "1. Zip batch-папку и загрузите в Colab.",
-                "2. Проверьте GPU: `!nvidia-smi`",
-                "3. Проверьте torch CUDA:",
-                "   - `import torch`",
-                "   - `print(torch.cuda.is_available())`",
-                "4. Установите зависимости Kokoro в Colab (`kokoro`, `soundfile`, ffmpeg).",
-                "5. Распакуйте batch и откройте `manifest.json`.",
-                "6. Для каждого item:",
-                "   - прочитайте `chunks/<item_id>/chunk_*.txt` по порядку;",
-                "   - синтезируйте аудио Kokoro на GPU;",
-                "   - сохраните итог в `results/<item_id>.mp3` (имя строго как в manifest).",
-                "7. Скачайте обратно папку `results/` (можно вместе с manifest).",
-                "",
-                "## Локальный импорт и проверка",
-                "1. Положите `results/*.mp3` в этот batch-каталог локально.",
-                "2. Импортируйте:",
-                "   - `python -m orchestrator site-tts kokoro-colab import --batch-id <batch_id>`",
-                "3. Проверьте покрытие:",
-                "   - `python -m orchestrator site-tts kokoro-colab verify --batch-id <batch_id>`",
-                "",
-                "Важно: этот flow НЕ запускает локальный `sync --execute`.",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    readme_lines = [
+        "# Kokoro Colab Batch",
+        "",
+        "Эта папка создана командой:",
+        "- `python -m orchestrator site-tts kokoro-colab export --limit <N>`",
+        "",
+        "Human-launch + Google Drive: `python -m orchestrator site-tts --launch-name <L> kokoro-colab export` (экспорт на Drive, не эта zip-папка).",
+        "",
+        "Цель: сгенерировать MP3 в Colab (GPU) и импортировать их обратно в `output/site` без локального TTS.",
+        "",
+        "## Что внутри",
+        "- `manifest.json` — список item-ов и куда вернуть итоговые mp3.",
+        "- `stories/` — полный текст item-а (удобно для отладки).",
+        "- `chunks/<item_id>/chunk_*.txt` — чанки в правильном порядке.",
+        "- `results/` — сюда Colab должен сохранить `item_XXXXXX.mp3`.",
+        "",
+        "## Локальный импорт и проверка",
+        "1. Положите `results/*.mp3` в этот batch-каталог локально.",
+        "2. `python -m orchestrator site-tts kokoro-colab import --batch-id <batch_id>`",
+        "",
+        "Важно: этот flow НЕ запускает локальный `sync --execute`.",
+    ]
+    (batch_root / "README_COLAB.md").write_text("\n".join(readme_lines) + "\n", encoding="utf-8")
     handoff = _create_handoff_package(root, batch_root, manifest)
     current = _build_current_folder(root, batch_root, manifest)
     return {
@@ -978,12 +1913,14 @@ def export_kokoro_colab_batch(
 def _resolve_batch_dir(root: Path, batch_id: str | None, batch_dir: Path | None, handoff: Path | None = None) -> Path:
     if handoff is not None:
         meta = _read_handoff_manifest(handoff)
+        bdir_meta = str(meta.get("batch_dir", "")).strip()
+        if bdir_meta:
+            p = Path(bdir_meta).resolve()
+            if p.is_dir():
+                return p
         bid = str(meta.get("batch_id", "")).strip()
         if bid:
             return (root / "runs" / "tts_colab_batches" / bid).resolve()
-        bdir = str(meta.get("batch_dir", "")).strip()
-        if bdir:
-            return Path(bdir).resolve()
         raise ValueError("handoff manifest does not contain batch_id/batch_dir")
     if batch_dir is not None:
         return (batch_dir if batch_dir.is_absolute() else (root / batch_dir)).resolve()
@@ -1059,7 +1996,15 @@ def import_kokoro_colab_results(
         }
 
     handoff = _resolve_handoff_dir(root, handoff_dir, latest)
-    bdir = _resolve_batch_dir(root, batch_id, batch_dir, handoff=handoff)
+    try:
+        if handoff is not None:
+            bdir = _resolve_batch_dir(root, batch_id, batch_dir, handoff=handoff)
+        elif batch_dir is not None:
+            bdir = (batch_dir if batch_dir.is_absolute() else (root / batch_dir)).resolve()
+        else:
+            bdir = _resolve_batch_dir(root, batch_id, None, handoff=None)
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc)}
     manifest_path = bdir / "manifest.json"
     if not manifest_path.is_file():
         return {"ok": False, "message": f"manifest not found: {manifest_path}"}
@@ -1130,6 +2075,17 @@ def import_kokoro_colab_results(
         "details": details,
     }
     (bdir / "import_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    if hl is not None:
+        try:
+            bdir.resolve().relative_to(hl.resolve())
+            _copy_colab_report_to_launch_sidecars(
+                hl,
+                str(manifest.get("batch_id", bdir.name)),
+                bdir / "import_report.json",
+                "kokoro_colab_import",
+            )
+        except (ValueError, OSError):
+            pass
     out: dict[str, Any] = {"ok": True, "batch_dir": str(bdir), **report}
     if handoff is not None:
         out["handoff_dir"] = str(handoff)
@@ -1144,9 +2100,11 @@ def verify_mp3_coverage(
     handoff_dir: Path | None = None,
     latest: bool = False,
     current: bool = False,
+    human_launch: Path | None = None,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
-    site_root = (root / "output" / "site").resolve()
+    hl = human_launch.resolve() if human_launch is not None else None
+
     total_story_dirs = 0
     with_tts_text = 0
     with_mp3 = 0
@@ -1154,22 +2112,45 @@ def verify_mp3_coverage(
     skipped_no_tts = 0
     ambiguous_tts = 0
 
-    for folder in _iter_story_dirs(site_root):
-        total_story_dirs += 1
-        src, err = _resolve_story_tts_source(folder)
-        if src is None:
-            if err and err.startswith("multiple_tts_text_files"):
-                ambiguous_tts += 1
-            else:
+    if hl is not None:
+        site_root = hl
+        for folder in iter_human_launch_story_dirs(hl):
+            total_story_dirs += 1
+            paths_h = SiteTtsPaths.from_human_launch_story(hl, folder.name, ensure_dirs=False)
+            has_clean = paths_h.cleaned_story_txt.is_file()
+            has_info = paths_h.info_txt.is_file()
+            try:
+                has_out = paths_h.output_mp3.is_file() and paths_h.output_mp3.stat().st_size > 0
+            except OSError:
+                has_out = False
+            if not has_clean or not has_info:
                 skipped_no_tts += 1
-            if (folder / f"{folder.name}.mp3").is_file():
+                if has_out:
+                    with_mp3 += 1
+                continue
+            with_tts_text += 1
+            if has_out:
                 with_mp3 += 1
-            continue
-        with_tts_text += 1
-        if src.expected_output_mp3.is_file():
-            with_mp3 += 1
-        else:
-            missing_mp3 += 1
+            else:
+                missing_mp3 += 1
+    else:
+        site_root = (root / "output" / "site").resolve()
+        for folder in _iter_story_dirs(site_root):
+            total_story_dirs += 1
+            src, err = _resolve_story_tts_source(folder)
+            if src is None:
+                if err and err.startswith("multiple_tts_text_files"):
+                    ambiguous_tts += 1
+                else:
+                    skipped_no_tts += 1
+                if (folder / f"{folder.name}.mp3").is_file():
+                    with_mp3 += 1
+                continue
+            with_tts_text += 1
+            if src.expected_output_mp3.is_file():
+                with_mp3 += 1
+            else:
+                missing_mp3 += 1
 
     out: dict[str, Any] = {
         "ok": True,
@@ -1225,7 +2206,14 @@ def verify_mp3_coverage(
 
     handoff = _resolve_handoff_dir(root, handoff_dir, latest)
     if (batch_id or "").strip() or handoff is not None:
-        bdir = _resolve_batch_dir(root, batch_id, None, handoff=handoff)
+        try:
+            if handoff is not None:
+                bdir = _resolve_batch_dir(root, batch_id, None, handoff=handoff)
+            else:
+                bdir = _resolve_batch_dir(root, batch_id, None, handoff=None)
+        except ValueError as exc:
+            out["batch"] = {"error": str(exc)}
+            return out
         manifest_path = bdir / "manifest.json"
         handoff_results = (handoff / _HANDOFF_RESULTS_DIR).resolve() if handoff is not None else None
         if manifest_path.is_file():
