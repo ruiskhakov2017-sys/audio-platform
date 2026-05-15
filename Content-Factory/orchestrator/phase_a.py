@@ -6,15 +6,24 @@ import re
 import sys
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.human_launch_layout import launch_legacy_output_root, launch_legacy_runs_root
 from orchestrator.length_filter import LengthFilterOptions, run_length_filter
 from orchestrator.site_tts.info_parser import resolve_cleaned_story_txt_path, resolve_voice_letter_from_info_content
 from orchestrator.status import StatusStore
+from orchestrator.phase_a_gemini_supervisor import (
+    GeminiSupervisorOptions,
+    count_pending_gemini_folders,
+    gemini_worker_subprocess_creationflags,
+    maybe_print_gemini_queue_progress,
+    run_supervised_gemini_workers,
+)
 from orchestrator.visual_stage import run_visual_stage
 
 
@@ -42,6 +51,7 @@ class PhaseAOptions:
     story_id: str
     words_per_minute: int
     min_minutes: float
+    min_words: int
     extensions: list[str]
     gemini_workers: int = 1
     max_stories: int = 0
@@ -52,6 +62,14 @@ class PhaseAOptions:
     resume: bool = False
     visual_mode: str = "manual"
     visual_pod_url: str = ""
+    # Пул Chrome-профилей (Gemini): не более ``gemini_target_active_workers`` процессов одновременно.
+    gemini_target_active_workers: int = 3
+    gemini_profiles_total: int = 5
+    gemini_max_restarts_per_profile: int = 3
+    gemini_profile_cooldown_seconds: float = 900.0
+    gemini_supervised_workers: bool = True
+    # Если задан — корень Запуски/<name>/; runs/ и output/ в 10_Временные_файлы/legacy/...
+    launch_dir: Path | None = None
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -61,6 +79,140 @@ def _write_json(path: Path, payload: Any) -> None:
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _is_nonempty_info_txt(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        return bool(path.read_text(encoding="utf-8", errors="ignore").strip())
+    except OSError:
+        return False
+
+
+def _iter_gemini_dirs_having_source_txt(cat_dir: Path, src_basename: str) -> list[Path]:
+    if not cat_dir.is_dir():
+        return []
+    out: list[Path] = []
+    for story_dir in cat_dir.iterdir():
+        if not story_dir.is_dir():
+            continue
+        if (story_dir / src_basename).is_file():
+            out.append(story_dir)
+    return out
+
+
+def _pick_gemini_dir_for_done_sync(candidates: list[Path]) -> Path | None:
+    """Папка с непустым info.txt; при нескольких — с самым новым mtime info."""
+    best: tuple[Path, float] | None = None
+    for d in candidates:
+        ip = d / "info.txt"
+        if not _is_nonempty_info_txt(ip):
+            continue
+        try:
+            mt = ip.stat().st_mtime
+        except OSError:
+            mt = 0.0
+        if best is None or mt > best[1]:
+            best = (d, mt)
+    return best[0] if best else None
+
+
+def _pick_gemini_dir_for_incomplete_work(candidates: list[Path]) -> Path | None:
+    """Папки без готового info — детерминированно самое маленькое имя (canonical для resume)."""
+    incomplete = [d for d in candidates if not _is_nonempty_info_txt(d / "info.txt")]
+    if not incomplete:
+        return None
+    incomplete.sort(key=lambda p: p.name.lower())
+    return incomplete[0]
+
+
+def _find_gemini_story_dir_for_source(
+    gemini_stories_root: Path,
+    stories_dir: Path,
+    src: Path,
+) -> Path | None:
+    """
+    Найти папку рассказа под gemini_input/stories: сначала с готовым info (для resume-синка),
+    иначе незавершённую (для продолжения без создания дублей).
+    """
+    try:
+        rel = src.resolve().relative_to(stories_dir.resolve())
+    except ValueError:
+        return None
+    category = rel.parts[0] if len(rel.parts) > 1 else "uncategorized"
+    cat_dir = gemini_stories_root / category
+    cands = _iter_gemini_dirs_having_source_txt(cat_dir, src.name)
+    if not cands:
+        return None
+    done = _pick_gemini_dir_for_done_sync(cands)
+    if done is not None:
+        return done
+    inc = _pick_gemini_dir_for_incomplete_work(cands)
+    if inc is not None:
+        return inc
+    return sorted(cands, key=lambda p: p.name.lower())[0]
+
+
+def _next_gemini_numeric_suffix(cat_dir: Path, story_name: str) -> int:
+    """Следующий свободный N для имени папки ``{story_name}_{N:06d}`` по уже существующим."""
+    prefix = f"{story_name}_"
+    max_n = 0
+    try:
+        for d in cat_dir.iterdir():
+            if not d.is_dir():
+                continue
+            if not d.name.startswith(prefix):
+                continue
+            suf = d.name[len(prefix) :]
+            if len(suf) == 6 and suf.isdigit():
+                max_n = max(max_n, int(suf))
+    except OSError:
+        pass
+    return max_n + 1
+
+
+def _sync_selection_from_gemini_info(
+    *,
+    src: str,
+    info_path: Path,
+    workspace: dict[str, Path | str],
+    state_map: dict[str, dict[str, str]],
+    runs_rejected_by_selection_root: Path,
+    runs_policy_refusal_root: Path,
+    runs_manual_root: Path,
+    selected_pending: list[str],
+    rejected_gemini: list[str],
+    policy_refusal_gemini: list[str],
+    review_gemini: list[str],
+) -> None:
+    """Записать selection_* из уже существующего info.txt (resume без повторной отправки в Gemini)."""
+    raw_text = info_path.read_text(encoding="utf-8", errors="ignore") if info_path.is_file() else ""
+    Path(workspace["selection_raw_path"]).write_text(raw_text, encoding="utf-8")
+    sel = _parse_selection_result(str(workspace["story_id"]), raw_text)
+    _write_json(Path(workspace["selection_result_path"]), sel)
+    verdict = str(sel["verdict"])
+    if verdict == "rejected":
+        state_map[src] = {"state": "rejected_gemini", "reason": "gemini_gate_no"}
+        rejected_gemini.append(src)
+        _relocate_workspace(workspace, runs_rejected_by_selection_root)
+        _write_status(workspace, "rejected", "selection_gate")
+        return
+    if verdict == "selected":
+        state_map[src] = {"state": "selected_pending_gemini", "reason": "gemini_gate_yes"}
+        selected_pending.append(src)
+        _write_status(workspace, "selected", "selection_gate")
+        return
+    if verdict == "policy_refusal":
+        state_map[src] = {"state": "policy_refusal", "reason": "gemini_policy_refusal"}
+        policy_refusal_gemini.append(src)
+        _relocate_workspace(workspace, runs_policy_refusal_root)
+        _write_status(workspace, "policy_refusal", "selection_gate")
+        return
+    state_map[src] = {"state": "manual_review", "reason": "gemini_unparseable_verdict"}
+    review_gemini.append(src)
+    _relocate_workspace(workspace, runs_manual_root)
+    _write_status(workspace, "manual_review", "selection_gate")
 
 
 def _scan_txt(stories_dir: Path, extensions: list[str]) -> list[Path]:
@@ -132,14 +284,33 @@ def _build_gemini_input(
     stories_dir: Path,
     root: Path,
 ) -> tuple[Path, list[dict[str, str]]]:
+    """
+    Idempotent: для каждого исходника переиспользуем существующую gemini-папку с тем же basename .txt,
+    если там ещё нет готового info.txt; иначе обновляем копию в уже завершённой папке без mkdir-дублей.
+    Новая папка создаётся только если ни одной с этим исходным .txt ещё нет; суффикс _NNNNNN — max+1 по категории.
+    """
     gemini_root = root / "gemini_input" / "stories"
     mapping: list[dict[str, str]] = []
-    for idx, src in enumerate(selected_files, start=1):
+    warn_multi: list[str] = []
+    for src in selected_files:
         rel = src.relative_to(stories_dir)
         category = rel.parts[0] if len(rel.parts) > 1 else "uncategorized"
         story_name = rel.parent.name if rel.parent != Path(".") else src.stem
-        story_dir = gemini_root / category / f"{story_name}_{idx:06d}"
-        story_dir.mkdir(parents=True, exist_ok=True)
+        cat_dir = gemini_root / category
+        cat_dir.mkdir(parents=True, exist_ok=True)
+        cands = _iter_gemini_dirs_having_source_txt(cat_dir, src.name)
+        if len(cands) > 1:
+            warn_multi.append(f"{src.name}: {len(cands)} папок {[d.name for d in sorted(cands, key=lambda x: x.name.lower())]}")
+        incomplete = [d for d in cands if not _is_nonempty_info_txt(d / "info.txt")]
+        if incomplete:
+            story_dir = _pick_gemini_dir_for_incomplete_work(cands)
+            assert story_dir is not None
+        elif cands:
+            story_dir = _pick_gemini_dir_for_done_sync(cands) or sorted(cands, key=lambda p: p.name.lower())[0]
+        else:
+            n = _next_gemini_numeric_suffix(cat_dir, story_name)
+            story_dir = cat_dir / f"{story_name}_{n:06d}"
+            story_dir.mkdir(parents=True, exist_ok=True)
         dst = story_dir / src.name
         shutil.copy2(src, dst)
         mapping.append(
@@ -150,6 +321,16 @@ def _build_gemini_input(
                 "gemini_story_file": str(dst),
             }
         )
+    if warn_multi:
+        print(
+            f"[gemini_input] WARNING: несколько gemini-папок с одним исходником ({len(warn_multi)}), "
+            f"используется canonical незавершённая или с info",
+            flush=True,
+        )
+        for line in warn_multi[:30]:
+            print(f"  {line}", flush=True)
+        if len(warn_multi) > 30:
+            print(f"  ... и ещё {len(warn_multi) - 30}", flush=True)
     return gemini_root, mapping
 
 
@@ -222,6 +403,15 @@ def _run_legacy_gemini_gate(
     stage_key: str,
     workers: int = 1,
     logs_dir: Path | None = None,
+    *,
+    events_file: Path | None = None,
+    run_id: str = "",
+    target_active_workers: int = 3,
+    pending_count: int | None = None,
+    profiles_total: int = 5,
+    max_restarts_per_profile: int = 3,
+    profile_cooldown_seconds: float = 900.0,
+    supervised_workers: bool = True,
 ) -> tuple[bool, str]:
     def _build_error_bundle(failed_workers: list[int]) -> str:
         if logs_dir is None:
@@ -278,6 +468,17 @@ def _run_legacy_gemini_gate(
     if not gemini.exists():
         return False, f"legacy gemini entrypoint not found: {gemini}"
     workers = max(1, min(5, workers))
+    effective_pending = int(pending_count) if pending_count is not None else count_pending_gemini_folders(gemini_stories_root)
+    effective_pending = max(0, effective_pending)
+    if effective_pending <= 0:
+        return True, "legacy Gemini gate skipped: pending_count=0"
+    profiles_cap = max(1, min(5, int(profiles_total)))
+    target_active = max(1, min(int(target_active_workers), profiles_cap))
+    target_active = min(target_active, effective_pending)
+    if effective_pending <= 2:
+        target_active = 1
+    legacy_parallel_all = str(os.getenv("CF_GEMINI_LEGACY_PARALLEL_ALL", "")).strip() == "1"
+    use_supervisor = bool(supervised_workers) and profiles_cap > 1 and not legacy_parallel_all
     bots = _load_gemini_registry(registry_path)
     if not bots:
         return False, f"gemini registry is empty or unreadable: {registry_path}"
@@ -324,7 +525,11 @@ def _run_legacy_gemini_gate(
         # (user_data_N), so forcing /u/N can redirect to wrong slot (/u/0).
         return True, val, selected_email, ""
 
-    print(f"[A3] running Gemini gate: workers={workers}", flush=True)
+    print(
+        f"[A3] running Gemini gate: workers={workers} supervised={use_supervisor} "
+        f"profiles_total={profiles_cap} pending_count={effective_pending} target_active={target_active}",
+        flush=True,
+    )
     if workers == 1:
         env = dict(os.environ)
         env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
@@ -347,10 +552,76 @@ def _run_legacy_gemini_gate(
             f"registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
             flush=True,
         )
-        proc = subprocess.run([sys.executable, str(gemini)], env=env)
-        if proc.returncode != 0:
+        progress_state: dict[str, Any] = {}
+        proc = subprocess.Popen(
+            [sys.executable, str(gemini)],
+            env=env,
+            creationflags=gemini_worker_subprocess_creationflags(),
+        )
+        poll_iv = 0.75
+        while proc.poll() is None:
+            maybe_print_gemini_queue_progress(
+                stage_key=stage_key,
+                gemini_stories_root=gemini_stories_root,
+                pending=None,
+                expected_total=effective_pending,
+                progress_state=progress_state,
+            )
+            time.sleep(poll_iv)
+        maybe_print_gemini_queue_progress(
+            stage_key=stage_key,
+            gemini_stories_root=gemini_stories_root,
+            pending=None,
+            expected_total=effective_pending,
+            progress_state=progress_state,
+        )
+        if int(proc.returncode or 0) != 0:
             return False, "legacy Gemini gate failed (see console output above)"
         return True, "legacy Gemini gate completed"
+
+    if use_supervisor:
+
+        def _build_proc_env(idx: int, parallel_slice: int) -> dict[str, str] | None:
+            ok_url, selected_url, selected_email, err = _select_url(idx)
+            if not ok_url:
+                print(f"[A3] supervisor skip profile {idx+1}: {err}", flush=True)
+                return None
+            env = dict(os.environ)
+            env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
+            env["GEMINI_STAGE_KEY"] = stage_key
+            # Под supervisor разделяем очередь по WORKER_INDEX (см. parallel_slice), а не по
+            # индексу Chrome-профиля: иначе профили 0 и 2 при target=2 дают одинаковый idx%2.
+            env["GEMINI_DYNAMIC_QUEUE"] = "0"
+            if logs_dir is not None:
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_{idx+1}.log").resolve())
+            user_data_dir = gemini_module_dir / f"user_data_{idx}"
+            env.pop("GEMINI_URL", None)
+            env["GEMINI_URL"] = selected_url
+            ta = max(1, int(target_active))
+            env["PARALLEL_WORKERS"] = str(ta)
+            slot = max(0, min(ta - 1, int(parallel_slice)))
+            env["WORKER_INDEX"] = str(slot)
+            env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
+            return env
+
+        return run_supervised_gemini_workers(
+            gemini_script=gemini,
+            gemini_stories_root=gemini_stories_root,
+            logs_dir=logs_dir or (gemini_stories_root.parent / "logs"),
+            stage_key=stage_key,
+            options=GeminiSupervisorOptions(
+                target_active_workers=target_active,
+                profiles_total=profiles_cap,
+                max_restarts_per_profile=max(1, int(max_restarts_per_profile)),
+                profile_cooldown_seconds=float(profile_cooldown_seconds),
+                max_supervisor_seconds=600.0 if effective_pending <= 2 else 0.0,
+                run_id=str(run_id or "").strip(),
+            ),
+            build_proc_env=_build_proc_env,
+            events_file=events_file,
+            expected_gemini_pending_total=effective_pending,
+        )
 
     procs: list[tuple[int, subprocess.Popen[bytes]]] = []
     skipped_workers: list[tuple[int, str]] = []
@@ -358,7 +629,8 @@ def _run_legacy_gemini_gate(
         env = dict(os.environ)
         env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
         env["GEMINI_STAGE_KEY"] = stage_key
-        env["GEMINI_DYNAMIC_QUEUE"] = "1"
+        # Несколько процессов с dynamic_queue=1 тянут одну очередь; при сбое локов возможен дубль.
+        env["GEMINI_DYNAMIC_QUEUE"] = "0" if int(workers) > 1 else "1"
         if logs_dir is not None:
             logs_dir.mkdir(parents=True, exist_ok=True)
             env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_{idx+1}.log").resolve())
@@ -379,17 +651,36 @@ def _run_legacy_gemini_gate(
             f"gem_stage={stage_key} registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
             flush=True,
         )
-        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        creationflags = gemini_worker_subprocess_creationflags()
         procs.append((idx, subprocess.Popen(cmd, env=env, creationflags=creationflags)))
 
     if not procs:
         reasons = "; ".join([f"worker {i+1}: {msg}" for i, msg in skipped_workers]) or "no valid workers"
         return False, f"legacy Gemini gate failed: no active workers. {reasons}"
 
+    progress_state: dict[str, Any] = {}
+    poll_iv = 0.75
+    while any(proc.poll() is None for _, proc in procs):
+        maybe_print_gemini_queue_progress(
+            stage_key=stage_key,
+            gemini_stories_root=gemini_stories_root,
+            pending=None,
+            expected_total=effective_pending,
+            progress_state=progress_state,
+        )
+        time.sleep(poll_iv)
+    maybe_print_gemini_queue_progress(
+        stage_key=stage_key,
+        gemini_stories_root=gemini_stories_root,
+        pending=None,
+        expected_total=effective_pending,
+        progress_state=progress_state,
+    )
+
     failed: list[int] = []
     succeeded: list[int] = []
     for idx, proc in procs:
-        code = proc.wait()
+        code = int(proc.returncode or 0)
         if code != 0:
             failed.append(idx)
         else:
@@ -454,7 +745,41 @@ def _looks_like_selection_output(text: str) -> bool:
 
 
 def _slug_from_source(src: Path) -> str:
-    return src.stem
+    # Windows-safe basename for folders/files created from story title.
+    # Prevents crashes on names ending with dot/space and reserved characters.
+    base = src.stem
+    base = re.sub(r'[<>:"/\\|?*]+', "_", base)
+    base = re.sub(r"\s+", " ", base).strip()
+    base = base.rstrip(" .")
+    if not base:
+        base = "story"
+    reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
+    }
+    if base.upper() in reserved:
+        base = f"{base}_story"
+    return base
 
 
 def _collect_existing_story_dirs(runs_root: Path) -> dict[str, Path]:
@@ -776,7 +1101,11 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     )
 
     branch = "youtube" if str(options.run_branch).strip().lower() == "youtube" else "site"
-    runs_root = config.root_dir / "runs" / branch / options.story_id
+    if options.launch_dir is not None:
+        launch_base = options.launch_dir.resolve()
+        runs_root = launch_legacy_runs_root(launch_base, branch, options.story_id)
+    else:
+        runs_root = config.root_dir / "runs" / branch / options.story_id
     if runs_root.exists() and not options.resume:
         shutil.rmtree(runs_root, ignore_errors=True)
     runs_stories_root = runs_root / "stories"
@@ -793,6 +1122,10 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     runs_policy_refusal_root.mkdir(parents=True, exist_ok=True)
     runs_manual_root.mkdir(parents=True, exist_ok=True)
     runs_logs_root.mkdir(parents=True, exist_ok=True)
+    if options.launch_dir is not None:
+        output_dir = launch_legacy_output_root(options.launch_dir.resolve(), branch=branch)
+    else:
+        output_dir = config.root_dir / "output" / ("youtube" if branch == "youtube" else "site")
     run_root = runs_root / "_phase_a"
     if run_root.exists() and not options.resume:
         shutil.rmtree(run_root, ignore_errors=True)
@@ -800,9 +1133,14 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     run_log = runs_root / "run.log"
     _append_run_log(run_log, f"phase_a started run_id={options.story_id}")
     print(f"[PHASE A] started: story_id={options.story_id}", flush=True)
+    if options.launch_dir is not None:
+        print(f"[PHASE A] launch_dir (legacy under 10_Временные_файлы): {options.launch_dir.resolve()}", flush=True)
     print(f"[PHASE A] phase_a artifacts dir: {run_root}", flush=True)
     print(
         f"[PHASE A] gemini workers requested={max(1, min(5, int(options.gemini_workers)))} "
+        f"profiles_total={max(1, min(5, int(options.gemini_profiles_total)))} "
+        f"target_active={max(1, min(5, int(options.gemini_target_active_workers)))} "
+        f"supervised={'on' if options.gemini_supervised_workers else 'off'} "
         f"selection_stage={options.gemini_stage_key} info_stage={options.gemini_info_stage_key} "
         f"max_stories={max(0, int(options.max_stories)) or 'all'} "
         f"resume={'on' if options.resume else 'off'}",
@@ -855,6 +1193,7 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             execute=False,
             words_per_minute=options.words_per_minute,
             min_minutes=options.min_minutes,
+            min_words=options.min_words,
             extensions=options.extensions,
             artifacts_dir=run_root,
             root_txt_intake_only=True,
@@ -883,10 +1222,17 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
         src = moved.get("source_path")
         if not src:
             continue
+        reject_reason = str(
+            moved.get("reason")
+            or (
+                f"word_count={moved.get('word_count', '?')} "
+                f"< min_words={moved.get('min_words', options.min_words)}"
+            )
+        )
         if options.execute:
-            state_map[src] = {"state": "short_rejected", "reason": "< threshold, moved to short"}
+            state_map[src] = {"state": "short_rejected", "reason": reject_reason}
         else:
-            state_map[src] = {"state": "short_rejected", "reason": "< threshold, would move to short"}
+            state_map[src] = {"state": "short_rejected", "reason": reject_reason}
     for src, meta in state_map.items():
         ws = workspaces.get(src)
         if not ws:
@@ -953,8 +1299,62 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     gemini_mapping: list[dict[str, str]] = []
     gemini_root = run_root / "gemini_input" / "stories"
     gemini_msg = "selection reused from existing artifacts"
+    gemini_input_stories = run_root / "gemini_input" / "stories"
+    skipped_done_info = 0
+    if options.resume:
+        from orchestrator.phase_a_ops import print_phase_a_selection_resume_preview
+
+        print_phase_a_selection_resume_preview(
+            run_id=options.story_id,
+            branch=branch,
+            run_root=run_root,
+            target_active_workers=max(1, min(5, int(options.gemini_target_active_workers))),
+            stories_dir=stories_dir,
+            extensions=options.extensions,
+            logs_dir=config.logs_dir,
+        )
+    if pending_for_selection:
+        res_filtered: list[Path] = []
+        for src_path in pending_for_selection:
+            src = str(src_path)
+            ws = workspaces[src]
+            found_dir = _find_gemini_story_dir_for_source(gemini_input_stories, stories_dir, src_path)
+            info_p = (found_dir / "info.txt") if found_dir is not None else None
+            if found_dir is not None and info_p is not None and _is_nonempty_info_txt(info_p):
+                _sync_selection_from_gemini_info(
+                    src=src,
+                    info_path=info_p,
+                    workspace=ws,
+                    state_map=state_map,
+                    runs_rejected_by_selection_root=runs_rejected_by_selection_root,
+                    runs_policy_refusal_root=runs_policy_refusal_root,
+                    runs_manual_root=runs_manual_root,
+                    selected_pending=selected_pending,
+                    rejected_gemini=rejected_gemini,
+                    policy_refusal_gemini=policy_refusal_gemini,
+                    review_gemini=review_gemini,
+                )
+                skipped_done_info += 1
+                continue
+            res_filtered.append(src_path)
+        pending_for_selection = res_filtered
+        if skipped_done_info:
+            print(
+                f"[A3] resume: пропущено как уже готовые (непустой info.txt в gemini_input): {skipped_done_info}",
+                flush=True,
+            )
     if pending_for_selection:
         gemini_root, gemini_mapping = _build_gemini_input(pending_for_selection, stories_dir, run_root)
+        _write_json(
+            run_root / "gemini_input_queue_map.json",
+            {
+                "stage": "general_selection",
+                "items": [
+                    {"source_path": item["source_path"], "gemini_story_dir": item["gemini_story_dir"]}
+                    for item in gemini_mapping
+                ],
+            },
+        )
         ok_gemini, gemini_msg = _run_legacy_gemini_gate(
             config,
             gemini_root,
@@ -962,6 +1362,14 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             options.gemini_stage_key,
             options.gemini_workers,
             runs_logs_root,
+            events_file=config.events_file,
+            run_id=options.story_id,
+            target_active_workers=max(1, min(5, int(options.gemini_target_active_workers))),
+            pending_count=len(gemini_mapping),
+            profiles_total=max(1, min(5, int(options.gemini_profiles_total))),
+            max_restarts_per_profile=max(1, int(options.gemini_max_restarts_per_profile)),
+            profile_cooldown_seconds=float(options.gemini_profile_cooldown_seconds),
+            supervised_workers=bool(options.gemini_supervised_workers),
         )
         if not ok_gemini:
             status.append(
@@ -1015,11 +1423,13 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
         "policy_refusal_gemini": len(policy_refusal_gemini),
         "manual_review_gemini": len(review_gemini),
         "skipped_test_limit": len(skipped_by_limit),
+        "skipped_resume_nonempty_info_txt": int(skipped_done_info),
     }
     selection_manifest = {
         "stage": "selection_gate",
         "ok": True,
         "mode": "legacy_gemini_gate",
+        "resume_skipped_nonempty_info": int(skipped_done_info),
         "message": gemini_msg,
         "selected_pending_gemini": selected_pending,
         "rejected_gemini": rejected_gemini,
@@ -1089,11 +1499,10 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             "selection_gate_no_selected",
             msg,
             runs_root,
-            config.root_dir / "output" / ("youtube" if branch == "youtube" else "site"),
+            output_dir,
         )
         return {"ok": False, "message": msg}
 
-    output_dir = config.root_dir / "output" / ("youtube" if branch == "youtube" else "site")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_story_dirs: list[str] = []
     for src in selected_pending:
@@ -1308,6 +1717,14 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             options.gemini_info_stage_key,
             options.gemini_workers,
             runs_logs_root,
+            events_file=config.events_file,
+            run_id=options.story_id,
+            target_active_workers=max(1, min(5, int(options.gemini_target_active_workers))),
+            pending_count=len(info_mapping),
+            profiles_total=max(1, min(5, int(options.gemini_profiles_total))),
+            max_restarts_per_profile=max(1, int(options.gemini_max_restarts_per_profile)),
+            profile_cooldown_seconds=float(options.gemini_profile_cooldown_seconds),
+            supervised_workers=bool(options.gemini_supervised_workers),
         )
         if not ok_info:
             status.append(
