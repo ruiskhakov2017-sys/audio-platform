@@ -25,45 +25,45 @@ class TestPackParagraphChunks(unittest.TestCase):
 class TestDriveTtsClean(unittest.TestCase):
     def test_removes_ru_chapter_header(self) -> None:
         raw = "Глава 1\n\nThis is the real story text."
-        out, *_ = _clean_text_for_drive_tts(raw)
+        out, *_, _lit = _clean_text_for_drive_tts(raw)
         self.assertNotIn("Глава", out)
         self.assertIn("This is the real story text.", out)
 
     def test_removes_en_chapter_header(self) -> None:
         raw = "Chapter 1\n\nThis is the real story text."
-        out, *_ = _clean_text_for_drive_tts(raw)
+        out, *_, _lit = _clean_text_for_drive_tts(raw)
         self.assertNotIn("Chapter", out)
         self.assertIn("This is the real story text.", out)
 
     def test_removes_ru_source_line_with_url(self) -> None:
         raw = "Источник: https://example.com/forum/thread/123\n\nBody here."
-        out, *_ = _clean_text_for_drive_tts(raw)
+        out, *_, _lit = _clean_text_for_drive_tts(raw)
         self.assertNotIn("Источник", out)
         self.assertNotIn("example.com", out)
         self.assertIn("Body here.", out)
 
     def test_removes_read_more_url_line(self) -> None:
         raw = "Read more at www.example.com\n\nBody."
-        out, *_ = _clean_text_for_drive_tts(raw)
+        out, *_, _lit = _clean_text_for_drive_tts(raw)
         self.assertNotIn("example.com", out)
         self.assertIn("Body.", out)
 
     def test_keeps_chapter_in_prose(self) -> None:
         raw = "She remembered chapter 1 of her old life, but everything had changed."
-        out, *_ = _clean_text_for_drive_tts(raw)
+        out, *_, _lit = _clean_text_for_drive_tts(raw)
         self.assertIn("chapter 1", out.lower())
 
     def test_splits_long_unbroken_paragraph(self) -> None:
         raw = "x" * 3200
-        out, *_ = _clean_text_for_drive_tts(raw)
+        out, *_, _lit = _clean_text_for_drive_tts(raw)
         parts = out.split("\n\n")
         self.assertGreaterEqual(len(parts), 2)
         self.assertTrue(all(len(p) <= 1400 for p in parts))
 
     def test_idempotent_second_pass(self) -> None:
         raw = "Глава 1\n\nИсточник: https://x.test\n\nOne. Two. Three."
-        first, *_ = _clean_text_for_drive_tts(raw)
-        second, *_ = _clean_text_for_drive_tts(first)
+        first, *_, _ = _clean_text_for_drive_tts(raw)
+        second, *_, __ = _clean_text_for_drive_tts(first)
         self.assertEqual(first, second)
 
 

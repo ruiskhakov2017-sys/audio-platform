@@ -12,15 +12,45 @@ keep_tts_chunks: false
 vibevoice_enabled: false
 google_drive_texts_dir: ""
 google_drive_mp3_dir: ""
+default_voice: "af_bella"
+
+voice_selection:
+  strategy: "deterministic_pool"
+  save_selected_voice_to_story_metadata: true
+  fallback_label: "U"
+  fallback_voice: "af_bella"
+
+voice_pools:
+  F:
+    - "af_bella"
+    - "af_heart"
+    - "af_sarah"
+    - "af_bella:65,af_heart:35"
+    - "af_bella:50,af_sarah:50"
+  M:
+    - "am_michael"
+    - "am_adam"
+    - "bm_george"
+    - "bm_lewis"
+    - "am_michael:70,am_adam:30"
+  U:
+    - "af_bella"
+    - "af_heart"
+    - "af_bella:60,af_heart:40"
+    - "af_bella:50,af_sarah:50"
+    - "am_michael"
 
 google_drive_tts:
-  root_dir: ""
-  texts_dir: ""
-  mp3_dir: ""
-  scripts_dir: ""
-  cache_dir: ""
-  logs_dir: ""
-  job_dir: ""
+  root_dir: "G:/Мой диск/ContentFactory_TTS"
+  texts_dir: "G:/Мой диск/ContentFactory_TTS/texts"
+  mp3_dir: "G:/Мой диск/ContentFactory_TTS/mp3"
+  scripts_dir: "G:/Мой диск/ContentFactory_TTS/scripts"
+  cache_dir: "G:/Мой диск/ContentFactory_TTS/cache"
+  logs_dir: "G:/Мой диск/ContentFactory_TTS/logs"
+  job_dir: "G:/Мой диск/ContentFactory_TTS/job"
   wait_interval_minutes: 60
-  max_wait_hours: 24
+  # Ожидание mp3 на Drive перед import (сотни файлов / падения Colab)
+  max_wait_hours: 1000
   cleanup_after_success: true
+
+

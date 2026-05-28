@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.human_launch_layout import D10_LEGACY, D10_TEMP
 from orchestrator.events import EventLogger
 from orchestrator.length_filter import LengthFilterOptions, run_length_filter
 from orchestrator.runtime_modes import DEFAULT_MODES, load_runtime_modes
@@ -22,6 +23,8 @@ class RunOptions:
     run_profile: str
     stories_dir: Path | None = None
     allow_real_stages: list[str] | None = None
+    # Корень Запуски/<name>/: output/site через 10_Временные_файлы/legacy/...
+    launch_dir: Path | None = None
 
 
 class Runner:
@@ -90,16 +93,34 @@ class Runner:
             )
         return f"TTS engine {engine} выбран, но адаптер пока не подключён"
 
-    def run(self, opts: RunOptions) -> str:
+    def run(self, opts: RunOptions) -> tuple[str, bool]:
+        """
+        Возвращает (run_id, pipeline_ok).
+        pipeline_ok=False если length_filter или любой wrapper-этап завершился с failed.
+        """
         run_id = uuid.uuid4().hex
         print(
             f"[RUN] started: pipeline={opts.pipeline} story_id={opts.story_id} run_id={run_id}",
             flush=True,
         )
+        artifact_root: Path | None = None
+        if opts.launch_dir is not None:
+            artifact_root = (opts.launch_dir.resolve() / D10_TEMP / D10_LEGACY).resolve()
+            from orchestrator.human_launch_path_scope import validate_isolated_artifact_root
+
+            err = validate_isolated_artifact_root(
+                launch_dir=opts.launch_dir,
+                content_factory_root=self.config.root_dir,
+                artifact_root=artifact_root,
+            )
+            if err:
+                print(err, flush=True)
+                return run_id, False
         wrappers = build_wrappers_for_pipeline(
             opts.pipeline,
             self.config.root_dir,
             self.config.legacy_entrypoints,
+            artifact_root=artifact_root,
         )
         manifest: dict[str, Any] = {
             "run_id": run_id,
@@ -122,6 +143,7 @@ class Runner:
                     execute=opts.execute and self._is_stage_real_allowed("length_filter", opts),
                     words_per_minute=self.config.pre_filter_words_per_minute,
                     min_minutes=self.config.pre_filter_min_minutes,
+                    min_words=self.config.pre_filter_min_words,
                     extensions=self.config.pre_filter_extensions,
                 ),
                 pipeline=opts.pipeline,
@@ -149,7 +171,8 @@ class Runner:
                     json.dumps(manifest, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
-                return run_id
+                print("[RUN] pipeline failed at length_filter", flush=True)
+                return run_id, False
         for w in wrappers:
             stage = w.contract.stage
             allow_real = self._is_stage_real_allowed(stage, opts)
@@ -205,6 +228,7 @@ class Runner:
                 pipeline=opts.pipeline,
                 execute=opts.execute,
                 allow_real=allow_real,
+                stories_dir=opts.stories_dir,
             )
             state = result.state
             self.status.append(
@@ -237,6 +261,7 @@ class Runner:
             if not result.ok:
                 print(f"[RUN] stopped after stage failure: {stage}", flush=True)
                 break
+        pipeline_ok = not any(str(s.get("state")) == "failed" for s in manifest["stages"])
         reports_dir = self.config.reports_dir
         reports_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = reports_dir / f"run_manifest_{run_id}.json"
@@ -261,5 +286,8 @@ class Runner:
             json.dumps(v1_report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(f"[RUN] finished: run_id={run_id}", flush=True)
-        return run_id
+        if pipeline_ok:
+            print(f"[RUN] finished: run_id={run_id}", flush=True)
+        else:
+            print(f"[RUN] finished with failures: run_id={run_id}", flush=True)
+        return run_id, pipeline_ok

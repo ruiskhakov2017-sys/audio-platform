@@ -23,6 +23,7 @@ class LengthFilterOptions:
     execute: bool
     words_per_minute: int
     min_minutes: float
+    min_words: int
     extensions: list[str]
     # When set, CSV/JSON artifacts are written here instead of global .orchestrator/reports.
     artifacts_dir: Path | None = None
@@ -177,7 +178,7 @@ def run_length_filter(
             char_count = len(text)
             word_count = len(WORD_RE.findall(text))
             estimated_minutes = round(word_count / options.words_per_minute, 2)
-            is_short = estimated_minutes < options.min_minutes
+            is_short = word_count < options.min_words
 
             result = "kept"
             if is_short:
@@ -187,6 +188,9 @@ def run_length_filter(
                     {
                         "source_path": str(src),
                         "target_path": str(target),
+                        "reason": f"too_short_under_{options.min_words}_words",
+                        "word_count": str(word_count),
+                        "min_words": str(options.min_words),
                     }
                 )
                 if options.execute:
@@ -240,8 +244,11 @@ def run_length_filter(
 
     manifest = {
         "formula": "estimated_minutes = word_count / words_per_minute",
+        "decision_basis": "word_count",
+        "decision_formula": "is_short = word_count < min_words",
         "words_per_minute": options.words_per_minute,
         "threshold_minutes": options.min_minutes,
+        "threshold_words": options.min_words,
         "execute": options.execute,
         "stories_dir": str(stories_dir),
         "short_dir": str(short_dir),
@@ -257,6 +264,7 @@ def run_length_filter(
 
     summary = (
         f"formula=word_count/{options.words_per_minute}; threshold={options.min_minutes}m; "
+        f"decision=word_count<{options.min_words}; "
         f"total={len(files)} kept={kept} moved={moved} errors={errors}; "
         f"report={report_path}"
     )

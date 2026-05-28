@@ -1,34 +1,59 @@
 from __future__ import annotations
 
-import csv
-import io
 import json
 import random
-import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import requests
 
-TECHNICAL_PROMPT = (
-    "A photorealistic raw full-figure photograph. Natural, unposed lighting "
-    "showing realistic skin texture. Shot on 35mm film, slight grain, high detail, 8k."
+from orchestrator.site_visual_validate import (
+    TECHNICAL_PROMPT,
+    StoryVisualRecord,
+    run_validate_site_info_visuals,
 )
-
-VISUAL_RE = re.compile(r"^\s*(?:визуал|визуальный\s+промпт)\s*:\s*(.+)\s*$", re.IGNORECASE)
-TITLE_RE = re.compile(r"^\s*(?:заголовок|title)\s*:\s*(.+)\s*$", re.IGNORECASE)
 
 
 @dataclass
 class VisualStory:
+    """Thin adapter over StoryVisualRecord for ComfyUI auto stage."""
+
     canonical: str
     story_dir: Path
     info_path: Path
     image_path: Path
-    visual_prompt: str
+    visual_prompt_full: str
+    visual_prompt_preview: str
+    visual_prompt_status: str
+    failure_reason: str
+    extraction_source: str
     final_prompt: str
+
+    @property
+    def visual_prompt(self) -> str:
+        return self.visual_prompt_full
+
+    @property
+    def is_valid_for_generation(self) -> bool:
+        return self.visual_prompt_status == "ok" and bool(self.visual_prompt_full.strip())
+
+    @classmethod
+    def from_record(cls, record: StoryVisualRecord) -> VisualStory:
+        out_dir = record.output_story_dir
+        return cls(
+            canonical=record.canonical_basename,
+            story_dir=out_dir if out_dir.is_dir() else record.story_workspace_path,
+            info_path=(out_dir / "info.txt") if out_dir.is_dir() else record.story_workspace_path / "info.txt",
+            image_path=(out_dir / f"{record.canonical_basename}.jpg") if out_dir.is_dir() else record.story_workspace_path / f"{record.canonical_basename}.jpg",
+            visual_prompt_full=record.visual_prompt_full,
+            visual_prompt_preview=record.visual_prompt_preview,
+            visual_prompt_status=record.visual_prompt_status,
+            failure_reason=record.failure_reason,
+            extraction_source=record.extraction_source,
+            final_prompt=record.final_prompt,
+        )
 
 
 @dataclass
@@ -39,89 +64,45 @@ class VisualRunResult:
     failed_count: int
     csv_path: Path
     xlsx_path: Path | None
-    errors: list[str]
+    invalid_csv_path: Path | None = None
+    build_report_path: Path | None = None
+    valid_row_count: int = 0
+    invalid_row_count: int = 0
+    errors: list[str] = field(default_factory=list)
 
 
-def _read_info_text(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8", errors="ignore")
+def collect_visual_rows(
+    output_dir: Path,
+    *,
+    runs_site_stories_dir: Path | None = None,
+    export_dir: Path | None = None,
+) -> list[VisualStory]:
+    """Legacy name: delegates to validate_site_info_visuals collector."""
+    runs_dir = runs_site_stories_dir or (output_dir.parent.parent / "runs" / "site")
+    # Prefer explicit stories dir when provided
+    if runs_site_stories_dir is None:
+        runs_site_stories_dir = output_dir.parent / "runs" / "site"
+        for candidate in output_dir.parent.parent.glob("runs/site/*-a/stories"):
+            if candidate.is_dir():
+                runs_site_stories_dir = candidate
+                break
+
+    from orchestrator.site_visual_validate import collect_story_visual_records
+
+    records = collect_story_visual_records(
+        runs_stories_dir=runs_site_stories_dir,
+        output_site_dir=output_dir,
+        export_dir=export_dir,
+    )
+    return [VisualStory.from_record(r) for r in records if r.is_valid]
 
 
-def _extract_visual_prompt(info_text: str, fallback_title: str) -> str:
-    if not info_text.strip():
-        return fallback_title
-    for line in info_text.splitlines():
-        match = VISUAL_RE.match(line.strip())
-        if match:
-            value = match.group(1).strip()
-            if value:
-                return value
-    for line in info_text.splitlines():
-        match = TITLE_RE.match(line.strip())
-        if match:
-            value = match.group(1).strip()
-            if value:
-                return value
-    return fallback_title
+def write_visual_exports(rows: list[VisualStory], export_dir: Path) -> tuple[Path, Path | None, Path, Path, dict[str, Any]]:
+    """Deprecated: use run_validate_site_info_visuals. Kept for tests importing write_visual_exports."""
+    from orchestrator.site_visual_validate import collect_story_visual_records, write_visual_prompt_tables
 
-
-def collect_visual_rows(output_dir: Path) -> list[VisualStory]:
-    stories: list[VisualStory] = []
-    if not output_dir.exists():
-        return stories
-    for story_dir in sorted([p for p in output_dir.iterdir() if p.is_dir()], key=lambda x: x.name.lower()):
-        canonical = story_dir.name
-        info_path = story_dir / "info.txt"
-        info_text = _read_info_text(info_path)
-        visual_prompt = _extract_visual_prompt(info_text, fallback_title=canonical.replace("_", " "))
-        final_prompt = f"{TECHNICAL_PROMPT}; {visual_prompt}" if visual_prompt else TECHNICAL_PROMPT
-        stories.append(
-            VisualStory(
-                canonical=canonical,
-                story_dir=story_dir,
-                info_path=info_path,
-                image_path=story_dir / f"{canonical}.jpg",
-                visual_prompt=visual_prompt,
-                final_prompt=final_prompt,
-            )
-        )
-    return stories
-
-
-def write_visual_exports(rows: list[VisualStory], export_dir: Path) -> tuple[Path, Path | None]:
-    export_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = export_dir / "visual_prompts.csv"
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f, delimiter=";")
-        writer.writerow(["canonical_basename", "story_dir", "technical_prompt", "visual_prompt", "final_prompt"])
-        for row in rows:
-            writer.writerow(
-                [
-                    row.canonical,
-                    str(row.story_dir),
-                    TECHNICAL_PROMPT,
-                    row.visual_prompt,
-                    row.final_prompt,
-                ]
-            )
-
-    xlsx_path: Path | None = None
-    try:
-        from openpyxl import Workbook  # type: ignore
-
-        xlsx_path = export_dir / "visual_prompts.xlsx"
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "visual_prompts"
-        ws.append(["canonical_basename", "story_dir", "technical_prompt", "visual_prompt", "final_prompt"])
-        for row in rows:
-            ws.append([row.canonical, str(row.story_dir), TECHNICAL_PROMPT, row.visual_prompt, row.final_prompt])
-        wb.save(xlsx_path)
-    except Exception:
-        xlsx_path = None
-
-    return csv_path, xlsx_path
+    # Re-build records from valid VisualStory only is insufficient; tests pass full collector path
+    raise RuntimeError("write_visual_exports: use run_validate_site_info_visuals instead")
 
 
 def _normalize_api_url(pod_url: str) -> str:
@@ -208,17 +189,47 @@ def run_visual_stage(
     workflow_path: Path,
     text_node: str = "93",
     seed_node: str = "31",
+    *,
+    runs_site_stories_dir: Path | None = None,
 ) -> VisualRunResult:
-    rows = collect_visual_rows(output_dir)
-    csv_path, xlsx_path = write_visual_exports(rows, export_dir)
+    validate_result = run_validate_site_info_visuals(
+        runs_stories_dir=runs_site_stories_dir or (export_dir.parent / "stories"),
+        output_site_dir=output_dir,
+        export_dir=export_dir,
+    )
+    if not validate_result.ok:
+        return VisualRunResult(
+            ok=False,
+            mode=mode,
+            generated_count=0,
+            failed_count=0,
+            csv_path=validate_result.valid_csv_path,
+            xlsx_path=validate_result.xlsx_path,
+            invalid_csv_path=validate_result.invalid_csv_path,
+            build_report_path=validate_result.report_path,
+            errors=[validate_result.message],
+        )
+
+    report = validate_result.report
+    valid_rows = [VisualStory.from_record(r) for r in validate_result.records if r.is_valid]
+    invalid_n = int(report.get("invalid_prompts", report.get("invalid_rows", 0)))
+
+    from orchestrator.site_visual_validate import print_visual_gate_summary
+
+    print_visual_gate_summary(export_dir)
+
     if mode == "manual":
         return VisualRunResult(
             ok=True,
             mode=mode,
             generated_count=0,
             failed_count=0,
-            csv_path=csv_path,
-            xlsx_path=xlsx_path,
+            csv_path=validate_result.valid_csv_path,
+            xlsx_path=validate_result.xlsx_path,
+            invalid_csv_path=validate_result.invalid_csv_path,
+            build_report_path=validate_result.report_path,
+            valid_row_count=int(report.get("valid_prompts", 0)),
+            invalid_row_count=invalid_n,
             errors=[],
         )
 
@@ -228,8 +239,12 @@ def run_visual_stage(
             mode=mode,
             generated_count=0,
             failed_count=0,
-            csv_path=csv_path,
-            xlsx_path=xlsx_path,
+            csv_path=validate_result.valid_csv_path,
+            xlsx_path=validate_result.xlsx_path,
+            invalid_csv_path=validate_result.invalid_csv_path,
+            build_report_path=validate_result.report_path,
+            valid_row_count=int(report.get("valid_prompts", 0)),
+            invalid_row_count=invalid_n,
             errors=[f"Unsupported visual mode: {mode}"],
         )
 
@@ -239,9 +254,20 @@ def run_visual_stage(
             mode=mode,
             generated_count=0,
             failed_count=0,
-            csv_path=csv_path,
-            xlsx_path=xlsx_path,
+            csv_path=validate_result.valid_csv_path,
+            xlsx_path=validate_result.xlsx_path,
+            invalid_csv_path=validate_result.invalid_csv_path,
+            build_report_path=validate_result.report_path,
+            valid_row_count=int(report.get("valid_prompts", 0)),
+            invalid_row_count=invalid_n,
             errors=["AUTO visual mode requires pod URL (--visual-pod-url)."],
+        )
+
+    if invalid_n > 0:
+        print(
+            f"[visual-gate] auto ComfyUI: generating for {len(valid_rows)} valid stories only; "
+            f"{invalid_n} invalid excluded (see {validate_result.invalid_csv_path})",
+            flush=True,
         )
 
     try:
@@ -253,17 +279,25 @@ def run_visual_stage(
             mode=mode,
             generated_count=0,
             failed_count=0,
-            csv_path=csv_path,
-            xlsx_path=xlsx_path,
+            csv_path=validate_result.valid_csv_path,
+            xlsx_path=validate_result.xlsx_path,
+            invalid_csv_path=validate_result.invalid_csv_path,
+            build_report_path=validate_result.report_path,
+            valid_row_count=int(report.get("valid_prompts", 0)),
+            invalid_row_count=invalid_n,
             errors=[str(exc)],
         )
 
     ok_count = 0
     fail_count = 0
     errors: list[str] = []
-    for row in rows:
+    for row in valid_rows:
         if row.image_path.exists():
             ok_count += 1
+            continue
+        if not row.final_prompt.strip():
+            fail_count += 1
+            errors.append(f"{row.canonical}: empty final_prompt")
             continue
         try:
             payload = _render_workflow_prompt(workflow, row.final_prompt, text_node=text_node, seed_node=seed_node)
@@ -283,7 +317,11 @@ def run_visual_stage(
         mode=mode,
         generated_count=ok_count,
         failed_count=fail_count,
-        csv_path=csv_path,
-        xlsx_path=xlsx_path,
+        csv_path=validate_result.valid_csv_path,
+        xlsx_path=validate_result.xlsx_path,
+        invalid_csv_path=validate_result.invalid_csv_path,
+        build_report_path=validate_result.report_path,
+        valid_row_count=int(report.get("valid_prompts", 0)),
+        invalid_row_count=invalid_n,
         errors=errors,
     )

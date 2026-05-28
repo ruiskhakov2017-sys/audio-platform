@@ -42,12 +42,24 @@ def get_stage_sequence(pipeline: str) -> List[str]:
     return [*COMMON_STAGES]
 
 
-def build_wrapper(stage: str, root: Path, legacy_entrypoints: Dict[str, str]) -> BaseWrapper:
+def build_wrapper(
+    stage: str,
+    root: Path,
+    legacy_entrypoints: Dict[str, str],
+    artifact_root: Path | None = None,
+) -> BaseWrapper:
     klass = WRAPPER_REGISTRY[stage]
     entry_rel = legacy_entrypoints.get(stage, klass.contract.entrypoint)
     entry = root / entry_rel if entry_rel else None
+    ar = artifact_root if artifact_root is not None else root
     if klass is SiteTtsStageWrapper:
-        return SiteTtsStageWrapper(entry, root_dir=root)
+        return SiteTtsStageWrapper(entry, root_dir=root, artifact_root=ar)
+    if klass is GeminiAutoWrapper:
+        return GeminiAutoWrapper(entry, root_dir=root, artifact_root=ar)
+    if klass is AutopublisherWrapper:
+        return AutopublisherWrapper(entry, root_dir=root, artifact_root=ar)
+    if klass is ContentCombinerWrapper:
+        return ContentCombinerWrapper(entry, root_dir=root, artifact_root=ar)
     return klass(entry)
 
 
@@ -55,5 +67,6 @@ def build_wrappers_for_pipeline(
     pipeline: str,
     root: Path,
     legacy_entrypoints: Dict[str, str],
+    artifact_root: Path | None = None,
 ) -> List[BaseWrapper]:
-    return [build_wrapper(s, root, legacy_entrypoints) for s in get_stage_sequence(pipeline)]
+    return [build_wrapper(s, root, legacy_entrypoints, artifact_root=artifact_root) for s in get_stage_sequence(pipeline)]

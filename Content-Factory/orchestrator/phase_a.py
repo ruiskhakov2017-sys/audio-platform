@@ -24,6 +24,7 @@ from orchestrator.phase_a_gemini_supervisor import (
     maybe_print_gemini_queue_progress,
     run_supervised_gemini_workers,
 )
+from orchestrator.site_info_fields import extract_visual_prompt_full, make_visual_prompt_preview, parse_info_fields
 from orchestrator.visual_stage import run_visual_stage
 
 
@@ -412,6 +413,7 @@ def _run_legacy_gemini_gate(
     max_restarts_per_profile: int = 3,
     profile_cooldown_seconds: float = 900.0,
     supervised_workers: bool = True,
+    profile_index_override: int | None = None,
 ) -> tuple[bool, str]:
     def _build_error_bundle(failed_workers: list[int]) -> str:
         if logs_dir is None:
@@ -538,17 +540,19 @@ def _run_legacy_gemini_gate(
         if logs_dir is not None:
             logs_dir.mkdir(parents=True, exist_ok=True)
             env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_1.log").resolve())
-        user_data_dir = gemini_module_dir / "user_data_0"
+        single_idx = int(profile_index_override) if profile_index_override is not None else 0
+        single_idx = max(0, min(int(profiles_cap) - 1, single_idx))
+        user_data_dir = gemini_module_dir / f"user_data_{single_idx}"
         env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
-        ok_url, selected_url, selected_email, err = _select_url(0)
+        ok_url, selected_url, selected_email, err = _select_url(single_idx)
         if not ok_url:
             return False, err
         env.pop("GEMINI_URL", None)
         env["GEMINI_URL"] = selected_url
         env["PARALLEL_WORKERS"] = "1"
-        env["WORKER_INDEX"] = "0"
+        env["WORKER_INDEX"] = str(single_idx)
         print(
-            f"[A3] worker 1/{workers} gem_stage={stage_key} "
+            f"[A3] worker 1/{workers} gem_stage={stage_key} profile=user_data_{single_idx} "
             f"registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
             flush=True,
         )
@@ -951,21 +955,32 @@ def _parse_selection_result(story_id: str, raw_text: str) -> dict[str, Any]:
 
 
 def _parse_site_info_result(story_id: str, canonical_basename: str, raw_text: str) -> dict[str, Any]:
-    title = canonical_basename.replace("_", " ").strip() or canonical_basename
-    description = (raw_text or "").strip()
-    if len(description) > 1200:
-        description = description[:1200].rstrip() + "..."
+    fields = parse_info_fields(raw_text or "")
+    title = (fields.get("title") or canonical_basename.replace("_", " ")).strip() or canonical_basename
+    alt_title = (fields.get("alternative_title") or title).strip() or title
+    description = (fields.get("description") or "").strip() or "Описание не получено"
+    description_preview = description
+    if len(description_preview) > 1200:
+        description_preview = description_preview[:1200].rstrip() + "..."
+    visual_prompt = extract_visual_prompt_full(raw_text or "")
+    visual_prompt_preview = make_visual_prompt_preview(visual_prompt) if visual_prompt else ""
+    genres_raw = fields.get("genres", "")
+    tags_raw = fields.get("tags", "")
+    genres = [g.strip() for g in genres_raw.split(",") if g.strip()] if genres_raw else []
+    tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
     voice_letter, _, _ = resolve_voice_letter_from_info_content(raw_text or "")
     return {
         "story_id": story_id,
         "title": title,
-        "alternative_title": title,
-        "description": description or "Описание не получено",
-        "genres": [],
-        "tags": [],
+        "alternative_title": alt_title,
+        "description": description,
+        "description_preview": description_preview,
+        "genres": genres,
+        "tags": tags,
         "voice_type": voice_letter,
-        "main_character": "",
-        "visual_prompt": "",
+        "main_character": (fields.get("main_character") or "").strip(),
+        "visual_prompt": visual_prompt,
+        "visual_prompt_preview": visual_prompt_preview,
         "source": "gemini_site_info",
         "created_at": _now_iso(),
     }
@@ -982,7 +997,7 @@ def _render_legacy_info(site_info: dict[str, Any]) -> str:
         f"Теги: {', '.join(str(x) for x in tags)}\n"
         f"Тип голоса: {site_info.get('voice_type', 'U')}\n"
         f"Главный персонаж: {site_info.get('main_character', '')}\n"
-        f"Визуальный промпт: {site_info.get('visual_prompt', '')}\n"
+        f"Визуальный промпт: {site_info.get('visual_prompt') or site_info.get('visual_prompt_full', '')}\n"
     )
 
 
@@ -1557,6 +1572,74 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     # A4 CleanPassedOnly via legacy cleaner
     print("[A4] clean passed stories started", flush=True)
     selected_files = [Path(p) for p in selected_pending]
+
+    # A4.pre — инвалидируем мусорный site_info (битый info.txt / отказ / нет `Визуал:` / title fallback).
+    # Источник правды: validate_story_visual_from_raw (см. orchestrator/site_info_fields.py).
+    # Это гарантирует, что наличие info.txt больше не считается «готовой историей».
+    if options.resume:
+        try:
+            from orchestrator.site_info_fields import is_site_info_workspace_valid
+
+            invalidated = 0
+            invalidated_reasons: dict[str, int] = {}
+            for src in selected_pending:
+                ws = workspaces.get(src)
+                if not ws:
+                    continue
+                raw_p = Path(ws.get("site_info_raw_path") or "")
+                json_p = Path(ws.get("site_info_path") or "")
+                info_p = Path(ws.get("legacy_info_path") or "")
+                canonical = str(ws.get("canonical_basename") or Path(src).stem)
+                has_any = raw_p.is_file() or json_p.is_file() or info_p.is_file()
+                if not has_any:
+                    continue
+                is_valid, reason, _ = is_site_info_workspace_valid(
+                    canonical_basename=canonical,
+                    raw_path=raw_p if raw_p.is_file() else None,
+                    json_path=json_p if json_p.is_file() else None,
+                    info_path=info_p if info_p.is_file() else None,
+                )
+                if is_valid:
+                    continue
+                # Удаляем мусор, чтобы стандартная resume-логика отправила историю в Gemini.
+                for p in (info_p, json_p, raw_p):
+                    try:
+                        if p.is_file():
+                            p.unlink()
+                    except OSError:
+                        pass
+                # И info.txt в output/site/<canonical> тоже — он битый.
+                out_story_dir = ws.get("output_story_dir")
+                if isinstance(out_story_dir, Path):
+                    out_info = out_story_dir / "info.txt"
+                    try:
+                        if out_info.is_file():
+                            out_info.unlink()
+                    except OSError:
+                        pass
+                invalidated += 1
+                invalidated_reasons[reason] = invalidated_reasons.get(reason, 0) + 1
+                print(
+                    f"[A4.pre] invalidated stale site_info: {canonical} reason={reason}",
+                    flush=True,
+                )
+            if invalidated:
+                print(
+                    f"[A4.pre] stale site_info invalidated: {invalidated} "
+                    f"reasons={invalidated_reasons}",
+                    flush=True,
+                )
+            _write_json(
+                run_root / "site_info_invalidation_pre.json",
+                {
+                    "stage": "site_info_invalidation_pre",
+                    "invalidated": invalidated,
+                    "reasons": invalidated_reasons,
+                },
+            )
+        except Exception as exc:
+            print(f"[A4.pre] WARN: invalidation pass failed: {exc}", flush=True)
+
     reused_ready_sources: list[str] = []
     pending_clean_files: list[Path] = []
     for src in selected_pending:
@@ -1806,6 +1889,109 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     _append_run_log(run_log, f"site_info done info_written={info_written}")
     print(f"[A4.1] Gemini info builder done: info_written={info_written}", flush=True)
 
+    visual_export_dir = runs_root / "visual"
+    from orchestrator.site_visual_validate import (
+        run_retry_invalid_site_info_visuals,
+        run_validate_site_info_visuals,
+    )
+
+    validate_visual = run_validate_site_info_visuals(
+        runs_stories_dir=runs_root / "stories",
+        output_site_dir=output_dir,
+        export_dir=visual_export_dir,
+        runs_root=runs_root,
+        summary_extra={"stage": "validate_after_site_info"},
+    )
+    _write_json(
+        run_root / "validate_site_info_visuals.json",
+        {
+            "stage": "validate_site_info_visuals",
+            "ok": validate_visual.ok,
+            "message": validate_visual.message,
+            "report": validate_visual.report,
+            "human_dir": str(validate_visual.human_dir) if validate_visual.human_dir else "",
+            "human_xlsx_path": str(validate_visual.human_xlsx_path) if validate_visual.human_xlsx_path else "",
+            "human_sync_error": validate_visual.human_sync_error,
+        },
+    )
+    if not validate_visual.ok:
+        status.append(
+            story_id=options.story_id,
+            pipeline=pipeline,
+            stage=stage,
+            state="failed",
+            message=validate_visual.message,
+        )
+        return {"ok": False, "message": validate_visual.message}
+
+    # A4.1.6 Auto-retry invalid через site_info_builder.
+    # Управляется env-флагом CF_AUTO_RETRY_VISUALS (по умолчанию ON для полного site-цикла).
+    auto_retry_env = (os.getenv("CF_AUTO_RETRY_VISUALS") or "").strip()
+    do_auto_retry = auto_retry_env not in {"0", "false", "no", "off"}
+    invalid_before = int(validate_visual.report.get("invalid_prompts", 0) or 0)
+    retryable_reasons = {
+        "no_visual_prompt_found",
+        "gemini_refusal_or_policy_response",
+        "prompt_too_short",
+        "truncated_prompt_blocked",
+        "title_fallback_blocked",
+        "missing_raw",
+    }
+    has_retryable = any(
+        int(validate_visual.report.get(k, 0) or 0) > 0 for k in retryable_reasons
+    )
+    if do_auto_retry and invalid_before > 0 and has_retryable:
+        print(
+            f"[A4.1.6] auto-retry invalid visuals: invalid_before={invalid_before} "
+            f"(disable via CF_AUTO_RETRY_VISUALS=0)",
+            flush=True,
+        )
+        retry_result = run_retry_invalid_site_info_visuals(
+            config=config,
+            runs_root=runs_root,
+            output_site_dir=output_dir,
+            export_dir=visual_export_dir,
+            gemini_registry_path=options.gemini_registry_path,
+            gemini_info_stage_key=options.gemini_info_stage_key,
+            gemini_workers=1,
+            max_retry_attempts=max(1, int(os.getenv("CF_AUTO_RETRY_VISUALS_MAX_ATTEMPTS", "2") or "2")),
+            execute=True,
+            gemini_target_active_workers=max(1, min(5, int(options.gemini_target_active_workers))),
+            gemini_profiles_total=max(1, min(5, int(options.gemini_profiles_total))),
+            gemini_max_restarts_per_profile=max(1, int(options.gemini_max_restarts_per_profile)),
+            gemini_profile_cooldown_seconds=float(options.gemini_profile_cooldown_seconds),
+            gemini_supervised_workers=False,
+            profile_index=None,
+            auto_profile=True,
+        )
+        _write_json(
+            run_root / "auto_retry_site_info_visuals.json",
+            {
+                "stage": "auto_retry_site_info_visuals",
+                "ok": retry_result.ok,
+                "status": retry_result.status,
+                "exit_reason": retry_result.exit_reason,
+                "retried": retry_result.retried,
+                "retry_candidates": retry_result.retry_candidates,
+                "retry_succeeded": retry_result.retry_succeeded,
+                "retry_failed": retry_result.retry_failed,
+                "retry_skipped": retry_result.retry_skipped,
+                "selected_gemini_profile": retry_result.selected_gemini_profile,
+                "preflight_status": retry_result.preflight_status,
+                "browser_launch_error": retry_result.browser_launch_error[:1000] if retry_result.browser_launch_error else "",
+                "final_valid_count": retry_result.final_valid_count,
+                "final_invalid_count": retry_result.final_invalid_count,
+                "message": retry_result.message,
+            },
+        )
+        if retry_result.validate_after is not None:
+            validate_visual = retry_result.validate_after
+        print(
+            f"[A4.1.6] auto-retry done: status={retry_result.status} "
+            f"valid={retry_result.final_valid_count} invalid={retry_result.final_invalid_count}",
+            flush=True,
+        )
+
     for src in selected_pending:
         ws = workspaces[src]
         out_story_dir = ws.get("output_story_dir")
@@ -1830,7 +2016,6 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     visual_mode = str(options.visual_mode).strip().lower() or "manual"
     if visual_mode not in {"manual", "auto"}:
         visual_mode = "manual"
-    visual_export_dir = runs_root / "visual"
     director_module_rel = config.legacy_modules.get("director_2_0", "legacy/director_2_0")
     workflow_path = (config.root_dir / director_module_rel / "FLUX 2 — Simple Text-To-Image.json").resolve()
     print(f"[A4.2] visual stage started: mode={visual_mode}", flush=True)
@@ -1840,6 +2025,7 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
         mode=visual_mode,
         pod_url=options.visual_pod_url,
         workflow_path=workflow_path,
+        runs_site_stories_dir=runs_root / "stories",
     )
     _write_json(
         run_root / "visual_manifest.json",
@@ -1851,6 +2037,10 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             "failed_count": visual_result.failed_count,
             "csv_path": str(visual_result.csv_path),
             "xlsx_path": str(visual_result.xlsx_path) if visual_result.xlsx_path else None,
+            "invalid_csv_path": str(visual_result.invalid_csv_path) if visual_result.invalid_csv_path else None,
+            "build_report_path": str(visual_result.build_report_path) if visual_result.build_report_path else None,
+            "valid_row_count": visual_result.valid_row_count,
+            "invalid_row_count": visual_result.invalid_row_count,
             "errors": visual_result.errors,
         },
     )

@@ -20,7 +20,7 @@ BACKUP_FILENAME = "clean_text.txt"
 def _is_equals_line(line: str) -> bool:
     """Строка состоит только из = и пробелов."""
     s = line.strip()
-    return len(s) >= 3 and all(c in "=\s" for c in s) and "=" in s
+    return len(s) >= 3 and all(ch == "=" or ch.isspace() for ch in s) and "=" in s
 
 
 def _is_header_meta_line(line: str) -> bool:
@@ -267,6 +267,24 @@ def remove_duplicate_chapters(text: str) -> str:
     return "\n".join(result)
 
 
+# Одиночная точка без пробела перед буквой: «слово.Слово» → «слово. Слово»
+# Не трогает: многоточие (...), числа (3.14), URL (обрабатываются отдельно)
+_PERIOD_NO_SPACE = re.compile(r"(?<!\.)\.(?!\.)(?=[А-ЯA-ZЁа-яa-zё])")
+
+
+def fix_period_spacing(text: str) -> str:
+    """Добавить пробел после одиночной точки, если буква идёт вплотную."""
+    return _PERIOD_NO_SPACE.sub(". ", text)
+
+
+SPACE_BEFORE_DOT_COMMA = re.compile(r"[ \t]+([\.,])")
+
+
+def remove_spaces_before_dot_comma(text: str) -> str:
+    """Убрать пробелы/табы перед точкой и запятой."""
+    return SPACE_BEFORE_DOT_COMMA.sub(r"\1", text)
+
+
 # Ссылки и строки с ними удалять
 BESTWEAPON_URL_PATTERN = re.compile(r"https://bestweapon\.vip/post\S*", re.IGNORECASE)
 ANY_URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
@@ -314,6 +332,8 @@ def clean_text(raw: str) -> str:
     text = remove_page_separators(text)
     text = remove_bestweapon_links(text)
     text = remove_sentences_with_urls(text)
+    text = remove_spaces_before_dot_comma(text)
+    text = fix_period_spacing(text)
     # Удаляет только найденный дубль (блок слов), не режет до конца рассказа
     text = cut_duplicate_tail_by_ngrams(text)
     text = remove_duplicate_paragraphs(text)
@@ -346,11 +366,13 @@ def _collect_story_dirs(root_dir: Path) -> list[tuple[Path, Path]]:
     return result
 
 
-def run_clean(root_dir: Path, progress_callback=None):
+def run_clean(root_dir: Path, progress_callback=None, keep_source_backup: bool = True):
     """
     Обработать структуру: root_dir → категории → папки рассказов.
-    В каждой папке рассказа: исходный .txt переименовывается в clean_text.txt,
-    очищенный текст записывается под исходным именем файла.
+    В каждой папке рассказа:
+    - если keep_source_backup=True: исходный .txt переименовывается в clean_text.txt,
+      очищенный текст записывается под исходным именем файла;
+    - если keep_source_backup=False: исходный файл перезаписывается очищенным текстом.
     progress_callback(current_index, total, current_folder_name).
     Возвращает dict: processed, skipped, errors, total.
     """
@@ -382,11 +404,15 @@ def run_clean(root_dir: Path, progress_callback=None):
         try:
             raw = src.read_text(encoding="utf-8", errors="replace")
             cleaned = clean_text(raw)
-            # Исходник → clean_text.txt, очищенный → под именем исходного файла
-            if backup_file.exists():
-                backup_file.unlink()
-            src.rename(backup_file)
-            (story_dir / original_name).write_text(cleaned, encoding="utf-8")
+            if keep_source_backup:
+                # Исходник → clean_text.txt, очищенный → под именем исходного файла
+                if backup_file.exists():
+                    backup_file.unlink()
+                src.rename(backup_file)
+                (story_dir / original_name).write_text(cleaned, encoding="utf-8")
+            else:
+                # Без бэкапа: перезаписываем исходный файл очищенным текстом
+                src.write_text(cleaned, encoding="utf-8")
             processed += 1
         except Exception as e:
             errors += 1

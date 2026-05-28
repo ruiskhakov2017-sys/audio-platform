@@ -1,5 +1,6 @@
 # Content-Factory Orchestrator Rules
 
+- **Полный site-цикл до сайта/TTS/publish** (то, что пользователь называет «полным циклом»): только `python -m orchestrator launch run-site-flow … --execute`. Команда `launch smoke-site-cycle` — урезанный прогон (staging + phase-a + sync), **не** подменяет полный цикл и не предлагать её вместо `run-site-flow`, если явно не просят smoke/диагностику.
 - Оркестратор — тонкий управляющий слой поверх legacy.
 - Wrapper через subprocess/adapter предпочтительнее копирования или переноса legacy-кода.
 - Wrapper обязан иметь контракт: входы, выходы, риск, side effects, preconditions.

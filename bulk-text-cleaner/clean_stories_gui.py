@@ -27,11 +27,16 @@ except Exception as e:
     sys.exit(1)
 
 
-def run_in_thread(root_dir: Path, result_queue: queue.Queue, progress_queue: queue.Queue):
+def run_in_thread(
+    root_dir: Path,
+    keep_source_backup: bool,
+    result_queue: queue.Queue,
+    progress_queue: queue.Queue,
+):
     def progress_cb(current, total, name):
         progress_queue.put((current, total, name))
 
-    result = run_clean(root_dir, progress_callback=progress_cb)
+    result = run_clean(root_dir, progress_callback=progress_cb, keep_source_backup=keep_source_backup)
     result_queue.put(result)
 
 
@@ -65,6 +70,14 @@ def main():
             folder_var.set(path)
 
     ttk.Button(row, text="Обзор…", command=choose_folder).pack(side=tk.LEFT)
+
+    # Сохранять исходник
+    keep_source_backup_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        f_top,
+        text="Сохранять файл с исходным текстом",
+        variable=keep_source_backup_var,
+    ).pack(anchor=tk.W, pady=(0, 6))
 
     # Старт
     btn_start = ttk.Button(f_top, text="Старт")
@@ -149,7 +162,12 @@ def main():
             except queue.Empty:
                 break
 
-        thread = threading.Thread(target=run_in_thread, args=(path, result_queue, progress_queue), daemon=True)
+        keep_source_backup = keep_source_backup_var.get()
+        thread = threading.Thread(
+            target=run_in_thread,
+            args=(path, keep_source_backup, result_queue, progress_queue),
+            daemon=True,
+        )
         thread.start()
 
         nonlocal after_id

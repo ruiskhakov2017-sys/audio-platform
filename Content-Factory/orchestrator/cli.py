@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import multiprocessing
+import os
 import sys
 from pathlib import Path
 
@@ -42,6 +44,115 @@ from orchestrator.youtube_safe_bridge import (
     run_youtube_import_safe_result,
     run_youtube_prepare_safe_bridge,
     run_youtube_run_safe_bridge,
+)
+from orchestrator.youtube_selection_bridge import (
+    YoutubeRunSelectionBridgeOptions,
+    run_youtube_run_selection_bridge,
+)
+from orchestrator.youtube_selection_batch import (
+    YoutubeSelectionBatchFromSiteOptions,
+    run_youtube_selection_batch_from_site,
+)
+from orchestrator.youtube_promo_bridge import (
+    YoutubePromoRunOptions,
+    YoutubePromoStatusOptions,
+    run_youtube_promo_run,
+    run_youtube_promo_status,
+)
+from orchestrator.youtube_language import (
+    YoutubeSafeRegenerateOptions,
+    YoutubeSafeStatusOptions,
+    run_youtube_safe_regenerate,
+    run_youtube_safe_status,
+)
+from orchestrator.youtube_safe_english_bridge import (
+    YoutubeSafeEnglishRunOptions,
+    run_youtube_safe_english_run,
+)
+from orchestrator.youtube_tts_kokoro_bridge import (
+    DEFAULT_YOUTUBE_DRIVE_ROOT,
+    YoutubeTtsKokoroColabExportOptions,
+    YoutubeTtsKokoroColabImportOptions,
+    YoutubeTtsKokoroColabVerifyOptions,
+    run_youtube_tts_kokoro_colab_import,
+    run_youtube_tts_kokoro_colab_export,
+    run_youtube_tts_kokoro_colab_verify,
+)
+from orchestrator.youtube_video_segments import (
+    YoutubeVideoPrepareSegmentsOptions,
+    YoutubeVideoRenderSegmentOptions,
+    YoutubeVideoSegmentStatusOptions,
+    run_youtube_video_prepare_segments,
+    run_youtube_video_render_segment,
+    run_youtube_video_segment_status,
+)
+from orchestrator.youtube_video_drive import (
+    YoutubeVideoAssembleFinalOptions,
+    YoutubeVideoDispatchSegmentsOptions,
+    YoutubeVideoDriveStatusOptions,
+    YoutubeVideoExportJobOptions,
+    YoutubeVideoFullDriveFlowOptions,
+    YoutubeVideoInspectSegmentOptions,
+    YoutubeVideoImportResultsOptions,
+    YoutubeVideoQueueStatusOptions,
+    YoutubeVideoCleanupPartialOptions,
+    YoutubeVideoColabBrowserProfilesOptions,
+    YoutubeVideoReclaimStaleSegmentsOptions,
+    YoutubeVideoSetupColabWorkersOptions,
+    YoutubeVideoValidateJobAssetsOptions,
+    YoutubeVideoWatchQueueOptions,
+    run_youtube_video_assemble_final,
+    run_youtube_video_cleanup_partial_checkpoints,
+    run_youtube_video_colab_browser_profiles,
+    run_youtube_video_dispatch_segments,
+    run_youtube_video_drive_status,
+    run_youtube_video_export_job,
+    run_youtube_video_full_drive_flow,
+    run_youtube_video_inspect_segment,
+    run_youtube_video_import_results,
+    run_youtube_video_queue_status,
+    run_youtube_video_reclaim_stale_segments,
+    run_youtube_video_setup_colab_workers,
+    run_youtube_video_validate_job_assets,
+    run_youtube_video_watch_queue,
+)
+from orchestrator.youtube_visuals_bridge import (
+    YoutubeCharactersBridgeOptions,
+    YoutubeCharactersExportOptions,
+    YoutubeCharactersImportOptions,
+    YoutubeDirectorPromptsBridgeOptions,
+    YoutubeDirectorPromptsExportOptions,
+    YoutubeDirectorPromptsImportOptions,
+    YoutubeFramesRunpodBridgeOptions,
+    run_youtube_characters_bridge,
+    run_youtube_characters_export,
+    run_youtube_characters_import,
+    run_youtube_director_prompts_bridge,
+    run_youtube_director_prompts_export,
+    run_youtube_director_prompts_import,
+    run_youtube_frames_runpod_bridge,
+)
+from orchestrator.youtube_visuals_runner import (
+    YoutubeVisualsRunOptions,
+    YoutubeVisualsStatusOptions,
+    run_youtube_visuals_run,
+    run_youtube_visuals_status,
+)
+from orchestrator.youtube_visual_prompts_audit import (
+    YoutubeVisualPromptsAuditOptions,
+    run_youtube_visual_prompts_audit,
+)
+from orchestrator.youtube_frames_reset import (
+    YoutubeFramesResetOptions,
+    run_youtube_frames_reset,
+)
+from orchestrator.youtube_visuals_clean import (
+    YoutubeVisualsCleanOptions,
+    run_youtube_visuals_clean,
+)
+from orchestrator.youtube_characters_anchor_audit import (
+    YoutubeCharactersAnchorAuditOptions,
+    run_youtube_characters_anchor_audit,
 )
 from orchestrator.youtube_from_site import (
     YoutubeContinueAfterSelectionOptions,
@@ -482,8 +593,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     yt_pref.add_argument("--site-run-id", required=True)
     yt_pref.add_argument("--youtube-run-id", required=True)
-    yt_pref.add_argument("--min-words", type=int, default=4500)
-    yt_pref.add_argument("--max-words", type=int, default=9000)
+    yt_pref.add_argument("--min-minutes", type=int, default=None)
+    yt_pref.add_argument("--max-minutes", type=int, default=None)
+    yt_pref.add_argument("--words-per-minute", type=int, default=None)
+    yt_pref.add_argument("--min-words", type=int, default=None, help="Override derived min_words.")
+    yt_pref.add_argument("--max-words", type=int, default=None, help="Override derived max_words.")
     yt_pref.add_argument("--force", action="store_true")
 
     yt_diag = yt_sub.add_parser(
@@ -520,8 +634,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     yt_auto_prepare.add_argument("--site-run-id", required=True)
     yt_auto_prepare.add_argument("--youtube-run-id", required=True)
-    yt_auto_prepare.add_argument("--min-words", type=int, default=4500)
-    yt_auto_prepare.add_argument("--max-words", type=int, default=9000)
+    yt_auto_prepare.add_argument("--min-minutes", type=int, default=None)
+    yt_auto_prepare.add_argument("--max-minutes", type=int, default=None)
+    yt_auto_prepare.add_argument("--words-per-minute", type=int, default=None)
+    yt_auto_prepare.add_argument("--min-words", type=int, default=None, help="Override derived min_words.")
+    yt_auto_prepare.add_argument("--max-words", type=int, default=None, help="Override derived max_words.")
     yt_auto_prepare.add_argument("--force", action="store_true")
 
     yt_auto_continue = yt_sub.add_parser(
@@ -588,6 +705,471 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="GEMINI_USER_DATA_DIR=legacy/youtube_tts/user_data (уже залогиненный профиль); STORIES_DIR остаётся изолированным.",
     )
+
+    yt_safe_status = yt_sub.add_parser(
+        "safe-status",
+        help="Diagnose English language contract for YouTube safe/promo/TTS artifacts.",
+    )
+    yt_safe_status.add_argument("--story-id", required=True, help="story_id или canonical_basename/output folder.")
+
+    yt_safe_regen = yt_sub.add_parser(
+        "safe-regenerate",
+        help="Regenerate English safe story when an English-safe legacy adapter exists (dry-run by default).",
+    )
+    yt_safe_regen.add_argument("--story-id", required=True, help="story_id или canonical_basename/output folder.")
+    yt_safe_regen.add_argument("--execute", action="store_true", help="Launch English-safe Gemini adapter and overwrite safe_story only after validation.")
+
+    yt_safe_en = yt_sub.add_parser(
+        "safe-english-run",
+        help="Run isolated English YouTube-safe rewrite adapter (dry-run by default).",
+    )
+    yt_safe_en.add_argument("--story-id", required=True, help="story_id или canonical_basename/output folder.")
+    yt_safe_en.add_argument("--execute", action="store_true", help="Launch Gemini and write English 02_safe_story/safe_story.txt.")
+    yt_safe_en.add_argument("--force", action="store_true", help="Regenerate even if English safe_story already exists.")
+    yt_safe_en.add_argument("--account-index", type=int, default=0, help="Индекс аккаунта из gemini registry для youtube_safe_text (0-based).")
+    yt_safe_en.add_argument(
+        "--gemini-registry",
+        type=Path,
+        default=Path("configs/gemini_bots_registry.example.yaml"),
+        help="YAML registry с email и youtube_safe_text URL.",
+    )
+    yt_safe_en.add_argument(
+        "--reuse-legacy-user-data",
+        action="store_true",
+        help="Use legacy/youtube_tts/user_data instead of isolated 02_safe_story/_english_adapter/user_data.",
+    )
+
+    yt_rsel = yt_sub.add_parser(
+        "run-selection-bridge",
+        help=(
+            "Single-input: тонкий facade вокруг legacy/youtube_tts/gemini_auto.py для бота youtube_selection. "
+            "Default — preflight; реальный subprocess только с --execute."
+        ),
+    )
+    yt_rsel.add_argument("--youtube-run-id", required=True)
+    yt_rsel_target = yt_rsel.add_mutually_exclusive_group(required=True)
+    yt_rsel_target.add_argument(
+        "--input-id",
+        default="",
+        help="item_id из _gemini_selection/input/gemini_selection_input_manifest.json (например yt_00001).",
+    )
+    yt_rsel_target.add_argument(
+        "--story-id",
+        default="",
+        help="canonical_basename или stem source_path (например 'Holiday Dream').",
+    )
+    yt_rsel.add_argument(
+        "--execute",
+        action="store_true",
+        help="Запустить legacy gemini_auto.py (Playwright/Chrome). Без флага — preflight + manual_cmd.",
+    )
+    yt_rsel.add_argument(
+        "--force",
+        action="store_true",
+        help="Перезаписать staging input txt если уже есть.",
+    )
+    yt_rsel.add_argument(
+        "--reuse-legacy-user-data",
+        action="store_true",
+        help="GEMINI_USER_DATA_DIR=legacy/youtube_tts/user_data (уже залогиненный профиль).",
+    )
+    yt_rsel.add_argument(
+        "--account-index",
+        type=int,
+        default=0,
+        help="Индекс валидного аккаунта в registry с ключом youtube_selection (0-based).",
+    )
+    yt_rsel.add_argument(
+        "--user-data-dir",
+        default="",
+        help=(
+            "Явный путь к Chrome user_data. Без него: авто-подбор legacy/youtube_selection/user_data_N по email "
+            "(account_info[*].email) — если нет совпадения, изолированный профиль bridge."
+        ),
+    )
+
+    yt_batch = yt_sub.add_parser(
+        "selection-batch-from-site",
+        help="Managed batch queue for youtube_selection: dry-run by default, --execute runs single-story attempts.",
+    )
+    yt_batch.add_argument("--site-run-id", required=True)
+    yt_batch.add_argument("--youtube-run-id", required=True)
+    yt_batch.add_argument("--min-minutes", type=int, default=None)
+    yt_batch.add_argument("--max-minutes", type=int, default=None)
+    yt_batch.add_argument("--words-per-minute", type=int, default=None)
+    yt_batch.add_argument("--min-words", type=int, default=None)
+    yt_batch.add_argument("--max-words", type=int, default=None)
+    yt_batch.add_argument("--max-attempts", type=int, required=True)
+    yt_batch.add_argument("--target-yes", type=int, default=1)
+    yt_batch.add_argument("--workers", type=int, default=1)
+    yt_batch.add_argument("--account-start-index", type=int, default=0)
+    yt_batch.add_argument("--retry-failed", action="store_true")
+    yt_batch.add_argument("--seed", type=int, default=None)
+    yt_batch.add_argument("--execute", action="store_true")
+
+    yt_promo_run = yt_sub.add_parser(
+        "promo-run",
+        help="Run legacy YouTube promo insertion for one story (dry-run by default).",
+    )
+    yt_promo_run.add_argument("--story-id", required=True, help="story_id или canonical_basename/output folder.")
+    yt_promo_run.add_argument("--execute", action="store_true", help="Launch legacy Gemini promo inserter and write 03_promo outputs.")
+    yt_promo_run.add_argument("--force", action="store_true", help="Re-run even if text_ready_for_audio already has promo inserts.")
+    yt_promo_run.add_argument("--account-index", type=int, default=0, help="Индекс аккаунта из gemini registry для youtube_ad_point (0-based).")
+    yt_promo_run.add_argument(
+        "--gemini-registry",
+        type=Path,
+        default=Path("configs/gemini_bots_registry.example.yaml"),
+        help="YAML registry с email и youtube_ad_point URL.",
+    )
+    yt_promo_run.add_argument(
+        "--reuse-legacy-user-data",
+        action="store_true",
+        help="Use legacy/youtube_tts/user_data instead of isolated 03_promo/_legacy_staging/user_data_fresh.",
+    )
+
+    yt_promo_status = yt_sub.add_parser(
+        "promo-status",
+        help="Diagnose YouTube promo insertion and audio staleness for one story.",
+    )
+    yt_promo_status.add_argument("--story-id", required=True, help="story_id или canonical_basename/output folder.")
+
+    yt_tts = yt_sub.add_parser(
+        "tts-kokoro-colab",
+        help="YouTube Kokoro Colab Drive bridge (isolated ContentFactory_YouTube; dry-run by default).",
+    )
+    yt_tts_sub = yt_tts.add_subparsers(dest="youtube_tts_kokoro_cmd", required=True)
+    yt_tts_exp = yt_tts_sub.add_parser(
+        "export",
+        help="Single-story export-only Drive job for YouTube Kokoro Colab (does not run Colab/TTS).",
+    )
+    yt_tts_exp.add_argument("--youtube-run-id", required=True)
+    yt_tts_exp.add_argument("--story-id", required=True, help="story_id или canonical_basename из youtube_story_manifest.")
+    yt_tts_exp.add_argument(
+        "--drive-root",
+        type=Path,
+        default=DEFAULT_YOUTUBE_DRIVE_ROOT,
+        help="Isolated YouTube Drive root. Default: G:\\Мой диск\\ContentFactory_YouTube",
+    )
+    yt_tts_exp.add_argument("--execute", action="store_true", help="Создать Drive folders/job files и обновить manifest.")
+
+    yt_tts_verify = yt_tts_sub.add_parser(
+        "verify",
+        help="Проверить expected Drive mp3 для YouTube Kokoro Colab без копирования.",
+    )
+    yt_tts_verify.add_argument("--youtube-run-id", required=True)
+    yt_tts_verify.add_argument("--story-id", required=True, help="story_id или canonical_basename из youtube_story_manifest.")
+    yt_tts_verify.add_argument(
+        "--drive-root",
+        type=Path,
+        default=DEFAULT_YOUTUBE_DRIVE_ROOT,
+        help="Isolated YouTube Drive root. Default: G:\\Мой диск\\ContentFactory_YouTube",
+    )
+
+    yt_tts_import = yt_tts_sub.add_parser(
+        "import",
+        help="Импортировать expected Drive mp3 в output/youtube/<story>/04_audio/narration.mp3.",
+    )
+    yt_tts_import.add_argument("--youtube-run-id", required=True)
+    yt_tts_import.add_argument("--story-id", required=True, help="story_id или canonical_basename из youtube_story_manifest.")
+    yt_tts_import.add_argument(
+        "--drive-root",
+        type=Path,
+        default=DEFAULT_YOUTUBE_DRIVE_ROOT,
+        help="Isolated YouTube Drive root. Default: G:\\Мой диск\\ContentFactory_YouTube",
+    )
+    yt_tts_import.add_argument("--force", action="store_true", help="Перезаписать existing narration.mp3.")
+
+    yt_chars = yt_sub.add_parser(
+        "characters",
+        help="YouTube visuals bridge: preflight/stage characters input for one story; does not launch Gemini.",
+    )
+    yt_chars.add_argument("--story-id", required=True)
+    yt_chars.add_argument(
+        "--execute",
+        action="store_true",
+        help="Create local legacy staging/report only. Gemini is not launched.",
+    )
+
+    yt_chars_export = yt_sub.add_parser(
+        "characters-export",
+        help="Export safe story text into 05_characters/_staging for manual/Gemini characters extraction.",
+    )
+    yt_chars_export.add_argument("--story-id", required=True)
+    yt_chars_export.add_argument("--execute", action="store_true")
+
+    yt_chars_import = yt_sub.add_parser(
+        "characters-import",
+        help="Import ready characters.txt into 05_characters and update story manifest.",
+    )
+    yt_chars_import.add_argument("--story-id", required=True)
+    yt_chars_import.add_argument("--source", type=Path, required=True)
+    yt_chars_import.add_argument("--execute", action="store_true")
+
+    yt_dir_prompts = yt_sub.add_parser(
+        "director-prompts",
+        help="YouTube visuals bridge: preflight/stage director prompt input for one story; does not launch Gemini.",
+    )
+    yt_dir_prompts.add_argument("--story-id", required=True)
+    yt_dir_prompts.add_argument(
+        "--execute",
+        action="store_true",
+        help="Create local legacy staging/report only. Gemini is not launched.",
+    )
+
+    yt_dir_prompts_export = yt_sub.add_parser(
+        "director-prompts-export",
+        help="Export story/audio/characters into 06_prompts/_staging for manual/Gemini prompt creation.",
+    )
+    yt_dir_prompts_export.add_argument("--story-id", required=True)
+    yt_dir_prompts_export.add_argument("--execute", action="store_true")
+
+    yt_dir_prompts_import = yt_sub.add_parser(
+        "director-prompts-import",
+        help="Import ready prompts_list.txt into 06_prompts and update story manifest.",
+    )
+    yt_dir_prompts_import.add_argument("--story-id", required=True)
+    yt_dir_prompts_import.add_argument("--source", type=Path, required=True)
+    yt_dir_prompts_import.add_argument("--execute", action="store_true")
+
+    yt_frames_runpod = yt_sub.add_parser(
+        "frames-runpod",
+        help="YouTube visuals bridge: frame generation preflight/job manifest; calls RunPod only with --execute.",
+    )
+    yt_frames_runpod.add_argument("--story-id", required=True)
+    yt_frames_runpod.add_argument("--runpod-url", default="", help="RunPod/ComfyUI API URL. Required only with --execute.")
+    yt_frames_runpod.add_argument("--workflow", default="", help="ComfyUI workflow preset file/name from legacy/director_2_0/workflows.")
+    yt_frames_runpod.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Write 07_frames/frame_jobs.json and report without calling RunPod.",
+    )
+    yt_frames_runpod.add_argument(
+        "--execute",
+        action="store_true",
+        help="Call RunPod/ComfyUI and generate missing frames.",
+    )
+
+    yt_visuals_run = yt_sub.add_parser(
+        "visuals-run",
+        help="Run single-story YouTube visuals state machine through characters/prompts/frames/segment prep.",
+    )
+    yt_visuals_run.add_argument("--story-id", required=True)
+    yt_visuals_run.add_argument("--runpod-url", default="", help="Optional. If omitted, visuals-run asks for it at READY_FOR_RUNPOD after Gemini prompts are ready.")
+    yt_visuals_run.add_argument("--workflow", default="", help="ComfyUI workflow preset file/name used only at the frames stage.")
+    yt_visuals_run.add_argument("--segment-sec", type=float, default=180.0)
+    yt_visuals_run.add_argument("--execute", action="store_true")
+    yt_visuals_run.add_argument("--watch", action="store_true")
+    yt_visuals_run.add_argument("--auto-gemini", action="store_true", help="Launch legacy director_2_0 Gemini automation for characters/prompts.")
+    yt_visuals_run.add_argument("--allow-gemini", action="store_true", help="Alias for --auto-gemini.")
+    yt_visuals_run.add_argument("--fresh-visuals", action="store_true", help="Quarantine existing visual artifacts before regenerating characters/prompts.")
+    yt_visuals_run.add_argument("--no-runpod-prompt", action="store_true", help="Do not ask for RunPod URL at READY_FOR_RUNPOD; stop after preparing frame jobs.")
+    yt_visuals_run.add_argument("--watch-interval-sec", type=int, default=5)
+    yt_visuals_run.add_argument("--watch-timeout-sec", type=int, default=0)
+
+    yt_visuals_status = yt_sub.add_parser(
+        "visuals-status",
+        help="Show single-story YouTube visuals state and current blocker.",
+    )
+    yt_visuals_status.add_argument("--story-id", required=True)
+
+    yt_visuals_clean = yt_sub.add_parser(
+        "visuals-clean",
+        help="Quarantine per-story YouTube visual artifacts before regenerating characters/prompts.",
+    )
+    yt_visuals_clean.add_argument("--story-id", required=True)
+    yt_visuals_clean.add_argument("--execute", action="store_true")
+
+    yt_visual_prompts_audit = yt_sub.add_parser(
+        "visual-prompts-audit",
+        help="Read-only diagnostics for YouTube visual prompt length/continuity risks.",
+    )
+    yt_visual_prompts_audit.add_argument("--story-id", required=True)
+
+    yt_characters_anchor_audit = yt_sub.add_parser(
+        "characters-anchor-audit",
+        help="Read-only diagnostics for forbidden terms in YouTube character anchors.",
+    )
+    yt_characters_anchor_audit.add_argument("--story-id", required=True)
+
+    yt_frames_reset = yt_sub.add_parser(
+        "frames-reset",
+        help="Archive current YouTube frames and mark them stale without permanent deletion.",
+    )
+    yt_frames_reset.add_argument("--story-id", required=True)
+    yt_frames_reset.add_argument("--reason", required=True)
+    yt_frames_reset.add_argument("--execute", action="store_true")
+
+    yt_video = yt_sub.add_parser(
+        "video",
+        help="YouTube video segment MVP (local dry-run/execute only; no Colab dispatcher).",
+    )
+    yt_video_sub = yt_video.add_subparsers(dest="youtube_video_cmd", required=True)
+    yt_video_prepare = yt_video_sub.add_parser(
+        "prepare-segments",
+        help="Create local video_timeline.json and segment_jobs.json for one story.",
+    )
+    yt_video_prepare.add_argument("--story-id", required=True)
+    yt_video_prepare.add_argument("--segment-sec", type=float, default=180.0)
+    yt_video_prepare.add_argument("--execute", action="store_true")
+    yt_video_prepare.add_argument("--force", action="store_true")
+
+    yt_video_render = yt_video_sub.add_parser(
+        "render-segment",
+        help="Render one prepared segment locally into 08_video/segments.",
+    )
+    yt_video_render.add_argument("--story-id", required=True)
+    yt_video_render.add_argument("--segment-id", required=True)
+    yt_video_render.add_argument("--execute", action="store_true")
+
+    yt_video_status = yt_video_sub.add_parser(
+        "segment-status",
+        help="Show prepared segment validation status for one story.",
+    )
+    yt_video_status.add_argument("--story-id", required=True)
+
+    yt_video_export = yt_video_sub.add_parser(
+        "export-job",
+        help="Export a YouTube video segment job to Google Drive.",
+    )
+    yt_video_export.add_argument("--story-id", required=True)
+    yt_video_export.add_argument("--execute", action="store_true")
+    yt_video_export.add_argument("--force", action="store_true")
+
+    yt_video_drive_status = yt_video_sub.add_parser(
+        "drive-status",
+        help="Show Google Drive video job status for one story.",
+    )
+    yt_video_drive_status.add_argument("--story-id", required=True)
+
+    yt_video_setup_colab = yt_video_sub.add_parser(
+        "setup-colab-workers",
+        help="Create root Colab compatibility paths and assigned queue folders.",
+    )
+    yt_video_setup_colab.add_argument("--story-id", required=True)
+    yt_video_setup_colab.add_argument("--youtube-folder-id", default="", help="Google Drive folder id for ContentFactory_YouTube, used in generated Colab bootstrap cell")
+    yt_video_setup_colab.add_argument("--execute", action="store_true")
+
+    yt_video_browser_profiles = yt_video_sub.add_parser(
+        "colab-browser-profiles",
+        help="Read-only diagnostic: find Chrome/Yandex executables and profile directories for Colab workers.",
+    )
+    yt_video_browser_profiles.add_argument("--config-path", type=Path, default=Path("configs/youtube_video_colab_workers.yaml"))
+
+    yt_video_dispatch = yt_video_sub.add_parser(
+        "dispatch-segments",
+        help="Assign global pending video segments to worker-specific queues.",
+    )
+    yt_video_dispatch.add_argument("--story-id", required=True)
+    yt_video_dispatch.add_argument("--workers", default="")
+    yt_video_dispatch.add_argument("--target-per-worker", type=int, default=1)
+    yt_video_dispatch.add_argument("--max-total-assigned", type=int, default=5)
+    yt_video_dispatch.add_argument("--execute", action="store_true")
+
+    yt_video_reclaim = yt_video_sub.add_parser(
+        "reclaim-stale-segments",
+        help="Return stale processing video segments to global_pending or failed.",
+    )
+    yt_video_reclaim.add_argument("--story-id", required=True)
+    yt_video_reclaim.add_argument(
+        "--stale-minutes",
+        type=int,
+        default=10,
+        help="Heartbeat age in minutes after which a processing segment is considered stale (default: 10).",
+    )
+    yt_video_reclaim.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="After how many reclaim attempts the segment is moved to failed instead of pending (default: 3).",
+    )
+    yt_video_reclaim.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only show what would be reclaimed (no file moves). This is the default unless --execute is passed.",
+    )
+    yt_video_reclaim.add_argument("--execute", action="store_true")
+
+    yt_video_queue_status = yt_video_sub.add_parser(
+        "queue-status",
+        help="Show assigned video queue status for one story.",
+    )
+    yt_video_queue_status.add_argument("--story-id", required=True)
+    yt_video_queue_status.add_argument(
+        "--stale-minutes",
+        type=int,
+        default=10,
+        help="Heartbeat age in minutes used to flag stale processing segments in the status report (default: 10).",
+    )
+
+    yt_video_validate_assets = yt_video_sub.add_parser(
+        "validate-job-assets",
+        help="Validate that every required input frame exists on Drive for all segments.",
+    )
+    yt_video_validate_assets.add_argument("--story-id", required=True)
+    yt_video_validate_assets.add_argument("--dry-run", action="store_true", help="Informational flag; command is always read-only.")
+
+    yt_video_cleanup = yt_video_sub.add_parser(
+        "cleanup-partial-checkpoints",
+        help="Delete *.partial.mp4 and orphan checkpoint mp4 without .done.json in work_segments and segments.",
+    )
+    yt_video_cleanup.add_argument("--story-id", required=True)
+    yt_video_cleanup.add_argument("--dry-run", action="store_true")
+    yt_video_cleanup.add_argument("--execute", action="store_true")
+
+    yt_video_watch = yt_video_sub.add_parser(
+        "watch-queue",
+        help="Production watcher loop: reclaim stale -> dispatch -> status until video job is done.",
+    )
+    yt_video_watch.add_argument("--story-id", required=True)
+    yt_video_watch.add_argument("--poll-seconds", type=int, default=60)
+    yt_video_watch.add_argument("--stale-minutes", type=int, default=10)
+    yt_video_watch.add_argument("--max-attempts", type=int, default=3)
+    yt_video_watch.add_argument("--pending-per-worker", type=int, default=1)
+    yt_video_watch.add_argument("--max-total-assigned", type=int, default=0, help="0 means pending-per-worker * workers_count.")
+    yt_video_watch.add_argument("--workers", default="", help="Comma-separated worker emails; empty = config defaults.")
+    yt_video_watch.add_argument("--max-runtime-minutes", type=float, default=0.0, help="0 means no limit.")
+    yt_video_watch.add_argument("--once", action="store_true", help="Run exactly one watcher tick and exit.")
+    yt_video_watch.add_argument("--dry-run", action="store_true", help="Force dry-run (no file moves and no copies). Default when --execute is not provided.")
+    yt_video_watch.add_argument("--execute", action="store_true")
+    yt_video_watch.add_argument(
+        "--no-auto-import",
+        action="store_true",
+        help="Do not run import-results when all segments are done. By default the watcher imports final segments locally on completion.",
+    )
+    yt_video_watch.add_argument(
+        "--skip-asset-preflight",
+        action="store_true",
+        help="Skip validate-job-assets gate before dispatch. Use only if you know assets are fine.",
+    )
+
+    yt_video_inspect = yt_video_sub.add_parser(
+        "inspect-segment",
+        help="Inspect one video segment across global/assigned queues and outputs.",
+    )
+    yt_video_inspect.add_argument("--story-id", required=True)
+    yt_video_inspect.add_argument("--segment-id", required=True)
+
+    yt_video_import = yt_video_sub.add_parser(
+        "import-results",
+        help="Import rendered Drive video segments back to output/youtube.",
+    )
+    yt_video_import.add_argument("--story-id", required=True)
+    yt_video_import.add_argument("--execute", action="store_true")
+
+    yt_video_assemble = yt_video_sub.add_parser(
+        "assemble-final",
+        help="Concat imported video segments and mux narration into final_video.mp4.",
+    )
+    yt_video_assemble.add_argument("--story-id", required=True)
+    yt_video_assemble.add_argument("--execute", action="store_true")
+
+    yt_video_full = yt_video_sub.add_parser(
+        "full-drive-flow",
+        help="Prepare missing manifests, export Drive job, and print Colab worker commands.",
+    )
+    yt_video_full.add_argument("--story-id", required=True)
+    yt_video_full.add_argument("--execute", action="store_true")
+    yt_video_full.add_argument("--force", action="store_true")
 
     show_modes = sub.add_parser("show-modes")
 
@@ -798,6 +1380,89 @@ def _parser() -> argparse.ArgumentParser:
         help="Куда писать JSON-отчёт",
     )
 
+    siv = sub.add_parser(
+        "site-info-visual",
+        help="Validate/rebuild visual_prompts tables and retry invalid site_info (Gemini site_info_builder only)",
+    )
+    siv_sub = siv.add_subparsers(dest="site_info_visual_cmd", required=True)
+    siv_common = argparse.ArgumentParser(add_help=False)
+    siv_common.add_argument(
+        "--runs-root",
+        type=Path,
+        default=None,
+        help="runs/site/<story-id>-a (default: latest *-a under runs/site or launch legacy)",
+    )
+    siv_common.add_argument(
+        "--output-site-dir",
+        type=Path,
+        default=None,
+        help="legacy/output/site (default: sibling of runs-root parent)",
+    )
+    siv_common.add_argument(
+        "--export-dir",
+        type=Path,
+        default=None,
+        help="Куда писать visual_prompts.* (default: <runs-root>/visual)",
+    )
+    siv_val = siv_sub.add_parser(
+        "validate",
+        parents=[siv_common],
+        help="validate_site_info_visuals → CSV/XLSX/invalid/report",
+    )
+    siv_reb = siv_sub.add_parser(
+        "rebuild",
+        parents=[siv_common],
+        help="Синоним validate (пересобрать таблицы без Gemini)",
+    )
+    siv_retry = siv_sub.add_parser(
+        "retry",
+        parents=[siv_common],
+        help="retry_invalid_site_info_visuals через site_info_builder",
+    )
+    siv_retry.add_argument("--execute", action="store_true", help="Запустить Gemini (иначе dry-run)")
+    siv_retry.add_argument("--max-retry-attempts", type=int, default=2)
+    siv_retry.add_argument("--gemini-workers", type=int, default=1)
+    siv_retry.add_argument(
+        "--gemini-registry",
+        type=Path,
+        default=Path("configs/gemini_bots_registry.yaml"),
+    )
+    siv_retry.add_argument(
+        "--profile",
+        default="",
+        help="Имя или индекс Chrome user_data_*: 'user_data_1' или '1'. Пусто = user_data_0 (или --auto-profile).",
+    )
+    siv_retry.add_argument(
+        "--auto-profile",
+        action="store_true",
+        help="Перебрать user_data_* и выбрать первый свободный (фолбэк, если запрошенный занят).",
+    )
+    siv_retry.add_argument("--gemini-profiles-total", type=int, default=5)
+    siv_full = siv_sub.add_parser(
+        "full",
+        parents=[siv_common],
+        help="validate → retry invalid (--execute) → validate",
+    )
+    siv_full.add_argument("--execute", action="store_true")
+    siv_full.add_argument("--max-retry-attempts", type=int, default=2)
+    siv_full.add_argument("--gemini-workers", type=int, default=1)
+    siv_full.add_argument(
+        "--gemini-registry",
+        type=Path,
+        default=Path("configs/gemini_bots_registry.yaml"),
+    )
+    siv_full.add_argument(
+        "--profile",
+        default="",
+        help="Имя или индекс Chrome user_data_*: 'user_data_1' или '1'.",
+    )
+    siv_full.add_argument(
+        "--auto-profile",
+        action="store_true",
+        help="Перебрать user_data_* и выбрать первый свободный.",
+    )
+    siv_full.add_argument("--gemini-profiles-total", type=int, default=5)
+
     sp = sub.add_parser("site-publish", help="Prepare output/site stories for legacy autopublisher (To_Publish)")
     sp_sub = sp.add_subparsers(dest="site_publish_cmd", required=True)
     sp_prep = sp_sub.add_parser("prepare", help="Bridge ready output/site stories into legacy/autopublisher/To_Publish")
@@ -805,6 +1470,16 @@ def _parser() -> argparse.ArgumentParser:
     sp_prep.add_argument("--execute", action="store_true", help="Реально копировать файлы в To_Publish")
     sp_prep.add_argument("--force", action="store_true", help="Разрешить перезапись папки To_Publish/<story>")
     sp_prep.add_argument("--story", default="", help="Точечно подготовить одну story (имя папки в output/site/)")
+    sp_prep.add_argument("--allow-partial-tts", action="store_true", help="Готовить только stories с mp3; terminal skipped/missing не блокируют batch")
+    sp_prep.add_argument("--launch-name", default="", help="Run-scoped: имя Запуски/<name>; пакеты лежат в 02_Сайт/05_Публикация_на_сайт")
+    sp_prep.add_argument("--launch-dir", type=Path, default=None, help="Run-scoped: явный путь к launch-папке (перекрывает --launch-name)")
+    sp_collect = sp_sub.add_parser("collect-assets", help="Collect text/info/mp3/images into output/site before prepare")
+    sp_collect.add_argument("--execute", action="store_true", help="Реально копировать story packages в output/site")
+    sp_collect.add_argument("--force", action="store_true", help="Перезаписать уже собранные файлы story package")
+    sp_collect.add_argument("--allow-partial-tts", action="store_true", help="Не блокировать batch из-за manual skipped / missing mp3")
+    sp_collect.add_argument("--launch-name", default="", help="Имя папки Запуски/<name>; пусто = автоопределение по TTS job")
+    sp_collect.add_argument("--launch-dir", type=Path, default=None, help="Явный путь к launch-папке")
+    sp_collect.add_argument("--images-dir", type=Path, default=None, help="Папка с готовыми картинками; default input/site_visual_import")
     sp_doc = sp_sub.add_parser("env-doctor", help="Audit and sync site publish env from Dirtysecrets")
     sp_doc.add_argument("--dirtysecrets-path", type=Path, default=Path(r"D:\Cursor AI\Dirtysecrets"))
     sp_doc.add_argument("--no-write-env", action="store_true", help="Только аудит, без обновления .env.site_publish")
@@ -812,7 +1487,10 @@ def _parser() -> argparse.ArgumentParser:
     sp_pub.add_argument("--story", default="", help="Точечная публикация одной story")
     sp_pub.add_argument("--dry-run", action="store_true", help="Проверка без upload/insert")
     sp_pub.add_argument("--execute", action="store_true", help="Реальная публикация (запрещена при blockers)")
+    sp_pub.add_argument("--allow-partial-tts", action="store_true", help="Публиковать только stories с готовым mp3; TTS skips отражать в отчёте")
     sp_pub.add_argument("--dirtysecrets-path", type=Path, default=Path(r"D:\Cursor AI\Dirtysecrets"))
+    sp_pub.add_argument("--launch-name", default="", help="Run-scoped: имя Запуски/<name>; legacy publisher получит bridge на launch")
+    sp_pub.add_argument("--launch-dir", type=Path, default=None, help="Run-scoped: явный путь к launch-папке (перекрывает --launch-name)")
 
     st = sub.add_parser("site-tts", help="Модульный site TTS (output/site -> mp3, см. configs/site_tts.yaml)")
     st.add_argument("--modes-config", type=Path, default=Path("configs/runtime_modes.yaml"))
@@ -877,6 +1555,36 @@ def _parser() -> argparse.ArgumentParser:
         help="Только папки output/site, совпадающие по stem с .txt из этого каталога (как при run-site-flow *-site)",
     )
     st_cc_exp_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
+    st_cc_exp_drive.add_argument(
+        "--job-only",
+        action="store_true",
+        help="Только пересобрать job/kokoro_voices_job.json по TXT на Drive (не копировать texts)",
+    )
+    st_cc_exp_drive.add_argument(
+        "--force-job",
+        action="store_true",
+        help="С --job-only: то же; при полном export — не пропускать export из-за pending_job_txts_still_on_drive",
+    )
+    st_cc_exp_drive.add_argument(
+        "--execute",
+        action="store_true",
+        help="Для --job-only: записать job-файлы (без флага — dry-run). Полный export-drive по-прежнему всегда пишет texts.",
+    )
+    st_cc_rebuild_job = st_cc_sub.add_parser(
+        "rebuild-voice-job",
+        help="Пересобрать kokoro_voices_job.json по TXT на Drive без перезаписи texts/mp3",
+    )
+    st_cc_rebuild_job.add_argument(
+        "--drive-texts",
+        action="store_true",
+        help="Читать TXT из google_drive texts_dir (по умолчанию включено)",
+    )
+    st_cc_rebuild_job.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
+    st_cc_rebuild_job.add_argument(
+        "--execute",
+        action="store_true",
+        help="Записать job/kokoro_voices_job.json и EXPECTED_* (без флага — dry-run)",
+    )
     st_cc_setup_drive = st_cc_sub.add_parser("setup-drive", help="Создать структуру Google Drive и скопировать Colab runner")
     st_cc_imp = st_cc_sub.add_parser("import", help="Импортировать mp3-результаты Colab в output/site")
     st_cc_imp.add_argument("--batch-id", default="", help="ID batch в runs/tts_colab_batches/")
@@ -896,11 +1604,79 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_ver_drive = st_cc_sub.add_parser("verify-drive", help="Google Drive flow: сравнить texts/ и mp3/")
     st_cc_ver_drive.add_argument("--texts-dir", type=Path, default=None, help="Путь к Google Drive texts dir")
     st_cc_ver_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
+    st_cc_reconcile_queue = st_cc_sub.add_parser(
+        "reconcile-drive-queue",
+        help="Dynamic Drive queue: adopt existing mp3 into done markers without deleting/moving mp3.",
+    )
+    st_cc_reconcile_queue.add_argument("--execute", action="store_true", help="Создать missing done markers для valid Drive mp3")
+    st_cc_export_queue = st_cc_sub.add_parser(
+        "export-drive-queue",
+        help="Dynamic Drive queue: copy missing txt and create pending site_tts jobs.",
+    )
+    st_cc_export_queue.add_argument("--limit", type=int, default=0, help="Сколько реально missing jobs добавить в pending (0 = все)")
+    st_cc_export_queue.add_argument("--execute", action="store_true", help="Копировать txt и писать pending job json")
+    st_cc_migrate_assigned = st_cc_sub.add_parser("migrate-to-assigned-queue", help="Dynamic Drive queue: copy legacy pending into global_pending")
+    st_cc_migrate_assigned.add_argument("--execute", action="store_true", help="Создать global_pending из legacy pending")
+    st_cc_dispatch_queue = st_cc_sub.add_parser("dispatch-drive-queue", help="Dynamic Drive queue: assign global pending jobs to per-worker queues")
+    st_cc_dispatch_queue.add_argument("--workers", default=",".join([
+        "ru.iskhakov2017@gmail.com",
+        "isi.cordeiro@gmail.com",
+        "iheuko119@gmail.com",
+        "goegoeseijin@gmail.com",
+        "suteadodesun6@gmail.com",
+    ]))
+    st_cc_dispatch_queue.add_argument("--target-per-worker", type=int, default=2)
+    st_cc_dispatch_queue.add_argument("--max-total-assigned", type=int, default=10)
+    st_cc_dispatch_queue.add_argument("--execute", action="store_true", help="Записать assigned/<worker>/pending jobs")
+    st_cc_reclaim_assigned = st_cc_sub.add_parser("reclaim-stale-assigned", help="Dynamic Drive queue: reclaim stale assigned processing jobs")
+    st_cc_reclaim_assigned.add_argument("--stale-minutes", type=int, default=120)
+    st_cc_reclaim_assigned.add_argument("--execute", action="store_true", help="Вернуть stale processing assignment в global_pending")
+    st_cc_status_queue = st_cc_sub.add_parser("queue-status", help="Dynamic Drive queue status for site_tts")
+    st_cc_status_queue.add_argument("--stale-lease-minutes", type=int, default=60)
+    st_cc_inspect_job = st_cc_sub.add_parser("inspect-job", help="Dynamic Drive queue: inspect one pending job claimability")
+    st_cc_inspect_job.add_argument("--job-id", required=True)
+    st_cc_inspect_job.add_argument("--stale-lease-minutes", type=int, default=60)
+    st_cc_quarantine_job = st_cc_sub.add_parser("quarantine-job", help="Dynamic Drive queue: disable one bad pending job without deleting text/mp3/done")
+    st_cc_quarantine_job.add_argument("--job-id", required=True)
+    st_cc_quarantine_job.add_argument("--reason", required=True)
+    st_cc_quarantine_job.add_argument("--execute", action="store_true", help="Записать invalid marker")
+    st_cc_requeue_stale = st_cc_sub.add_parser(
+        "requeue-stale",
+        help="Dynamic Drive queue: safely release stale site_tts leases without deleting jobs/text/mp3/done.",
+    )
+    st_cc_requeue_stale.add_argument("--stale-lease-minutes", type=int, default=60)
+    st_cc_requeue_stale.add_argument("--execute", action="store_true", help="Пометить stale leases released и освободить processing markers")
+    st_cc_verify_queue = st_cc_sub.add_parser("verify-drive-queue", help="Dynamic Drive queue: verify mp3/done/pending/stale")
+    st_cc_verify_queue.add_argument("--stale-lease-minutes", type=int, default=60)
+    st_cc_import_queue = st_cc_sub.add_parser("import-drive-queue", help="Dynamic Drive queue: import ready mp3 to local site layout")
+    st_cc_import_queue.add_argument("--execute", action="store_true", help="Копировать valid Drive mp3 локально")
+    st_cc_import_queue.add_argument("--force", action="store_true", help="Перезаписать локальный mp3")
+    st_cc_mark_skipped = st_cc_sub.add_parser(
+        "mark-skipped",
+        help="Mark selected expected Drive mp3 names as manual skipped terminal items.",
+    )
+    st_cc_mark_skipped.add_argument("--names", required=True, help="Expected mp3 names separated by | or comma")
+    st_cc_mark_skipped.add_argument("--reason", default="manual skip missing expected mp3")
+    st_cc_mark_skipped.add_argument("--execute", action="store_true", help="Write manual skipped marker on Drive")
+    st_cc_mark_missing_skipped = st_cc_sub.add_parser(
+        "mark-missing-skipped",
+        help="Mark all currently missing expected Drive mp3 files as manual skipped.",
+    )
+    st_cc_mark_missing_skipped.add_argument("--reason", default="manual skip missing expected mp3")
+    st_cc_mark_missing_skipped.add_argument("--execute", action="store_true", help="Write manual skipped marker on Drive")
     st_cc_wait_drive = st_cc_sub.add_parser("wait-drive", help="Ждать mp3 в Drive и авто-импортировать в output/site")
     st_cc_wait_drive.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
     st_cc_wait_drive.add_argument("--wait-interval-minutes", type=int, default=0, help="Интервал проверки mp3 (0 = из конфига)")
     st_cc_wait_drive.add_argument("--max-wait-hours", type=int, default=0, help="Максимум ожидания в часах (0 = из конфига)")
     st_cc_wait_drive.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
+    st_cc_resume_wait = st_cc_sub.add_parser(
+        "resume-drive-wait",
+        help="Resume: txt/job уже на Drive — ждать mp3 и импортировать (без повторного export texts)",
+    )
+    st_cc_resume_wait.add_argument("--mp3-dir", type=Path, default=None, help="Путь к Google Drive mp3 dir")
+    st_cc_resume_wait.add_argument("--wait-interval-minutes", type=int, default=0, help="Интервал проверки mp3 (0 = из конфига)")
+    st_cc_resume_wait.add_argument("--max-wait-hours", type=int, default=0, help="Максимум ожидания в часах (0 = из конфига)")
+    st_cc_resume_wait.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
     st_cc_full_drive = st_cc_sub.add_parser("full-cycle-drive", help="Export txt -> wait mp3 -> import -> cleanup")
     st_cc_full_drive.add_argument("--limit", type=int, default=0, help="Макс. количество историй (0 = без лимита)")
     st_cc_full_drive.add_argument(
@@ -916,6 +1692,217 @@ def _parser() -> argparse.ArgumentParser:
     st_cc_full_drive.add_argument("--force", action="store_true", help="Разрешить перезапись существующих mp3")
 
     return p
+
+
+def _resolve_site_info_visual_paths(
+    cfg: OrchestratorConfig,
+    args: argparse.Namespace,
+) -> tuple[Path, Path, Path] | None:
+    """runs_root, output_site_dir, export_dir."""
+    runs_root = getattr(args, "runs_root", None)
+    if runs_root is not None and str(runs_root).strip():
+        runs_root = Path(runs_root).resolve()
+    else:
+        candidates = sorted(
+            (cfg.root_dir / "runs" / "site").glob("*-a"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        launch_legacy = sorted(
+            (cfg.root_dir / "Запуски").glob("*/10_Временные_файлы/legacy/runs/site/*-a"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        pick = launch_legacy[0] if launch_legacy else (candidates[0] if candidates else None)
+        if pick is None:
+            print("site-info-visual: не найден runs/site/*-a — укажите --runs-root")
+            return None
+        runs_root = pick.resolve()
+
+    output_site = getattr(args, "output_site_dir", None)
+    if output_site is not None and str(output_site).strip():
+        output_site = Path(output_site).resolve()
+    else:
+        legacy = runs_root.parent.parent
+        output_site = (legacy / "output" / "site").resolve()
+        if not output_site.is_dir():
+            output_site = (cfg.root_dir / "output" / "site").resolve()
+
+    export_dir = getattr(args, "export_dir", None)
+    if export_dir is not None and str(export_dir).strip():
+        export_dir = Path(export_dir).resolve()
+    else:
+        export_dir = (runs_root / "visual").resolve()
+
+    return runs_root, output_site, export_dir
+
+
+def _site_info_visual_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
+    paths = _resolve_site_info_visual_paths(cfg, args)
+    if paths is None:
+        return 2
+    runs_root, output_site, export_dir = paths
+    sub_cmd = str(getattr(args, "site_info_visual_cmd", "") or "").strip().lower()
+
+    from orchestrator.site_visual_validate import (
+        run_retry_invalid_site_info_visuals,
+        run_site_info_visual_full_cycle,
+        run_validate_site_info_visuals,
+    )
+
+    registry = getattr(args, "gemini_registry", Path("configs/gemini_bots_registry.yaml"))
+    reg_path = registry if registry.is_absolute() else (cfg.root_dir / registry).resolve()
+
+    if sub_cmd in {"validate", "rebuild"}:
+        require_human = (os.getenv("CF_REQUIRE_HUMAN_VISUAL_DIR") or "").strip() in {"1", "true", "yes", "on"}
+        res = run_validate_site_info_visuals(
+            runs_stories_dir=runs_root / "stories",
+            output_site_dir=output_site,
+            export_dir=export_dir,
+            runs_root=runs_root,
+            require_human_dir=require_human,
+        )
+        r = res.report
+        print(f"ok={res.ok}")
+        print(f"valid={r.get('valid_prompts')} invalid={r.get('invalid_prompts')}")
+        print("--- technical artifacts ---")
+        print(f"valid_csv={res.valid_csv_path}")
+        print(f"invalid_csv={res.invalid_csv_path}")
+        print(f"xlsx={res.xlsx_path}")
+        print(f"report={res.report_path}")
+        print("--- human artifacts ---")
+        if res.human_xlsx_path:
+            print(f"human_xlsx={res.human_xlsx_path}")
+        elif res.human_dir:
+            print(f"human_dir={res.human_dir} (xlsx not present)")
+        if res.human_sync_error:
+            print(f"human_sync_error={res.human_sync_error}")
+        comfy_ready = int(r.get("valid_prompts") or 0) > 0
+        print(f"comfyui_ready={comfy_ready}")
+        return 0 if res.ok else 2
+
+    profile_index = _parse_profile_index(getattr(args, "profile", ""))
+    auto_profile = bool(getattr(args, "auto_profile", False))
+    profiles_total = int(getattr(args, "gemini_profiles_total", 5) or 5)
+
+    if sub_cmd == "retry":
+        res = run_retry_invalid_site_info_visuals(
+            config=cfg,
+            runs_root=runs_root,
+            output_site_dir=output_site,
+            export_dir=export_dir,
+            gemini_registry_path=reg_path,
+            gemini_workers=int(getattr(args, "gemini_workers", 1)),
+            max_retry_attempts=int(getattr(args, "max_retry_attempts", 2)),
+            execute=bool(getattr(args, "execute", False)),
+            profile_index=profile_index,
+            auto_profile=auto_profile,
+            gemini_profiles_total=profiles_total,
+        )
+        print(
+            f"ok={res.ok} status={res.status} retried={res.retried} "
+            f"profile=user_data_{res.selected_gemini_profile if res.selected_gemini_profile is not None else 'n/a'} "
+            f"preflight={res.preflight_status}"
+        )
+        if res.exit_reason:
+            print(f"exit_reason={res.exit_reason}")
+        if res.browser_launch_error:
+            print(f"browser_launch_error={res.browser_launch_error[:300]}")
+        if res.report_path:
+            print(f"retry_report={res.report_path}")
+        if res.validate_after:
+            r = res.validate_after.report
+            print(f"after: valid={r.get('valid_prompts')} invalid={r.get('invalid_prompts')}")
+            print("--- human artifacts ---")
+            if res.validate_after.human_xlsx_path:
+                print(f"human_xlsx={res.validate_after.human_xlsx_path}")
+            elif res.validate_after.human_dir:
+                print(f"human_dir={res.validate_after.human_dir} (xlsx not present)")
+            if res.validate_after.human_sync_error:
+                print(f"human_sync_error={res.validate_after.human_sync_error}")
+            comfy_ready = int(r.get("valid_prompts") or 0) > 0
+            print(f"comfyui_ready={comfy_ready}")
+        return 0 if res.ok else 2
+
+    if sub_cmd == "full":
+        payload = run_site_info_visual_full_cycle(
+            config=cfg,
+            runs_root=runs_root,
+            output_site_dir=output_site,
+            export_dir=export_dir,
+            gemini_registry_path=reg_path,
+            execute=bool(getattr(args, "execute", False)),
+            max_retry_attempts=int(getattr(args, "max_retry_attempts", 2)),
+            gemini_workers=int(getattr(args, "gemini_workers", 1)),
+            profile_index=profile_index,
+            auto_profile=auto_profile,
+            gemini_profiles_total=profiles_total,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        before = payload.get("validate_before") or {}
+        retry_block = payload.get("retry") or {}
+        after = payload.get("validate_after") or {}
+        print("--- site-info-visual full summary ---")
+        print(
+            "before: valid={} invalid={}".format(
+                before.get("valid_prompts"), before.get("invalid_prompts")
+            )
+        )
+        print(
+            "retry: status={} profile={} retried={} succeeded={} failed={} candidates={} "
+            "skipped_max_retries={} exit_reason={}".format(
+                retry_block.get("status"),
+                retry_block.get("selected_gemini_profile"),
+                retry_block.get("retried"),
+                retry_block.get("retry_succeeded"),
+                retry_block.get("retry_failed"),
+                retry_block.get("retry_candidates"),
+                retry_block.get("skipped_max_retries"),
+                retry_block.get("exit_reason"),
+            )
+        )
+        if retry_block.get("browser_launch_error"):
+            print(f"retry.browser_launch_error={str(retry_block.get('browser_launch_error'))[:300]}")
+        print(
+            "after: valid={} invalid={}".format(
+                (after or {}).get("valid_prompts"), (after or {}).get("invalid_prompts")
+            )
+        )
+        # Расширенный output contract.
+        export_xlsx = export_dir / "visual_prompts.xlsx"
+        print(f"technical_xlsx={export_xlsx}")
+        # human dir мы определяем тем же путём, что и validate.
+        from orchestrator.site_visual_validate import (
+            HUMAN_VISUAL_XLSX_NAME,
+            resolve_human_visual_dir,
+        )
+
+        human_dir = resolve_human_visual_dir(runs_root)
+        if human_dir:
+            human_xlsx = human_dir / HUMAN_VISUAL_XLSX_NAME
+            print(f"human_xlsx={human_xlsx} (exists={human_xlsx.is_file()})")
+        else:
+            print("human_xlsx=human_visual_prompts_xlsx_path_not_found")
+        comfy_ok = int((after or {}).get("valid_prompts") or 0) > 0
+        print(f"comfyui_ready={comfy_ok}")
+        return 0 if payload.get("ok") else 2
+
+    print(f"Неизвестная подкоманда site-info-visual: {sub_cmd}")
+    return 2
+
+
+def _parse_profile_index(value: Any) -> int | None:
+    """'user_data_2' -> 2, '2' -> 2, '' -> None."""
+    s = str(value or "").strip().lower()
+    if not s:
+        return None
+    if s.startswith("user_data_"):
+        s = s[len("user_data_"):]
+    try:
+        idx = int(s)
+    except ValueError:
+        return None
+    return idx if idx >= 0 else None
 
 
 def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
@@ -961,7 +1948,30 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
         "first-n",
     } or (
         st_cmd == "kokoro-colab"
-        and st_cc in {"export", "import", "verify", "export-drive", "import-drive"}
+        and st_cc
+        in {
+            "export",
+            "import",
+            "verify",
+            "export-drive",
+            "import-drive",
+            "rebuild-voice-job",
+            "wait-drive",
+            "resume-drive-wait",
+            "reconcile-drive-queue",
+            "export-drive-queue",
+            "migrate-to-assigned-queue",
+            "dispatch-drive-queue",
+            "reclaim-stale-assigned",
+            "verify-drive-queue",
+            "import-drive-queue",
+            "mark-skipped",
+            "mark-missing-skipped",
+            "queue-status",
+            "inspect-job",
+            "quarantine-job",
+            "requeue-stale",
+        }
     )
     human_launch = resolve_site_tts_human_launch_root(
         cfg.root_dir,
@@ -987,6 +1997,18 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
     elif sor:
         p = Path(sor)
         site_root = (p if p.is_absolute() else (cfg.root_dir / p)).resolve()
+
+    def _queue_human_launch_fallback() -> Path | None:
+        if human_launch is not None:
+            return human_launch
+        if site_root.is_dir():
+            return None
+        candidates = sorted(
+            [p.parent for p in (cfg.root_dir / "Запуски").glob("*/05_Рассказы") if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0].resolve() if candidates else None
 
     def _modes_path() -> Path:
         return modes_path
@@ -1097,10 +2119,27 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             export_drive_texts,
             import_kokoro_colab_results,
             import_drive_mp3,
+            mark_drive_expected_skipped,
+            mark_missing_drive_expected_skipped,
+            rebuild_drive_voice_job,
             setup_drive_workspace,
             verify_mp3_coverage,
             verify_drive_status,
             wait_drive_mp3_and_import,
+            _print_rebuild_voice_job_summary,
+        )
+        from orchestrator.site_tts.drive_queue import (
+            dispatch_drive_queue,
+            export_drive_queue,
+            inspect_queue_job,
+            import_drive_queue,
+            migrate_to_assigned_queue,
+            quarantine_queue_job,
+            queue_status,
+            reconcile_drive_queue,
+            reclaim_stale_assigned,
+            requeue_stale_leases,
+            verify_drive_queue,
         )
 
         sub = str(getattr(args, "site_tts_colab_cmd", "") or "").strip().lower()
@@ -1143,6 +2182,13 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                 print(
                     "verify_drive_cmd=python -m orchestrator site-tts kokoro-colab verify-drive"
                 )
+                print(
+                    "wait_drive_cmd=python -m orchestrator site-tts kokoro-colab wait-drive"
+                )
+                print(
+                    "[NOTE] kokoro-colab export (human) только выгружает txt/job. "
+                    "Ожидание mp3+import: wait-drive, resume-drive-wait или launch run-site-flow --execute."
+                )
                 return 0
             res = export_kokoro_colab_batch(
                 cfg.root_dir,
@@ -1168,10 +2214,47 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                 print("legacy_handoff=available (_COLAB_EXPORTS; optional/internal)")
             return 0
 
+        if sub == "rebuild-voice-job":
+            tdir = getattr(args, "texts_dir", None)
+            try:
+                res = rebuild_drive_voice_job(
+                    cfg.root_dir,
+                    texts_dir=tdir,
+                    site_root=site_root,
+                    human_launch=human_launch,
+                    execute=execute,
+                )
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            _print_rebuild_voice_job_summary(res)
+            return 0 if res.get("ok", False) else 1
+
         if sub == "export-drive":
             lim = int(getattr(args, "limit", 0) or 0)
             tdir = getattr(args, "texts_dir", None)
             sfilter = getattr(args, "stories_filter_dir", None)
+            job_only = bool(getattr(args, "job_only", False))
+            force_job = bool(getattr(args, "force_job", False))
+            if job_only:
+                try:
+                    res = export_drive_texts(
+                        cfg.root_dir,
+                        texts_dir=tdir,
+                        site_root=site_root,
+                        human_launch=human_launch,
+                        job_only=True,
+                        execute=execute,
+                    )
+                except ValueError as exc:
+                    print(str(exc))
+                    return 2
+                _print_rebuild_voice_job_summary(res)
+                return 0 if res.get("ok", False) else 1
+            if force_job:
+                import os
+
+                os.environ["CONTENT_FACTORY_FORCE_DRIVE_REEXPORT"] = "1"
             try:
                 res = export_drive_texts(
                     cfg.root_dir,
@@ -1195,9 +2278,16 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                 print(f"colab_current_dir={res.get('colab_current_dir')}")
             if res.get("resume_wait_for_pending_job"):
                 print("resume_wait_for_pending_job=1 (export body skipped; kokoro_voices_job.json not rewritten)")
+                print("next_cmd=python -m orchestrator site-tts kokoro-colab wait-drive")
             vj = str(res.get("voices_job_json") or "").strip()
             if vj:
                 print(f"voices_job_json={vj}")
+            if int(res.get("exported", 0) or 0) > 0:
+                print("next_cmd=python -m orchestrator site-tts kokoro-colab wait-drive")
+                print(
+                    "[NOTE] export-drive только выгружает txt. Для ожидания mp3: wait-drive, "
+                    "resume-drive-wait, full-cycle-drive или launch run-site-flow --execute."
+                )
             return 0
 
         if sub == "setup-drive":
@@ -1360,11 +2450,397 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                 print(f"{k}={res.get(k)}")
             return 0
 
-        if sub == "wait-drive":
+        if sub == "reconcile-drive-queue":
+            try:
+                q_human_launch = _queue_human_launch_fallback()
+                if q_human_launch is not None and human_launch is None:
+                    print(f"[site-tts queue] auto_human_launch={q_human_launch}")
+                res = reconcile_drive_queue(
+                    cfg.root_dir,
+                    site_root=site_root,
+                    human_launch=q_human_launch,
+                    execute=bool(getattr(args, "execute", False)),
+                )
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            for k in (
+                "execute",
+                "drive_root",
+                "queue_root",
+                "total_expected",
+                "drive_mp3_total",
+                "drive_valid_mp3_total",
+                "existing_drive_mp3",
+                "existing_local_mp3",
+                "adopted_done_markers",
+                "done_markers_existing",
+                "pending_needed",
+                "partial_or_invalid",
+                "extra_drive_mp3_without_expected_story",
+            ):
+                print(f"{k}={res.get(k)}")
+            print(f"duplicates={json.dumps(res.get('duplicates') or {}, ensure_ascii=True)}")
+            print(f"sample_adopted={json.dumps(res.get('sample_adopted') or [], ensure_ascii=True)}")
+            print(f"sample_pending_needed={json.dumps(res.get('sample_pending_needed') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "export-drive-queue":
+            lim = int(getattr(args, "limit", 0) or 0)
+            try:
+                q_human_launch = _queue_human_launch_fallback()
+                if q_human_launch is not None and human_launch is None:
+                    print(f"[site-tts queue] auto_human_launch={q_human_launch}")
+                res = export_drive_queue(
+                    cfg.root_dir,
+                    site_root=site_root,
+                    human_launch=q_human_launch,
+                    limit=(lim if lim > 0 else None),
+                    execute=bool(getattr(args, "execute", False)),
+                )
+            except ValueError as exc:
+                print(str(exc))
+                return 2
+            for k in (
+                "execute",
+                "drive_root",
+                "texts_dir",
+                "mp3_dir",
+                "queue_root",
+                "total_expected",
+                "limit",
+                "planned_pending_jobs",
+                "created_pending_jobs",
+                "copied_texts",
+                "text_existing",
+                "skipped_already_done",
+                "skipped_drive_done",
+                "skipped_local_done",
+                "skipped_pending_existing",
+                "skipped_failed_existing",
+                "invalid_or_partial",
+            ):
+                print(f"{k}={res.get(k)}")
+            print(f"first_job_ids={json.dumps(res.get('first_job_ids') or [], ensure_ascii=True)}")
+            if res.get("errors"):
+                print(f"errors={json.dumps(res.get('errors'), ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "migrate-to-assigned-queue":
+            res = migrate_to_assigned_queue(
+                cfg.root_dir,
+                execute=bool(getattr(args, "execute", False)),
+            )
+            for k in (
+                "execute",
+                "drive_root",
+                "queue_root",
+                "source_pending_count",
+                "copied_to_global_pending",
+                "skipped_done_or_mp3",
+                "skipped_invalid",
+                "skipped_existing_global",
+            ):
+                print(f"{k}={res.get(k)}")
+            if res.get("errors"):
+                print(f"errors={json.dumps(res.get('errors'), ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "dispatch-drive-queue":
+            workers_arg = str(getattr(args, "workers", "") or "")
+            workers = [w.strip() for w in workers_arg.split(",") if w.strip()]
+            res = dispatch_drive_queue(
+                cfg.root_dir,
+                workers=workers,
+                target_per_worker=int(getattr(args, "target_per_worker", 2) or 2),
+                max_total_assigned=int(getattr(args, "max_total_assigned", 10) or 10),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            for k in (
+                "execute",
+                "drive_root",
+                "queue_root",
+                "target_per_worker",
+                "max_total_assigned",
+                "source_pending_count",
+                "assigned",
+            ):
+                print(f"{k}={res.get(k)}")
+            print(f"assigned_count_by_worker={json.dumps(res.get('assigned_count_by_worker') or {}, ensure_ascii=True)}")
+            print(f"skipped_by_reason={json.dumps(res.get('skipped_by_reason') or {}, ensure_ascii=True)}")
+            print(f"assignments={json.dumps(res.get('assignments') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "reclaim-stale-assigned":
+            res = reclaim_stale_assigned(
+                cfg.root_dir,
+                stale_minutes=int(getattr(args, "stale_minutes", 120) or 120),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            for k in (
+                "execute",
+                "drive_root",
+                "queue_root",
+                "stale_minutes",
+                "reclaimed",
+                "skipped_done_or_mp3",
+                "skipped_fresh",
+            ):
+                print(f"{k}={res.get(k)}")
+            if res.get("errors"):
+                print(f"errors={json.dumps(res.get('errors'), ensure_ascii=True)}")
+            print(f"rows={json.dumps(res.get('rows') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "queue-status":
+            res = queue_status(
+                cfg.root_dir,
+                stale_minutes=int(getattr(args, "stale_lease_minutes", 60) or 60),
+            )
+            for k in (
+                "drive_root",
+                "queue_root",
+                "pending_count",
+                "global_pending_count",
+                "processing_count",
+                "done_count",
+                "failed_count",
+                "invalid_count",
+                "active_leases_count",
+                "stale_leases_count",
+                "active_locks_count",
+                "stale_locks_count",
+                "pending_claimable",
+                "pending_already_done",
+                "pending_invalid",
+                "pending_blocked_by_active_lock",
+                "mp3_done_count",
+                "existing_mp3_without_done_marker",
+                "partial_or_invalid_mp3",
+            ):
+                print(f"{k}={res.get(k)}")
+            print(f"pending_reasons={json.dumps(res.get('pending_reasons') or {}, ensure_ascii=True)}")
+            print(f"assigned_pending_by_worker={json.dumps(res.get('assigned_pending_by_worker') or {}, ensure_ascii=True)}")
+            print(f"assigned_processing_by_worker={json.dumps(res.get('assigned_processing_by_worker') or {}, ensure_ascii=True)}")
+            print(f"assigned_done_by_worker={json.dumps(res.get('assigned_done_by_worker') or {}, ensure_ascii=True)}")
+            print(f"workers_current_job={json.dumps(res.get('workers_current_job') or {}, ensure_ascii=True)}")
+            print(f"duplicate_assigned_jobs={json.dumps(res.get('duplicate_assigned_jobs') or [], ensure_ascii=True)}")
+            print(f"duplicate_processing_jobs={json.dumps(res.get('duplicate_processing_jobs') or [], ensure_ascii=True)}")
+            workers = res.get("workers") if isinstance(res.get("workers"), list) else []
+            print("workers:")
+            for w in workers:
+                print(
+                    f"  {w.get('worker_email')}: state={w.get('state')} current_job={w.get('current_job')} "
+                    f"heartbeat={w.get('heartbeat_at')} completed={w.get('completed')} failed={w.get('failed')}"
+                )
+            return 0
+
+        if sub == "inspect-job":
+            res = inspect_queue_job(
+                cfg.root_dir,
+                job_id=str(getattr(args, "job_id", "") or ""),
+                stale_minutes=int(getattr(args, "stale_lease_minutes", 60) or 60),
+            )
+            def _ascii_value(value: object) -> str:
+                return json.dumps(str(value), ensure_ascii=True)[1:-1]
+
+            for k in (
+                "pending_json_path",
+                "pending_json_readable",
+                "job_id",
+                "text_name",
+                "drive_text_path",
+                "text_exists",
+                "text_size",
+                "expected_mp3_path",
+                "final_mp3_exists",
+                "final_mp3_valid",
+                "done_marker_exists",
+                "processing_marker_exists",
+                "lock_path",
+                "lock_state",
+                "can_claim",
+                "reject_reason",
+            ):
+                print(f"{k}={_ascii_value(res.get(k))}")
+            print(f"active_leases={json.dumps(res.get('active_leases') or [], ensure_ascii=True)}")
+            print(f"released_leases={json.dumps(res.get('released_leases') or [], ensure_ascii=True)}")
+            print(f"stale_leases={json.dumps(res.get('stale_leases') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "quarantine-job":
+            res = quarantine_queue_job(
+                cfg.root_dir,
+                job_id=str(getattr(args, "job_id", "") or ""),
+                reason=str(getattr(args, "reason", "") or ""),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            def _ascii_value(value: object) -> str:
+                return json.dumps(str(value), ensure_ascii=True)[1:-1]
+
+            for k in (
+                "execute",
+                "job_id",
+                "reason",
+                "pending_json_path",
+                "pending_json_exists",
+                "invalid_marker_path",
+                "invalid_marker_written",
+                "action",
+            ):
+                print(f"{k}={_ascii_value(res.get(k))}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "requeue-stale":
+            res = requeue_stale_leases(
+                cfg.root_dir,
+                stale_minutes=int(getattr(args, "stale_lease_minutes", 60) or 60),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            for k in (
+                "execute",
+                "drive_root",
+                "queue_root",
+                "stale_lease_minutes",
+                "leases_count",
+                "planned_touch_count",
+                "skipped_active",
+                "skipped_released",
+                "stale_released",
+                "stale_locks_released",
+                "skipped_active_locks",
+                "adopted_done_markers",
+                "processing_markers_removed",
+            ):
+                print(f"{k}={res.get(k)}")
+            print("leases:")
+            rows = res.get("rows") if isinstance(res.get("rows"), list) else []
+            def _ascii_value(value: object) -> str:
+                return json.dumps(str(value), ensure_ascii=True)[1:-1]
+
+            for row in rows:
+                print(
+                    "  "
+                    f"job_id={_ascii_value(row.get('job_id'))} "
+                    f"worker={_ascii_value(row.get('worker_email'))} "
+                    f"state={_ascii_value(row.get('state'))} "
+                    f"claimed_at={_ascii_value(row.get('claimed_at'))} "
+                    f"heartbeat_at={_ascii_value(row.get('heartbeat_at'))} "
+                    f"age_minutes={row.get('age_minutes')} "
+                    f"active={row.get('active')} "
+                    f"stale={row.get('stale')} "
+                    f"final_mp3={row.get('final_mp3_valid')} "
+                    f"done_marker={row.get('done_marker_exists')} "
+                    f"processing_marker={row.get('processing_marker_exists')} "
+                    f"will={_ascii_value(row.get('planned_action'))}"
+                )
+            if res.get("errors"):
+                print(f"errors={json.dumps(res.get('errors'), ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "verify-drive-queue":
+            res = verify_drive_queue(
+                cfg.root_dir,
+                stale_minutes=int(getattr(args, "stale_lease_minutes", 60) or 60),
+            )
+            for k in (
+                "drive_root",
+                "queue_root",
+                "pending",
+                "done",
+                "failed",
+                "done_ready",
+                "done_missing_output",
+                "pending_ready_without_done",
+                "pending_missing_output",
+                "active_leases",
+                "stale_leases",
+                "mp3_done_count",
+                "partial_or_invalid_mp3",
+            ):
+                print(f"{k}={res.get(k)}")
+            return 0
+
+        if sub == "import-drive-queue":
+            res = import_drive_queue(
+                cfg.root_dir,
+                execute=bool(getattr(args, "execute", False)),
+                force=bool(getattr(args, "force", False)),
+            )
+            for k in (
+                "execute",
+                "drive_root",
+                "mp3_dir",
+                "queue_root",
+                "job_files",
+                "planned_import",
+                "imported",
+                "skipped_existing",
+                "missing_mp3",
+                "invalid_mp3",
+                "missing_target",
+                "report_path",
+            ):
+                print(f"{k}={res.get(k)}")
+            if res.get("errors"):
+                print(f"errors={json.dumps(res.get('errors'), ensure_ascii=True)}")
+            print(f"first_targets={json.dumps(res.get('first_targets') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "mark-skipped":
+            raw_names = str(getattr(args, "names", "") or "")
+            names = [item.strip() for item in raw_names.replace("|", ",").split(",") if item.strip()]
+            res = mark_drive_expected_skipped(
+                cfg.root_dir,
+                names=names,
+                reason=str(getattr(args, "reason", "") or "manual skip missing expected mp3"),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            for k in (
+                "execute",
+                "job_dir",
+                "expected_count",
+                "requested_count",
+                "marked_count",
+                "already_or_total_manual_skipped",
+                "manual_skipped_json",
+                "manual_skipped_txt",
+                "report_path",
+            ):
+                print(f"{k}={res.get(k)}")
+            print(f"marked={json.dumps(res.get('marked') or [], ensure_ascii=True)}")
+            print(f"skipped_not_expected={json.dumps(res.get('skipped_not_expected') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub == "mark-missing-skipped":
+            res = mark_missing_drive_expected_skipped(
+                cfg.root_dir,
+                reason=str(getattr(args, "reason", "") or "manual skip missing expected mp3"),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            for k in (
+                "execute",
+                "job_dir",
+                "expected_count",
+                "missing_before_mark_count",
+                "marked_count",
+                "already_or_total_manual_skipped",
+                "manual_skipped_json",
+                "manual_skipped_txt",
+                "report_path",
+            ):
+                print(f"{k}={res.get(k)}")
+            print(f"missing_before_mark={json.dumps(res.get('missing_before_mark') or [], ensure_ascii=True)}")
+            print(f"marked={json.dumps(res.get('marked') or [], ensure_ascii=True)}")
+            return 0 if res.get("ok", False) else 2
+
+        if sub in {"wait-drive", "resume-drive-wait"}:
             mdir = getattr(args, "mp3_dir", None)
             force = bool(getattr(args, "force", False))
             wait_interval = int(getattr(args, "wait_interval_minutes", 0) or 0)
             max_wait = int(getattr(args, "max_wait_hours", 0) or 0)
+            if sub == "resume-drive-wait":
+                print("[resume-drive-wait] TXT/job на Drive не перезаписываются — только ожидание mp3 и import.", flush=True)
             try:
                 res = wait_drive_mp3_and_import(
                     cfg.root_dir,
@@ -1372,6 +2848,7 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                     wait_interval_minutes=(wait_interval if wait_interval > 0 else None),
                     max_wait_hours=(max_wait if max_wait > 0 else None),
                     force=force,
+                    human_launch=human_launch,
                 )
             except ValueError as exc:
                 print(str(exc))
@@ -1409,11 +2886,22 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
             resume_fc = bool(exp.get("resume_wait_for_pending_job"))
             print(f"resume_wait_for_pending_job={resume_fc}")
             if int(exp.get("exported", 0) or 0) <= 0 and not resume_fc:
-                print("No prepared output/site stories found.")
-                print("This is a TTS-only command.")
-                print("For raw input stories, run:")
-                print("[S] Full Site pipeline with Kokoro Google Drive TTS")
-                return 2
+                from orchestrator.site_tts.colab_batch import drive_kokoro_job_pending_on_drive
+
+                pending_fc, pinfo_fc = drive_kokoro_job_pending_on_drive(cfg.root_dir)
+                if not pending_fc:
+                    print("No prepared output/site stories found.")
+                    print("This is a TTS-only command.")
+                    print("For raw input stories, run:")
+                    print("[S] Full Site pipeline with Kokoro Google Drive TTS")
+                    return 2
+                print(
+                    f"[full-cycle-drive] pending Drive job detected ({pinfo_fc.get('reason', '')}) — "
+                    "пропускаем export, переходим к wait/import.",
+                    flush=True,
+                )
+            else:
+                print("[full-cycle-drive] export done — entering wait for Drive mp3…", flush=True)
             try:
                 res = wait_drive_mp3_and_import(
                     cfg.root_dir,
@@ -1421,6 +2909,7 @@ def _site_tts_cli(args: argparse.Namespace, cfg: OrchestratorConfig) -> int:
                     wait_interval_minutes=(wait_interval if wait_interval > 0 else None),
                     max_wait_hours=(max_wait if max_wait > 0 else None),
                     force=force,
+                    human_launch=human_launch,
                 )
             except ValueError as exc:
                 print(str(exc))
@@ -1496,8 +2985,11 @@ def main() -> int:
                 options=YoutubePrefilterFromSiteOptions(
                     site_run_id=str(args.site_run_id).strip(),
                     youtube_run_id=str(args.youtube_run_id).strip(),
-                    min_words=int(args.min_words),
-                    max_words=int(args.max_words),
+                    min_words=args.min_words,
+                    max_words=args.max_words,
+                    min_minutes=args.min_minutes,
+                    max_minutes=args.max_minutes,
+                    words_per_minute=args.words_per_minute,
                     force=bool(args.force),
                 ),
             )
@@ -1511,7 +3003,14 @@ def main() -> int:
                 f" size_no={result.get('size_no', 0)}"
                 f" too_short={result.get('too_short', 0)}"
                 f" too_long={result.get('too_long', 0)}"
+                f" empty_text={result.get('empty_text', 0)}"
                 f" missing_cleaned_path={result.get('missing_cleaned_path', 0)}"
+            )
+            print(
+                "duration_contract="
+                f"{result.get('min_minutes')}-{result.get('max_minutes')}min "
+                f"@{result.get('words_per_minute')}wpm "
+                f"words={result.get('min_words')}-{result.get('max_words')}"
             )
             print(f"deferred_manifest={result.get('deferred_manifest')}")
             print(f"selection_dir={result.get('selection_dir')}")
@@ -1530,8 +3029,11 @@ def main() -> int:
                 options=YoutubeSelectionFromSiteOptions(
                     site_run_id=str(args.site_run_id).strip(),
                     youtube_run_id=str(args.youtube_run_id).strip(),
-                    min_words=int(args.min_words),
-                    max_words=int(args.max_words),
+                    min_words=args.min_words,
+                    max_words=args.max_words,
+                    min_minutes=args.min_minutes,
+                    max_minutes=args.max_minutes,
+                    words_per_minute=args.words_per_minute,
                     force=bool(args.force),
                 ),
             )
@@ -1544,6 +3046,12 @@ def main() -> int:
                 f" size_yes={result.get('size_yes', 0)}"
                 f" size_no={result.get('size_no', 0)}"
                 f" prepared={result.get('prepared', 0)}"
+            )
+            print(
+                "duration_contract="
+                f"{result.get('min_minutes')}-{result.get('max_minutes')}min "
+                f"@{result.get('words_per_minute')}wpm "
+                f"words={result.get('min_words')}-{result.get('max_words')}"
             )
             if result.get("message"):
                 print(f"message={result.get('message')}")
@@ -1766,6 +3274,1330 @@ def main() -> int:
                 print(f"imported_from={result.get('imported_from')}")
             print(f"safe_bridge_status={result.get('safe_bridge_status')}")
             return 0
+
+        if sub_cmd == "safe-status":
+            result = run_youtube_safe_status(
+                config=cfg,
+                options=YoutubeSafeStatusOptions(story_id=str(args.story_id).strip()),
+            )
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"expected_language={result.get('expected_language')}")
+            print(f"source_path={result.get('source_path')}")
+            print(f"source_language={result.get('source_language')}")
+            print(f"safe_story_path={result.get('safe_story_path')}")
+            print(f"safe_story_language={result.get('safe_story_language')}")
+            print(f"safe_story_status={result.get('safe_story_status')}")
+            print(f"promo_path={result.get('promo_path')}")
+            print(f"promo_language={result.get('promo_language')}")
+            print(f"promo_status={result.get('promo_status')}")
+            print(f"text_ready_for_audio_language={result.get('text_ready_for_audio_language')}")
+            print(f"audio_path={result.get('audio_path')}")
+            print(f"audio_exists={result.get('audio_exists')}")
+            print(f"tts_status={result.get('tts_status')}")
+            print(f"current_blocker={result.get('current_blocker')}")
+            print(f"next_action={result.get('next_action')}")
+            print(f"story_manifest={result.get('story_manifest')}")
+            return 0
+
+        if sub_cmd == "safe-regenerate":
+            result = run_youtube_safe_regenerate(
+                config=cfg,
+                options=YoutubeSafeRegenerateOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                ),
+            )
+            print(f"ok={result.get('ok')}")
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"source_path={result.get('source_path')}")
+            print(f"source_language={result.get('source_language')}")
+            print(f"safe_story_path={result.get('safe_story_path')}")
+            print(f"safe_story_language={result.get('safe_story_language')}")
+            print(f"safe_story_status={result.get('safe_story_status')}")
+            print(f"backup_path={result.get('backup_path')}")
+            print(f"current_blocker={result.get('current_blocker')}")
+            print(f"next_action={result.get('next_action')}")
+            if result.get("message"):
+                print(f"message={result.get('message')}")
+            for path in result.get("changed_files") or []:
+                print(f"changed_file={path}")
+            return 0 if result.get("ok", False) else 2
+
+        if sub_cmd == "safe-english-run":
+            result = run_youtube_safe_english_run(
+                config=cfg,
+                options=YoutubeSafeEnglishRunOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                    force=bool(getattr(args, "force", False)),
+                    account_index=int(getattr(args, "account_index", 0) or 0),
+                    gemini_registry_path=getattr(args, "gemini_registry", Path("configs/gemini_bots_registry.example.yaml")),
+                    reuse_legacy_user_data=bool(getattr(args, "reuse_legacy_user_data", False)),
+                ),
+            )
+            print(f"ok={result.get('ok')}")
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"source_path={result.get('source_path')}")
+            print(f"source_language={result.get('source_language')}")
+            print(f"safe_story_path={result.get('safe_story_path')}")
+            print(f"safe_story_language={result.get('safe_story_language')}")
+            print(f"expected_language={result.get('expected_language')}")
+            print(f"prompt_path={result.get('prompt_path')}")
+            print(f"chunks_total={result.get('chunks_total')}")
+            print(f"chunks_done={result.get('chunks_done')}")
+            print(f"raw_outputs_dir={result.get('raw_outputs_dir')}")
+            print(f"candidate_output_path={result.get('candidate_output_path')}")
+            print(f"final_output_path={result.get('final_output_path')}")
+            print(f"detected_language={result.get('detected_language')}")
+            print(f"validation_status={result.get('validation_status')}")
+            print(f"reason={result.get('reason')}")
+            print(f"backup_path={result.get('backup_path')}")
+            print(f"gemini_account_email={result.get('gemini_account_email')}")
+            print(f"gemini_account_index={result.get('gemini_account_index')}")
+            print(f"gemini_bot_key={result.get('gemini_bot_key')}")
+            print(f"gemini_url={result.get('gemini_url')}")
+            print(f"user_data_dir={result.get('user_data_dir')}")
+            print(f"log_path={result.get('log_path')}")
+            if result.get("message"):
+                print(f"message={result.get('message')}")
+            for path in result.get("changed_files") or []:
+                print(f"changed_file={path}")
+            return 0 if result.get("ok", False) else 2
+
+        if sub_cmd == "run-selection-bridge":
+            result = run_youtube_run_selection_bridge(
+                config=cfg,
+                options=YoutubeRunSelectionBridgeOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    input_id=str(getattr(args, "input_id", "") or "").strip(),
+                    story_id=str(getattr(args, "story_id", "") or "").strip(),
+                    execute=bool(args.execute),
+                    force=bool(getattr(args, "force", False)),
+                    reuse_legacy_user_data=bool(getattr(args, "reuse_legacy_user_data", False)),
+                    account_index=int(getattr(args, "account_index", 0) or 0),
+                    user_data_dir=str(getattr(args, "user_data_dir", "") or "").strip(),
+                ),
+            )
+            if not result.get("ok", False):
+                print(result.get("message", "youtube run-selection-bridge failed"))
+                if result.get("selection_bridge_status"):
+                    print(f"selection_bridge_status={result.get('selection_bridge_status')}")
+                return 2
+            print(f"skipped_subprocess={result.get('skipped_subprocess', False)}")
+            print(f"item_id={result.get('item_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"registry_path={result.get('registry_path')}")
+            print(f"bot_key={result.get('bot_key')}")
+            print(f"bot_account_email={result.get('bot_account_email')}")
+            print(f"bot_url={result.get('bot_url')}")
+            print(f"staging_input_txt={result.get('staging_input_txt')}")
+            print(f"gemini_stories_dir={result.get('gemini_stories_dir')}")
+            print(f"gemini_user_data_dir={result.get('gemini_user_data_dir')}")
+            print(f"user_data_source={result.get('user_data_source')}")
+            print(f"gemini_bots_config={result.get('gemini_bots_config')}")
+            print(f"expected_gemini_output_text={result.get('expected_gemini_output_text')}")
+            print(f"word_count={result.get('word_count')}")
+            print(f"estimated_tts_minutes={result.get('estimated_tts_minutes')}")
+            print(f"duration_gate={result.get('duration_gate')}")
+            print(f"duration_contract={result.get('duration_contract')}")
+            print(f"metadata_header_present={result.get('metadata_header_present')}")
+            print(f"manual_cmd_windows={result.get('manual_cmd_windows')}")
+            print(f"selection_bridge_status={result.get('selection_bridge_status')}")
+            if result.get("gemini_auto_exit_code") is not None:
+                print(f"gemini_auto_exit_code={result.get('gemini_auto_exit_code')}")
+            if result.get("imported_to"):
+                print(f"imported_to={result.get('imported_to')}")
+            if result.get("import_message"):
+                print(f"import_message={result.get('import_message')}")
+            if result.get("verdict"):
+                print(f"verdict={result.get('verdict')}")
+            if result.get("message"):
+                print(f"message={result.get('message')}")
+            return 0
+
+        if sub_cmd == "selection-batch-from-site":
+            result = run_youtube_selection_batch_from_site(
+                config=cfg,
+                options=YoutubeSelectionBatchFromSiteOptions(
+                    site_run_id=str(args.site_run_id).strip(),
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    min_words=args.min_words,
+                    max_words=args.max_words,
+                    min_minutes=args.min_minutes,
+                    max_minutes=args.max_minutes,
+                    words_per_minute=args.words_per_minute,
+                    max_attempts=int(args.max_attempts),
+                    target_yes=int(args.target_yes),
+                    workers=int(args.workers),
+                    account_start_index=int(args.account_start_index),
+                    execute=bool(args.execute),
+                    retry_failed=bool(args.retry_failed),
+                    seed=args.seed,
+                ),
+            )
+            if not result.get("ok", False):
+                print(result.get("message", "youtube selection-batch-from-site failed"))
+                return 2
+            print(
+                "summary:"
+                f" status={result.get('status', '')}"
+                f" candidates={result.get('candidate_count', '')}"
+                f" planned={result.get('planned_count', '')}"
+                f" attempts={result.get('attempts', 0)}"
+                f" yes={result.get('yes_count', 0)}"
+                f" no={result.get('no_count', 0)}"
+                f" failed={result.get('failed_count', 0)}"
+            )
+            if result.get("excluded") is not None:
+                print(f"excluded={json.dumps(result.get('excluded'), ensure_ascii=False)}")
+            if result.get("already_checked_clean_input_count") is not None:
+                print(f"already_checked_clean_input_count={result.get('already_checked_clean_input_count')}")
+            if result.get("input_format"):
+                print(f"input_format={result.get('input_format')}")
+            if result.get("metadata_header_enabled") is not None:
+                print(f"metadata_header_enabled={result.get('metadata_header_enabled')}")
+            if result.get("plan_path"):
+                print(f"plan_path={result.get('plan_path')}")
+            if result.get("summary_path"):
+                print(f"summary_path={result.get('summary_path')}")
+            if result.get("results_path"):
+                print(f"results_path={result.get('results_path')}")
+            if result.get("yes_path"):
+                print(f"yes_path={result.get('yes_path')}")
+            if result.get("no_path"):
+                print(f"no_path={result.get('no_path')}")
+            if result.get("failed_path"):
+                print(f"failed_path={result.get('failed_path')}")
+            for row in result.get("first_20", [])[:20] if isinstance(result.get("first_20", []), list) else []:
+                print(
+                    "candidate:"
+                    f" rank={row.get('rank')}"
+                    f" title={row.get('canonical_basename')}"
+                    f" words={row.get('word_count')}"
+                    f" minutes={row.get('estimated_minutes')}"
+                )
+            return 0
+
+        if sub_cmd == "promo-run":
+            result = run_youtube_promo_run(
+                config=cfg,
+                options=YoutubePromoRunOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                    force=bool(getattr(args, "force", False)),
+                    fresh_gemini_session=not bool(getattr(args, "reuse_legacy_user_data", False)),
+                    account_index=int(getattr(args, "account_index", 0) or 0),
+                    gemini_registry_path=getattr(args, "gemini_registry", None),
+                ),
+            )
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"source_path={result.get('source_path')}")
+            print(f"source_language={result.get('source_language')}")
+            print(f"expected_language={result.get('expected_language')}")
+            print(f"output_path={result.get('output_path')}")
+            print(f"output_language={result.get('output_language')}")
+            print(f"climax_snippet_path={result.get('climax_snippet_path')}")
+            print(f"intro_inserted={result.get('intro_inserted')}")
+            print(f"mid_inserted={result.get('mid_inserted')}")
+            print(f"outro_inserted={result.get('outro_inserted')}")
+            print(f"climax_method={result.get('climax_method')}")
+            print(f"placeholder_ads_used={result.get('placeholder_ads_used')}")
+            print(f"fresh_gemini_session={result.get('fresh_gemini_session')}")
+            print(f"user_data_dir={result.get('user_data_dir')}")
+            print(f"gemini_account_email={result.get('gemini_account_email')}")
+            print(f"gemini_account_index={result.get('gemini_account_index')}")
+            print(f"gemini_bot_key={result.get('gemini_bot_key')}")
+            print(f"gemini_url={result.get('gemini_url')}")
+            print(f"gemini_registry_path={result.get('gemini_registry_path')}")
+            audio = result.get("audio") if isinstance(result.get("audio"), dict) else {}
+            print(f"audio_status={audio.get('status')}")
+            print(f"audio_stale={audio.get('stale')}")
+            print(f"current_blocker={result.get('current_blocker')}")
+            print(f"next_action={result.get('next_action')}")
+            if result.get("legacy_log_path"):
+                print(f"legacy_log_path={result.get('legacy_log_path')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            if result.get("manifest_path"):
+                print(f"manifest_path={result.get('manifest_path')}")
+            print(f"changed_files={json.dumps(result.get('changed_files') or [], ensure_ascii=True)}")
+            return 0 if result.get("ok") or result.get("status") == "would_run" else 2
+
+        if sub_cmd == "promo-status":
+            result = run_youtube_promo_status(
+                config=cfg,
+                options=YoutubePromoStatusOptions(story_id=str(args.story_id).strip()),
+            )
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"safe_story_exists={result.get('safe_story_exists')}")
+            print(f"safe_story_path={result.get('safe_story_path')}")
+            print(f"source_path={result.get('source_path')}")
+            print(f"source_language={result.get('source_language')}")
+            print(f"expected_language={result.get('expected_language')}")
+            print(f"source_exists={result.get('source_exists')}")
+            print(f"output_exists={result.get('output_exists')}")
+            print(f"output_path={result.get('output_path')}")
+            print(f"output_language={result.get('output_language')}")
+            print(f"has_promo_markers={result.get('has_promo_markers')}")
+            print(f"has_legacy_promo_text={result.get('has_legacy_promo_text')}")
+            print(f"output_equals_safe_story={result.get('output_equals_safe_story')}")
+            print(f"intro_inserted={result.get('intro_inserted')}")
+            print(f"mid_inserted={result.get('mid_inserted')}")
+            print(f"outro_inserted={result.get('outro_inserted')}")
+            print(f"climax_snippet_exists={result.get('climax_snippet_exists')}")
+            print(f"climax_snippet_path={result.get('climax_snippet_path')}")
+            print(f"climax_method={result.get('climax_method')}")
+            print(f"placeholder_ads_used={result.get('placeholder_ads_used')}")
+            audio = result.get("audio") if isinstance(result.get("audio"), dict) else {}
+            print(f"audio_exists={audio.get('exists')}")
+            print(f"audio_status={audio.get('status')}")
+            print(f"audio_stale={audio.get('stale')}")
+            print(f"text_ready_for_audio_hash={audio.get('text_ready_for_audio_hash')}")
+            print(f"current_text_ready_for_audio_hash={audio.get('current_text_ready_for_audio_hash')}")
+            print(f"current_blocker={result.get('current_blocker')}")
+            print(f"next_action={result.get('next_action')}")
+            print(f"report_path={result.get('report_path')}")
+            return 0
+
+        if sub_cmd == "tts-kokoro-colab":
+            tts_sub = str(getattr(args, "youtube_tts_kokoro_cmd", "") or "").strip()
+            if tts_sub == "export":
+                result = run_youtube_tts_kokoro_colab_export(
+                    config=cfg,
+                    options=YoutubeTtsKokoroColabExportOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(args.execute),
+                        drive_root=args.drive_root,
+                    ),
+                )
+                if not result.get("ok", False):
+                    print(result.get("message", "youtube tts-kokoro-colab export failed"))
+                    for p in result.get("missing", []) or []:
+                        print(f"missing={p}")
+                    return 2
+                print(f"status={result.get('status')}")
+                print(f"execute={result.get('execute')}")
+                print(f"youtube_run_id={result.get('youtube_run_id')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"canonical_basename={result.get('canonical_basename')}")
+                print(f"source_text_path={result.get('source_text_path')}")
+                print(f"drive_root={result.get('drive_root')}")
+                print(f"drive_text_path={result.get('drive_text_path')}")
+                print(f"expected_drive_audio_path={result.get('expected_drive_audio_path')}")
+                print(f"expected_local_audio_path={result.get('expected_local_audio_path')}")
+                print(f"voice_label={result.get('voice_label')}")
+                print(f"kokoro_voice={result.get('kokoro_voice')}")
+                print(f"speed={result.get('speed')}")
+                print(f"sample_rate={result.get('sample_rate')}")
+                print(f"expected_files_path={result.get('expected_files_path')}")
+                print(f"expected_count_path={result.get('expected_count_path')}")
+                print(f"youtube_tts_job_path={result.get('youtube_tts_job_path')}")
+                print(f"youtube_tts_job_manifest_path={result.get('youtube_tts_job_manifest_path')}")
+                if result.get("local_export_report"):
+                    print(f"local_export_report={result.get('local_export_report')}")
+                return 0
+            if tts_sub == "verify":
+                result = run_youtube_tts_kokoro_colab_verify(
+                    config=cfg,
+                    options=YoutubeTtsKokoroColabVerifyOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        story_id=str(args.story_id).strip(),
+                        drive_root=args.drive_root,
+                    ),
+                )
+                if not result.get("ok", False):
+                    print(result.get("message", "youtube tts-kokoro-colab verify failed"))
+                    return 2
+                print(f"status={result.get('status')}")
+                print(f"youtube_run_id={result.get('youtube_run_id')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"canonical_basename={result.get('canonical_basename')}")
+                print(f"expected_drive_audio_path={result.get('expected_drive_audio_path')}")
+                print(f"exists={result.get('exists')}")
+                print(f"size={result.get('size')}")
+                print(f"modified_time={result.get('modified_time')}")
+                print(f"expected_local_audio_path={result.get('expected_local_audio_path')}")
+                return 0
+            if tts_sub == "import":
+                result = run_youtube_tts_kokoro_colab_import(
+                    config=cfg,
+                    options=YoutubeTtsKokoroColabImportOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        story_id=str(args.story_id).strip(),
+                        drive_root=args.drive_root,
+                        force=bool(args.force),
+                    ),
+                )
+                if not result.get("ok", False):
+                    print(result.get("message", "youtube tts-kokoro-colab import failed"))
+                    if result.get("expected_drive_audio_path"):
+                        print(f"expected_drive_audio_path={result.get('expected_drive_audio_path')}")
+                    if result.get("expected_local_audio_path"):
+                        print(f"expected_local_audio_path={result.get('expected_local_audio_path')}")
+                    return 2
+                print(f"status={result.get('status')}")
+                print(f"youtube_run_id={result.get('youtube_run_id')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"canonical_basename={result.get('canonical_basename')}")
+                print(f"expected_drive_audio_path={result.get('expected_drive_audio_path')}")
+                print(f"expected_local_audio_path={result.get('expected_local_audio_path')}")
+                print(f"source_size={result.get('source_size')}")
+                print(f"target_size={result.get('target_size')}")
+                print(f"audio_manifest_path={result.get('audio_manifest_path')}")
+                return 0
+            print("Неизвестная подкоманда youtube tts-kokoro-colab")
+            return 2
+
+        if sub_cmd == "characters":
+            result = run_youtube_characters_bridge(
+                config=cfg,
+                options=YoutubeCharactersBridgeOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                print(result.get("message", "youtube characters bridge preflight failed"))
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"story_dir={result.get('story_dir')}")
+            print(f"source_text_path={result.get('source_text_path')}")
+            print(f"source_text_words={result.get('source_text_words')}")
+            print(f"characters_path={result.get('characters_path')}")
+            print(f"characters_exists={result.get('characters_exists')}")
+            print(f"legacy_stage_dir={result.get('legacy_stage_dir')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            print(f"manual_cmd_windows={result.get('manual_cmd_windows')}")
+            print(f"note={result.get('note')}")
+            return 0
+
+        if sub_cmd == "characters-export":
+            result = run_youtube_characters_export(
+                config=cfg,
+                options=YoutubeCharactersExportOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"source_text_path={result.get('source_text_path')}")
+            print(f"source_text_words={result.get('source_text_words')}")
+            print(f"staging_dir={result.get('staging_dir')}")
+            print(f"staging_story_txt={result.get('staging_story_txt')}")
+            print(f"staging_readme={result.get('staging_readme')}")
+            print(f"target_characters_path={result.get('target_characters_path')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            print(f"note={result.get('note')}")
+            return 0
+
+        if sub_cmd == "characters-import":
+            result = run_youtube_characters_import(
+                config=cfg,
+                options=YoutubeCharactersImportOptions(
+                    story_id=str(args.story_id).strip(),
+                    source=args.source,
+                    execute=bool(args.execute),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"source={result.get('source')}")
+            print(f"source_size={result.get('source_size')}")
+            print(f"target_characters_path={result.get('target_characters_path')}")
+            if result.get("target_size") is not None:
+                print(f"target_size={result.get('target_size')}")
+            if result.get("manifest_path"):
+                print(f"manifest_path={result.get('manifest_path')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            return 0
+
+        if sub_cmd == "director-prompts":
+            result = run_youtube_director_prompts_bridge(
+                config=cfg,
+                options=YoutubeDirectorPromptsBridgeOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                print(result.get("message", "youtube director-prompts bridge preflight failed"))
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"story_dir={result.get('story_dir')}")
+            print(f"source_text_path={result.get('source_text_path')}")
+            print(f"source_text_words={result.get('source_text_words')}")
+            print(f"audio_path={result.get('audio_path')}")
+            print(f"audio_duration_sec={result.get('audio_duration_sec')}")
+            print(f"frame_duration_sec={result.get('frame_duration_sec')}")
+            print(f"estimated_prompts={result.get('estimated_prompts')}")
+            print(f"characters_path={result.get('characters_path')}")
+            print(f"characters_exists={result.get('characters_exists')}")
+            print(f"prompts_path={result.get('prompts_path')}")
+            print(f"prompts_count={result.get('prompts_count')}")
+            print(f"legacy_stage_dir={result.get('legacy_stage_dir')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            print(f"manual_cmd_windows={result.get('manual_cmd_windows')}")
+            print(f"note={result.get('note')}")
+            return 0
+
+        if sub_cmd == "director-prompts-export":
+            result = run_youtube_director_prompts_export(
+                config=cfg,
+                options=YoutubeDirectorPromptsExportOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(args.execute),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"source_text_path={result.get('source_text_path')}")
+            print(f"source_text_words={result.get('source_text_words')}")
+            print(f"audio_path={result.get('audio_path')}")
+            print(f"audio_duration_sec={result.get('audio_duration_sec')}")
+            print(f"frame_duration_sec={result.get('frame_duration_sec')}")
+            print(f"estimated_prompts={result.get('estimated_prompts')}")
+            print(f"characters_path={result.get('characters_path')}")
+            print(f"staging_dir={result.get('staging_dir')}")
+            print(f"staging_story_txt={result.get('staging_story_txt')}")
+            print(f"staging_characters_txt={result.get('staging_characters_txt')}")
+            print(f"staging_narration_path_txt={result.get('staging_narration_path_txt')}")
+            print(f"staging_readme={result.get('staging_readme')}")
+            print(f"target_prompts_path={result.get('target_prompts_path')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            print(f"note={result.get('note')}")
+            return 0
+
+        if sub_cmd == "director-prompts-import":
+            result = run_youtube_director_prompts_import(
+                config=cfg,
+                options=YoutubeDirectorPromptsImportOptions(
+                    story_id=str(args.story_id).strip(),
+                    source=args.source,
+                    execute=bool(args.execute),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"source={result.get('source')}")
+            print(f"source_size={result.get('source_size')}")
+            print(f"prompts_count={result.get('prompts_count')}")
+            print(f"target_prompts_path={result.get('target_prompts_path')}")
+            if result.get("target_size") is not None:
+                print(f"target_size={result.get('target_size')}")
+            if result.get("manifest_path"):
+                print(f"manifest_path={result.get('manifest_path')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            return 0
+
+        if sub_cmd == "frames-runpod":
+            result = run_youtube_frames_runpod_bridge(
+                config=cfg,
+                options=YoutubeFramesRunpodBridgeOptions(
+                    story_id=str(args.story_id).strip(),
+                    runpod_url=str(args.runpod_url).strip(),
+                    execute=bool(args.execute),
+                    prepare_only=bool(getattr(args, "prepare_only", False)),
+                    workflow=str(getattr(args, "workflow", "") or "").strip(),
+                ),
+            )
+            if not result.get("ok", False):
+                print(f"status={result.get('status')}")
+                print(result.get("message", "youtube frames-runpod bridge preflight failed"))
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                for p in result.get("missing_prerequisites", []) or []:
+                    print(f"missing_prerequisite={p}")
+                if result.get("report_path"):
+                    print(f"report_path={result.get('report_path')}")
+                if result.get("frame_jobs_path"):
+                    print(f"frame_jobs_path={result.get('frame_jobs_path')}")
+                validation = result.get("workflow_validation")
+                if validation:
+                    print(f"workflow_validation={json.dumps(validation, ensure_ascii=True)}")
+                return 2
+            print(f"status={result.get('status')}")
+            print(f"execute={result.get('execute')}")
+            print(f"prepare_only={result.get('prepare_only')}")
+            print(f"prompt_mode={result.get('prompt_mode')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"canonical_basename={result.get('canonical_basename')}")
+            print(f"story_dir={result.get('story_dir')}")
+            print(f"characters_path={result.get('characters_path')}")
+            print(f"characters_exists={result.get('characters_exists')}")
+            print(f"missing_prerequisites={json.dumps(result.get('missing_prerequisites') or [], ensure_ascii=True)}")
+            print(f"prompts_path={result.get('prompts_path')}")
+            print(f"prompts_count={result.get('prompts_count')}")
+            if result.get("payload_debug_path"):
+                print(f"payload_debug_path={result.get('payload_debug_path')}")
+            print(f"frames_dir={result.get('frames_dir')}")
+            print(f"workflow_path={result.get('workflow_path')}")
+            print(f"workflow={json.dumps(result.get('workflow') or {}, ensure_ascii=True)}")
+            print(f"workflow_validation={json.dumps(result.get('workflow_validation') or {}, ensure_ascii=True)}")
+            print(f"runpod_url_preview={result.get('runpod_url_preview')}")
+            print(f"expected_frames={result.get('expected_frames')}")
+            print(f"generated_frames={result.get('generated_frames')}")
+            print(f"pending_frames={result.get('pending_frames')}")
+            print(f"failed_frames={result.get('failed_frames')}")
+            print(f"existing_frames_total={result.get('existing_frames_total')}")
+            print(f"legacy_named_existing={json.dumps(result.get('legacy_named_existing') or [], ensure_ascii=True)}")
+            print(f"first_10_pending={json.dumps(result.get('first_10_pending') or [], ensure_ascii=True)}")
+            print(f"first_10_failed={json.dumps(result.get('first_10_failed') or [], ensure_ascii=True)}")
+            if result.get("frame_jobs_path"):
+                print(f"frame_jobs_path={result.get('frame_jobs_path')}")
+            if result.get("failed_frames_path"):
+                print(f"failed_frames_path={result.get('failed_frames_path')}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            if result.get("duration_sec") is not None:
+                print(f"duration_sec={result.get('duration_sec')}")
+            print(f"note={result.get('note')}")
+            return 0
+
+        if sub_cmd == "visuals-run":
+            result = run_youtube_visuals_run(
+                config=cfg,
+                options=YoutubeVisualsRunOptions(
+                    story_id=str(args.story_id).strip(),
+                    runpod_url=str(getattr(args, "runpod_url", "") or "").strip(),
+                    workflow=str(getattr(args, "workflow", "") or "").strip(),
+                    execute=bool(args.execute),
+                    watch=bool(getattr(args, "watch", False)),
+                    allow_gemini=bool(getattr(args, "allow_gemini", False)),
+                    auto_gemini=bool(getattr(args, "auto_gemini", False)),
+                    fresh_visuals=bool(getattr(args, "fresh_visuals", False)),
+                    prompt_runpod_url=not bool(getattr(args, "no_runpod_prompt", False)),
+                    segment_sec=float(getattr(args, "segment_sec", 180.0) or 180.0),
+                    watch_interval_sec=int(getattr(args, "watch_interval_sec", 5) or 5),
+                    watch_timeout_sec=int(getattr(args, "watch_timeout_sec", 0) or 0),
+                ),
+            )
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"mode={result.get('mode')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"story_dir={result.get('story_dir')}")
+            print(f"next_action={result.get('next_action')}")
+            print(f"blockers={json.dumps(result.get('blockers') or [], ensure_ascii=True)}")
+            print(f"changed_files={json.dumps(result.get('changed_files') or [], ensure_ascii=True)}")
+            for row in result.get("stages", []) if isinstance(result.get("stages"), list) else []:
+                print(
+                    "stage:"
+                    f" name={row.get('stage')}"
+                    f" status={row.get('status')}"
+                    f" message={row.get('message')}"
+                )
+            reports = ((result.get("status_report") or {}).get("reports") or {}) if isinstance(result.get("status_report"), dict) else {}
+            if reports.get("run_report"):
+                print(f"run_report={reports.get('run_report')}")
+            if reports.get("status_report"):
+                print(f"status_report={reports.get('status_report')}")
+            return 0 if result.get("ok") else 2
+
+        if sub_cmd == "visual-prompts-audit":
+            result = run_youtube_visual_prompts_audit(
+                config=cfg,
+                options=YoutubeVisualPromptsAuditOptions(story_id=str(args.story_id).strip()),
+            )
+            summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+            diagnosis = result.get("diagnosis") if isinstance(result.get("diagnosis"), dict) else {}
+            files = result.get("files") if isinstance(result.get("files"), dict) else {}
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"mode={result.get('mode')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"total_prompts={summary.get('total_prompts')}")
+            print(f"avg_chars={summary.get('avg_chars')}")
+            print(f"max_chars={summary.get('max_chars')}")
+            print(f"avg_words={summary.get('avg_words')}")
+            print(f"max_words={summary.get('max_words')}")
+            print(f"prompts_over_1000_chars={summary.get('prompts_over_1000_chars')}")
+            print(f"prompts_over_1500_chars={summary.get('prompts_over_1500_chars')}")
+            print(f"prompts_over_2000_chars={summary.get('prompts_over_2000_chars')}")
+            print(f"prompts_with_face_conflict={summary.get('prompts_with_face_conflict')}")
+            print(f"prompts_with_beauty_bias={summary.get('prompts_with_beauty_bias')}")
+            print(f"prompts_with_car_but_no_same_car={summary.get('prompts_with_car_but_no_same_car')}")
+            print(f"prompts_with_character_but_no_same_character={summary.get('prompts_with_character_but_no_same_character')}")
+            print(f"prompt_overload_risk={diagnosis.get('prompt_overload_risk')}")
+            print(f"report_json={files.get('report_json_path')}")
+            print(f"report_txt={files.get('report_txt_path')}")
+            for p in result.get("missing", []) or []:
+                print(f"missing={p}")
+            return 0 if result.get("ok") else 2
+
+        if sub_cmd == "characters-anchor-audit":
+            result = run_youtube_characters_anchor_audit(
+                config=cfg,
+                options=YoutubeCharactersAnchorAuditOptions(story_id=str(args.story_id).strip()),
+            )
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"characters_path={result.get('characters_path')}")
+            print(f"style_name={result.get('style_name')}")
+            print(f"characters_count={result.get('characters_count')}")
+            print(f"invalid_anchors_count={result.get('invalid_anchors_count')}")
+            print(f"forbidden_terms_total={result.get('forbidden_terms_total')}")
+            for item in result.get("findings", []) or []:
+                print(
+                    "finding:"
+                    f" id={item.get('id')}"
+                    f" role={item.get('role')}"
+                    f" forbidden_terms={json.dumps(item.get('forbidden_terms') or [], ensure_ascii=True)}"
+                )
+            for p in result.get("missing", []) or []:
+                print(f"missing={p}")
+            return 0 if result.get("status") != "missing_characters" else 2
+
+        if sub_cmd == "frames-reset":
+            result = run_youtube_frames_reset(
+                config=cfg,
+                options=YoutubeFramesResetOptions(
+                    story_id=str(args.story_id).strip(),
+                    reason=str(args.reason).strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"reason={result.get('reason')}")
+            print(f"archive_dir={result.get('archive_dir')}")
+            print(f"expected_frames={result.get('expected_frames')}")
+            print(f"archive_count={result.get('archive_count')}")
+            for p in result.get("archive_candidates", []) or []:
+                print(f"would_archive={p}")
+            for p in result.get("archived_files", []) or []:
+                print(f"archived={p}")
+            if result.get("manifest_path"):
+                print(f"manifest_path={result.get('manifest_path')}")
+            if result.get("reset_report_path"):
+                print(f"reset_report_path={result.get('reset_report_path')}")
+            for p in result.get("missing", []) or []:
+                print(f"missing={p}")
+            return 0 if result.get("ok") else 2
+
+        if sub_cmd == "visuals-clean":
+            result = run_youtube_visuals_clean(
+                config=cfg,
+                options=YoutubeVisualsCleanOptions(
+                    story_id=str(args.story_id).strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            print(f"status={result.get('status')}")
+            print(f"ok={result.get('ok')}")
+            print(f"mode={result.get('mode')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"quarantine_dir={result.get('quarantine_dir')}")
+            print(f"removed_files_count={result.get('removed_files_count', 0)}")
+            for item in result.get("cleanup_candidates", []) or []:
+                if isinstance(item, dict):
+                    print(f"would_clean={item.get('path')} reason={item.get('reason')}")
+            for item in result.get("moved_files", []) or []:
+                if isinstance(item, dict):
+                    print(f"moved={item.get('source')} -> {item.get('target')}")
+            for p in result.get("protected_paths", []) or []:
+                print(f"protected={p}")
+            verification = result.get("verification") if isinstance(result.get("verification"), dict) else {}
+            for p in verification.get("still_exists", []) or []:
+                print(f"verification_still_exists={p}")
+            scan = result.get("stale_token_scan") if isinstance(result.get("stale_token_scan"), dict) else {}
+            print(f"stale_token_findings_count={scan.get('findings_count', 0)}")
+            for item in scan.get("findings", []) or []:
+                if isinstance(item, dict):
+                    print(
+                        "stale_token:"
+                        f" path={item.get('path')}"
+                        f" line={item.get('line')}"
+                        f" terms={json.dumps(item.get('terms') or [], ensure_ascii=True)}"
+                    )
+            for blocker in result.get("blockers", []) or []:
+                print(f"blocker={blocker}")
+            if result.get("report_path"):
+                print(f"report_path={result.get('report_path')}")
+            print(f"next_action={result.get('next_action')}")
+            return 0 if result.get("ok") else 2
+
+        if sub_cmd == "visuals-status":
+            result = run_youtube_visuals_status(
+                config=cfg,
+                options=YoutubeVisualsStatusOptions(story_id=str(args.story_id).strip()),
+            )
+            print(f"story_id={result.get('story_id')}")
+            print(f"safe_story={result.get('safe_story')}")
+            lang = result.get("language") if isinstance(result.get("language"), dict) else {}
+            print(f"expected_language={lang.get('expected_language')}")
+            print(f"source_language={lang.get('source_language')}")
+            print(f"safe_story_language={lang.get('safe_story_language')}")
+            print(f"safe_story_status={lang.get('safe_story_status')}")
+            print(f"text_ready_for_audio_language={lang.get('text_ready_for_audio_language')}")
+            promo = result.get("promo") if isinstance(result.get("promo"), dict) else {}
+            print(f"promo_status={promo.get('status')}")
+            print(f"promo_output_path={promo.get('output_path')}")
+            print(f"promo_intro_inserted={promo.get('intro_inserted')}")
+            print(f"promo_mid_inserted={promo.get('mid_inserted')}")
+            print(f"promo_outro_inserted={promo.get('outro_inserted')}")
+            narration = result.get("narration") if isinstance(result.get("narration"), dict) else {}
+            print(f"narration_status={narration.get('status')}")
+            print(f"narration_stale={narration.get('stale')}")
+            print(f"narration_duration_sec={narration.get('duration_sec')}")
+            chars = result.get("characters") if isinstance(result.get("characters"), dict) else {}
+            prompts = result.get("prompts") if isinstance(result.get("prompts"), dict) else {}
+            frames = result.get("frames") if isinstance(result.get("frames"), dict) else {}
+            video_segments = result.get("video_segments") if isinstance(result.get("video_segments"), dict) else {}
+            print(f"characters_status={chars.get('status')}")
+            print(f"characters_path={chars.get('path')}")
+            anchor_audit = chars.get("anchor_audit") if isinstance(chars.get("anchor_audit"), dict) else {}
+            print(f"characters_anchor_status={anchor_audit.get('status')}")
+            print(f"characters_anchor_invalid_count={anchor_audit.get('invalid_anchors_count')}")
+            print(f"characters_anchor_forbidden_terms_total={anchor_audit.get('forbidden_terms_total')}")
+            print(f"prompts_status={prompts.get('status')}")
+            print(f"prompts_count={prompts.get('prompts_count')}")
+            print(f"estimated_prompts={prompts.get('estimated_prompts')}")
+            print(f"prompt_mode_available={json.dumps(prompts.get('prompt_mode_available') or {}, ensure_ascii=True)}")
+            print(f"available_prompt_modes={json.dumps(prompts.get('available_prompt_modes') or [], ensure_ascii=True)}")
+            print(f"recommended_prompt_mode={prompts.get('recommended_prompt_mode')}")
+            print(f"frames_expected={frames.get('expected')}")
+            print(f"frames_status={frames.get('status')}")
+            print(f"frames_reason={frames.get('reason')}")
+            print(f"frames_archived_to={frames.get('archived_to')}")
+            print(f"frames_existing={frames.get('existing')}")
+            print(f"frames_valid={frames.get('valid')}")
+            print(f"frames_missing={frames.get('missing')}")
+            print(f"frames_failed={frames.get('failed')}")
+            print(f"video_timeline_exists={video_segments.get('timeline_exists')}")
+            print(f"segment_jobs_exists={video_segments.get('segment_jobs_exists')}")
+            print(f"total_segments={video_segments.get('total_segments')}")
+            print(f"current_blocker={result.get('current_blocker')}")
+            print(f"next_action={result.get('next_action')}")
+            reports = result.get("reports") if isinstance(result.get("reports"), dict) else {}
+            print(f"status_report={reports.get('status_report')}")
+            print(f"run_report={reports.get('run_report')}")
+            print(f"frames_report={reports.get('frames_report')}")
+            return 0
+
+        if sub_cmd == "video":
+            video_sub = str(getattr(args, "youtube_video_cmd", "") or "").strip()
+            if video_sub == "prepare-segments":
+                result = run_youtube_video_prepare_segments(
+                    config=cfg,
+                    options=YoutubeVideoPrepareSegmentsOptions(
+                        story_id=str(args.story_id).strip(),
+                        segment_sec=float(args.segment_sec or 180.0),
+                        execute=bool(args.execute),
+                        force=bool(getattr(args, "force", False)),
+                    ),
+                )
+                if not result.get("ok", False):
+                    print(result.get("message", "youtube video prepare-segments failed"))
+                    return 2
+                print(f"status={result.get('status')}")
+                print(f"execute={result.get('execute')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"story_dir={result.get('story_dir')}")
+                print(f"audio_path={result.get('audio_path')}")
+                print(f"audio_duration_sec={result.get('audio_duration_sec')}")
+                print(f"frames_dir={result.get('frames_dir')}")
+                print(f"total_frames={result.get('total_frames')}")
+                print(f"segment_sec={result.get('segment_sec')}")
+                print(f"segment_target_sec={result.get('segment_target_sec')}")
+                print(f"segment_boundary_policy={result.get('segment_boundary_policy')}")
+                print(f"render_mode={result.get('render_mode')}")
+                print(f"total_segments={result.get('total_segments')}")
+                print(f"total_segment_duration_sec={result.get('total_segment_duration_sec')}")
+                print(f"timeline_path={result.get('timeline_path')}")
+                print(f"segment_jobs_path={result.get('segment_jobs_path')}")
+                print(f"segments_dir={result.get('segments_dir')}")
+                for row in result.get("first_5_segments", [])[:5]:
+                    print(
+                        "segment:"
+                        f" id={row.get('segment_id')}"
+                        f" start={row.get('start_sec')}"
+                        f" end={row.get('end_sec')}"
+                        f" duration={row.get('duration_sec')}"
+                        f" render_mode={row.get('render_mode')}"
+                        f" frame_range={row.get('frame_start_index')}-{row.get('frame_end_index')}"
+                        f" frames={len(row.get('frames') or [])}"
+                    )
+                return 0
+            if video_sub == "render-segment":
+                result = run_youtube_video_render_segment(
+                    config=cfg,
+                    options=YoutubeVideoRenderSegmentOptions(
+                        story_id=str(args.story_id).strip(),
+                        segment_id=str(args.segment_id).strip(),
+                        execute=bool(args.execute),
+                    ),
+                )
+                if not result.get("ok", False):
+                    print(result.get("message", "youtube video render-segment failed"))
+                    if result.get("render_log_path"):
+                        print(f"render_log_path={result.get('render_log_path')}")
+                    if result.get("report_path"):
+                        print(f"report_path={result.get('report_path')}")
+                    if result.get("partial_output_path"):
+                        print(f"partial_output_path={result.get('partial_output_path')}")
+                    return 2
+                print(f"status={result.get('status')}")
+                print(f"execute={result.get('execute')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"segment_id={result.get('segment_id')}")
+                print(f"start_sec={result.get('start_sec')}")
+                print(f"end_sec={result.get('end_sec')}")
+                print(f"duration_sec={result.get('duration_sec')}")
+                print(f"render_mode={result.get('render_mode')}")
+                print(f"audio_required={result.get('audio_required')}")
+                print(f"frames_count={result.get('frames_count')}")
+                print(f"output_segment_path={result.get('output_segment_path')}")
+                print(f"partial_output_path={result.get('partial_output_path')}")
+                if result.get("render_log_path"):
+                    print(f"render_log_path={result.get('render_log_path')}")
+                if result.get("report_path"):
+                    print(f"report_path={result.get('report_path')}")
+                validation = result.get("validation")
+                if validation:
+                    print(f"validation={json.dumps(validation, ensure_ascii=True)}")
+                return 0
+            if video_sub == "segment-status":
+                result = run_youtube_video_segment_status(
+                    config=cfg,
+                    options=YoutubeVideoSegmentStatusOptions(story_id=str(args.story_id).strip()),
+                )
+                if not result.get("ok", False):
+                    print(result.get("message", "youtube video segment-status failed"))
+                    if result.get("segment_jobs_path"):
+                        print(f"segment_jobs_path={result.get('segment_jobs_path')}")
+                    return 2
+                print(f"story_id={result.get('story_id')}")
+                print(f"audio_duration_sec={result.get('audio_duration_sec')}")
+                print(f"total_segments={result.get('total_segments')}")
+                print(f"done_segments={result.get('done_segments')}")
+                print(f"pending_segments={result.get('pending_segments')}")
+                print(f"failed_segments={result.get('failed_segments')}")
+                print(f"missing_segments={result.get('missing_segments')}")
+                print(f"invalid_segments={result.get('invalid_segments')}")
+                print(f"total_segment_duration_sec={result.get('total_segment_duration_sec')}")
+                print(f"first_10_pending={json.dumps(result.get('first_10_pending') or [], ensure_ascii=True)}")
+                print(f"first_10_invalid={json.dumps(result.get('first_10_invalid') or [], ensure_ascii=True)}")
+                print(f"segment_jobs_path={result.get('segment_jobs_path')}")
+                return 0
+            if video_sub == "export-job":
+                result = run_youtube_video_export_job(
+                    config=cfg,
+                    options=YoutubeVideoExportJobOptions(
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                        force=bool(getattr(args, "force", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"story_slug={result.get('story_slug')}")
+                print(f"drive_job_root={result.get('drive_job_root')}")
+                print(f"expected_frames={result.get('expected_frames')}")
+                print(f"frames_count={result.get('frames_count')}")
+                print(f"total_segments={result.get('total_segments')}")
+                print(f"effects_found={result.get('effects_found')}")
+                print(f"missing_effects={json.dumps(result.get('missing_effects') or [], ensure_ascii=True)}")
+                print(f"ready_marker={result.get('ready_marker')}")
+                print(f"report_path={result.get('report_path')}")
+                for p in result.get("missing", []) or []:
+                    print(f"missing={p}")
+                for cmd in result.get("worker_commands", []) or []:
+                    print(f"worker_command={cmd}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "drive-status":
+                result = run_youtube_video_drive_status(
+                    config=cfg,
+                    options=YoutubeVideoDriveStatusOptions(story_id=str(args.story_id).strip()),
+                )
+                print(f"status={result.get('status')}")
+                print(f"job_ready={result.get('job_ready')}")
+                print(f"drive_job_root={result.get('drive_job_root')}")
+                print(f"expected_segments={result.get('expected_segments')}")
+                print(f"global_pending={result.get('global_pending')}")
+                print(f"assigned_pending_by_worker={json.dumps(result.get('assigned_pending_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_processing_by_worker={json.dumps(result.get('assigned_processing_by_worker') or {}, ensure_ascii=True)}")
+                print(f"segments_done_count={result.get('segments_done_count')}")
+                print(f"duplicate_assigned_segments={json.dumps(result.get('duplicate_assigned_segments') or [], ensure_ascii=True)}")
+                print(f"duplicate_processing_segments={json.dumps(result.get('duplicate_processing_segments') or [], ensure_ascii=True)}")
+                print(f"workers={json.dumps(result.get('workers') or [], ensure_ascii=True)}")
+                print(f"worker_details={json.dumps(result.get('worker_details') or {}, ensure_ascii=True)}")
+                print(f"can_import={result.get('can_import')}")
+                print(f"can_assemble={result.get('can_assemble')}")
+                print(f"report_path={result.get('report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "setup-colab-workers":
+                result = run_youtube_video_setup_colab_workers(
+                    config=cfg,
+                    options=YoutubeVideoSetupColabWorkersOptions(
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                        youtube_folder_id=str(getattr(args, "youtube_folder_id", "") or "").strip(),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"root_worker_script_exists={result.get('root_worker_script_exists')}")
+                print(f"root_worker_script={result.get('root_worker_script')}")
+                print(f"root_bootstrap_script_exists={result.get('root_bootstrap_script_exists')}")
+                print(f"root_bootstrap_script={result.get('root_bootstrap_script')}")
+                print(f"colab_bootstrap_cell_path={result.get('colab_bootstrap_cell_path')}")
+                print(f"youtube_folder_id_set={result.get('youtube_folder_id_set')}")
+                print(f"root_compat_queue_exists={result.get('root_compat_queue_exists')}")
+                print(f"root_compat_queue={result.get('root_compat_queue')}")
+                migration = result.get("migration") if isinstance(result.get("migration"), dict) else {}
+                print(f"migrated_legacy_pending={migration.get('migrated_legacy_pending')}")
+                print(f"legacy_pending_left={json.dumps(migration.get('legacy_pending_left') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "colab-browser-profiles":
+                result = run_youtube_video_colab_browser_profiles(
+                    config=cfg,
+                    options=YoutubeVideoColabBrowserProfilesOptions(
+                        config_path=Path(str(getattr(args, "config_path", "configs/youtube_video_colab_workers.yaml"))),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"config_path={result.get('config_path')}")
+                print(f"chrome={json.dumps(result.get('chrome') or {}, ensure_ascii=True)}")
+                print(f"yandex={json.dumps(result.get('yandex') or {}, ensure_ascii=True)}")
+                print(f"manual_action_required={json.dumps(result.get('manual_action_required') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "dispatch-segments":
+                result = run_youtube_video_dispatch_segments(
+                    config=cfg,
+                    options=YoutubeVideoDispatchSegmentsOptions(
+                        story_id=str(args.story_id).strip(),
+                        workers=str(getattr(args, "workers", "") or ""),
+                        target_per_worker=int(getattr(args, "target_per_worker", 1)),
+                        max_total_assigned=int(getattr(args, "max_total_assigned", 5)),
+                        execute=bool(getattr(args, "execute", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"assigned_count={result.get('assigned_count')}")
+                print(f"assignments={json.dumps(result.get('assignments') or [], ensure_ascii=True)}")
+                queue_status = result.get("queue_status") if isinstance(result.get("queue_status"), dict) else {}
+                print(f"global_pending={queue_status.get('global_pending')}")
+                print(f"assigned_pending_by_worker={json.dumps(queue_status.get('assigned_pending_by_worker') or {}, ensure_ascii=True)}")
+                print(f"duplicate_assigned_segments={json.dumps(queue_status.get('duplicate_assigned_segments') or [], ensure_ascii=True)}")
+                print(f"duplicate_processing_segments={json.dumps(queue_status.get('duplicate_processing_segments') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "reclaim-stale-segments":
+                result = run_youtube_video_reclaim_stale_segments(
+                    config=cfg,
+                    options=YoutubeVideoReclaimStaleSegmentsOptions(
+                        story_id=str(args.story_id).strip(),
+                        stale_minutes=int(getattr(args, "stale_minutes", 10)),
+                        max_attempts=int(getattr(args, "max_attempts", 3)),
+                        execute=bool(getattr(args, "execute", False)),
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"dry_run={result.get('dry_run')}")
+                print(f"stale_minutes={result.get('stale_minutes')}")
+                print(f"max_attempts={result.get('max_attempts')}")
+                print(f"scanned_workers_count={result.get('scanned_workers_count')}")
+                print(f"scanned_workers={json.dumps(result.get('scanned_workers') or [], ensure_ascii=True)}")
+                print(f"scanned_processing_segments={result.get('scanned_processing_segments')}")
+                print(f"reclaimed_count={result.get('reclaimed_count')}")
+                print(f"moved_to_failed_count={result.get('moved_to_failed_count')}")
+                print(f"marked_done_count={result.get('marked_done_count')}")
+                print(f"skipped_count={result.get('skipped_count')}")
+                print(f"reclaimed={json.dumps(result.get('reclaimed') or [], ensure_ascii=True)}")
+                print(f"moved_to_failed={json.dumps(result.get('moved_to_failed') or [], ensure_ascii=True)}")
+                print(f"marked_done={json.dumps(result.get('marked_done') or [], ensure_ascii=True)}")
+                print(f"fresh_processing={json.dumps(result.get('fresh_processing') or [], ensure_ascii=True)}")
+                print(f"details={json.dumps(result.get('details') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "queue-status":
+                result = run_youtube_video_queue_status(
+                    config=cfg,
+                    options=YoutubeVideoQueueStatusOptions(
+                        story_id=str(args.story_id).strip(),
+                        stale_minutes=int(getattr(args, "stale_minutes", 10)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"job_ready={result.get('job_ready')}")
+                print(f"drive_job_root={result.get('drive_job_root')}")
+                print(f"stale_minutes_threshold={result.get('stale_minutes_threshold')}")
+                print(f"global_pending={result.get('global_pending')}")
+                print(f"assigned_pending_by_worker={json.dumps(result.get('assigned_pending_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_processing_by_worker={json.dumps(result.get('assigned_processing_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_done_by_worker={json.dumps(result.get('assigned_done_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_failed_by_worker={json.dumps(result.get('assigned_failed_by_worker') or {}, ensure_ascii=True)}")
+                print(f"stale_processing_by_worker={json.dumps(result.get('stale_processing_by_worker') or {}, ensure_ascii=True)}")
+                print(f"stale_processing_count={result.get('stale_processing_count')}")
+                print(f"stale_processing_segments={json.dumps(result.get('stale_processing_segments') or [], ensure_ascii=True)}")
+                print(f"total_segments={result.get('total_segments')}")
+                print(f"segments_done_count={result.get('segments_done_count')}")
+                print(f"final_marker_count={result.get('final_marker_count')}")
+                print(f"checkpointed_segments_count={result.get('checkpointed_segments_count')}")
+                print(f"partial_segments_count={result.get('partial_segments_count')}")
+                print(f"asset_preflight_ok={result.get('asset_preflight_ok')}")
+                print(f"missing_asset_segments_count={result.get('missing_asset_segments_count')}")
+                print(f"missing_assets_count={result.get('missing_assets_count')}")
+                print(f"missing_asset_segments={json.dumps(result.get('missing_asset_segments') or [], ensure_ascii=True)}")
+                print(f"permanent_failed_count={result.get('permanent_failed_count')}")
+                print(f"assigned_pending_total={result.get('assigned_pending_total')}")
+                print(f"assigned_processing_total={result.get('assigned_processing_total')}")
+                print(f"assigned_failed_total={result.get('assigned_failed_total')}")
+                print(f"checkpoints_per_segment={json.dumps(result.get('checkpoints_per_segment') or [], ensure_ascii=True)}")
+                print(f"duplicate_assigned_segments={json.dumps(result.get('duplicate_assigned_segments') or [], ensure_ascii=True)}")
+                print(f"duplicate_processing_segments={json.dumps(result.get('duplicate_processing_segments') or [], ensure_ascii=True)}")
+                print(f"warnings={json.dumps(result.get('warnings') or [], ensure_ascii=True)}")
+                print(f"workers={json.dumps(result.get('workers') or [], ensure_ascii=True)}")
+                print(f"worker_details={json.dumps(result.get('worker_details') or {}, ensure_ascii=True)}")
+                print(f"can_import={result.get('can_import')}")
+                print(f"can_assemble={result.get('can_assemble')}")
+                print(f"report_path={result.get('report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "validate-job-assets":
+                result = run_youtube_video_validate_job_assets(
+                    config=cfg,
+                    options=YoutubeVideoValidateJobAssetsOptions(
+                        story_id=str(args.story_id).strip(),
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                    ),
+                )
+                print(f"ok={result.get('ok')}")
+                print(f"status={result.get('status')}")
+                print(f"total_segments={result.get('total_segments')}")
+                print(f"total_required_frames={result.get('total_required_frames')}")
+                print(f"unique_required_frames={result.get('unique_required_frames')}")
+                print(f"existing_frames_count={result.get('existing_frames_count')}")
+                print(f"missing_frames_count={result.get('missing_frames_count')}")
+                print(f"missing_asset_segments_count={result.get('missing_asset_segments_count')}")
+                print(f"missing_frames={json.dumps(result.get('missing_frames') or [], ensure_ascii=True)}")
+                print(f"missing_by_segment={json.dumps(result.get('missing_by_segment') or {}, ensure_ascii=True)}")
+                print(f"assets_frames_dir={result.get('assets_frames_dir')}")
+                print(f"input_frames_dir={result.get('input_frames_dir')}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "cleanup-partial-checkpoints":
+                result = run_youtube_video_cleanup_partial_checkpoints(
+                    config=cfg,
+                    options=YoutubeVideoCleanupPartialOptions(
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"execute={result.get('execute')}")
+                print(f"dry_run={result.get('dry_run')}")
+                print(f"scanned_segments={result.get('scanned_segments')}")
+                print(f"actions_total={result.get('actions_total')}")
+                print(f"deleted_total={result.get('deleted_total')}")
+                print(f"per_segment={json.dumps(result.get('per_segment') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "watch-queue":
+                result = run_youtube_video_watch_queue(
+                    config=cfg,
+                    options=YoutubeVideoWatchQueueOptions(
+                        story_id=str(args.story_id).strip(),
+                        poll_seconds=int(getattr(args, "poll_seconds", 60)),
+                        stale_minutes=int(getattr(args, "stale_minutes", 10)),
+                        max_attempts=int(getattr(args, "max_attempts", 3)),
+                        pending_per_worker=int(getattr(args, "pending_per_worker", 1)),
+                        max_total_assigned=int(getattr(args, "max_total_assigned", 0)),
+                        workers=str(getattr(args, "workers", "") or ""),
+                        execute=bool(getattr(args, "execute", False)),
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                        once=bool(getattr(args, "once", False)),
+                        max_runtime_minutes=float(getattr(args, "max_runtime_minutes", 0.0) or 0.0),
+                        auto_import_on_complete=not bool(getattr(args, "no_auto_import", False)),
+                        skip_asset_preflight=bool(getattr(args, "skip_asset_preflight", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"stop_reason={result.get('stop_reason')}")
+                print(f"execute={result.get('execute')}")
+                print(f"dry_run={result.get('dry_run')}")
+                print(f"once={result.get('once')}")
+                print(f"interrupted={result.get('interrupted')}")
+                print(f"ticks={result.get('ticks')}")
+                print(f"runtime_seconds={result.get('runtime_seconds')}")
+                print(f"totals={json.dumps(result.get('totals') or {}, ensure_ascii=True)}")
+                last_status = result.get("last_status") if isinstance(result.get("last_status"), dict) else {}
+                print(f"global_pending={last_status.get('global_pending')}")
+                print(f"assigned_pending_by_worker={json.dumps(last_status.get('assigned_pending_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_processing_by_worker={json.dumps(last_status.get('assigned_processing_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_done_by_worker={json.dumps(last_status.get('assigned_done_by_worker') or {}, ensure_ascii=True)}")
+                print(f"assigned_failed_by_worker={json.dumps(last_status.get('assigned_failed_by_worker') or {}, ensure_ascii=True)}")
+                print(f"stale_processing_by_worker={json.dumps(last_status.get('stale_processing_by_worker') or {}, ensure_ascii=True)}")
+                print(f"stale_processing_count={last_status.get('stale_processing_count')}")
+                print(f"total_segments={last_status.get('total_segments')}")
+                print(f"segments_done_count={last_status.get('segments_done_count')}")
+                print(f"expected_segments={last_status.get('expected_segments')}")
+                print(f"checkpointed_segments_count={last_status.get('checkpointed_segments_count')}")
+                print(f"partial_segments_count={last_status.get('partial_segments_count')}")
+                print(f"final_marker_count={last_status.get('final_marker_count')}")
+                print(f"asset_preflight_ok={last_status.get('asset_preflight_ok')}")
+                print(f"missing_asset_segments_count={last_status.get('missing_asset_segments_count')}")
+                print(f"missing_assets_count={last_status.get('missing_assets_count')}")
+                print(f"permanent_failed_count={last_status.get('permanent_failed_count')}")
+                print(f"can_import={last_status.get('can_import')}")
+                print(f"can_assemble={last_status.get('can_assemble')}")
+                print(f"warnings={json.dumps(last_status.get('warnings') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
+                print(f"local_events_path={result.get('local_events_path')}")
+                print(f"drive_events_path={result.get('drive_events_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "inspect-segment":
+                result = run_youtube_video_inspect_segment(
+                    config=cfg,
+                    options=YoutubeVideoInspectSegmentOptions(
+                        story_id=str(args.story_id).strip(),
+                        segment_id=str(args.segment_id).strip(),
+                    ),
+                )
+                print(f"segment_id={result.get('segment_id')}")
+                print(f"locations={json.dumps(result.get('locations') or [], ensure_ascii=True)}")
+                print(f"output_exists={result.get('output_exists')}")
+                print(f"output_valid={result.get('output_valid')}")
+                print(f"output_segment={result.get('output_segment')}")
+                print(f"report_path={result.get('report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "import-results":
+                result = run_youtube_video_import_results(
+                    config=cfg,
+                    options=YoutubeVideoImportResultsOptions(
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"drive_done_segments={result.get('drive_done_segments')}")
+                print(f"drive_failed_segments={result.get('drive_failed_segments')}")
+                print(f"expected_segments={result.get('expected_segments')}")
+                print(f"missing_segments={json.dumps(result.get('missing_segments') or [], ensure_ascii=True)}")
+                print(f"report_path={result.get('report_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "assemble-final":
+                result = run_youtube_video_assemble_final(
+                    config=cfg,
+                    options=YoutubeVideoAssembleFinalOptions(
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"expected_segments={result.get('expected_segments')}")
+                print(f"missing_segments={json.dumps(result.get('missing_segments') or [], ensure_ascii=True)}")
+                print(f"final_video_path={result.get('final_video_path')}")
+                print(f"report_path={result.get('report_path')}")
+                if result.get("validation"):
+                    print(f"validation={json.dumps(result.get('validation'), ensure_ascii=True)}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "full-drive-flow":
+                result = run_youtube_video_full_drive_flow(
+                    config=cfg,
+                    options=YoutubeVideoFullDriveFlowOptions(
+                        story_id=str(args.story_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                        force=bool(getattr(args, "force", False)),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                export = result.get("export") if isinstance(result.get("export"), dict) else {}
+                drive_status = result.get("drive_status") if isinstance(result.get("drive_status"), dict) else {}
+                print(f"drive_job_root={export.get('drive_job_root')}")
+                print(f"expected_segments={drive_status.get('expected_segments')}")
+                print(f"global_pending={drive_status.get('global_pending')}")
+                print(f"segments_done_count={drive_status.get('segments_done_count')}")
+                for cmd in result.get("worker_commands", []) or []:
+                    print(f"worker_command={cmd}")
+                print(result.get("note", ""))
+                return 0 if result.get("ok") else 2
+            print("Неизвестная подкоманда youtube video")
+            return 2
 
         if sub_cmd == "run-safe-bridge":
             result = run_youtube_run_safe_bridge(
@@ -2066,6 +4898,9 @@ def main() -> int:
             print(str(exc))
             return 2
 
+    if args.command == "site-info-visual":
+        return _site_info_visual_cli(args, cfg)
+
     if args.command == "site-visual":
         from orchestrator.site_visual.importer import import_site_visuals
 
@@ -2105,11 +4940,67 @@ def main() -> int:
         return 0
 
     if args.command == "site-publish":
+        from orchestrator.site_publish.collect_assets import run_site_publish_collect_assets
         from orchestrator.site_publish.env_doctor import run_site_publish_env_doctor
         from orchestrator.site_publish.publish import run_site_publish
         from orchestrator.site_publish.prepare import prepare_site_publish
 
         sub_cmd = str(getattr(args, "site_publish_cmd", "") or "").strip().lower()
+        if sub_cmd == "collect-assets":
+            execute = bool(args.execute)
+            if not execute:
+                print("site-publish collect-assets: dry-run (default). Use --execute for real copy.")
+            res = run_site_publish_collect_assets(
+                cfg.root_dir,
+                execute=execute,
+                force=bool(args.force),
+                allow_partial_tts=bool(getattr(args, "allow_partial_tts", False)),
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                launch_dir=getattr(args, "launch_dir", None),
+                images_dir=getattr(args, "images_dir", None),
+            )
+            print(
+                "expected="
+                + str(res.get("expected_total"))
+                + " mp3_found="
+                + str(res.get("mp3_found"))
+                + " images_found="
+                + str(res.get("images_found"))
+                + " texts_found="
+                + str(res.get("text_found"))
+                + " info_found="
+                + str(res.get("info_found"))
+            )
+            print(
+                "packages_ready="
+                + str(res.get("packages_ready"))
+                + " skipped_tts="
+                + str(res.get("skipped_tts"))
+                + " real_missing_audio="
+                + str(res.get("missing_audio"))
+            )
+            print(
+                "missing_image="
+                + str(res.get("missing_image"))
+                + " missing_text="
+                + str(res.get("missing_text"))
+                + " missing_info="
+                + str(res.get("missing_info"))
+            )
+            print(f"launch_dir={res.get('launch_dir')}")
+            layout = res.get("layout") or {}
+            if layout:
+                print(f"layout_mode={layout.get('mode')}")
+                print(f"site_publish_root={layout.get('site_publish_root')}")
+                print(f"to_publish_root={layout.get('to_publish_root')}")
+                if layout.get("legacy_output_site_no_longer_source_of_truth"):
+                    print(f"legacy_output_site_no_longer_source_of_truth={layout.get('legacy_output_site_no_longer_source_of_truth')}")
+            print(f"manifest_path={res.get('manifest_path')}")
+            print(f"output_dir_scanned_by_prepare={res.get('output_dir_scanned_by_prepare')}")
+            print(f"can_run_prepare={res.get('can_run_prepare')}")
+            print(f"report_path={res.get('report_path')}")
+            return 0 if res.get("ok") else 2
+
         if sub_cmd == "env-doctor":
             res = run_site_publish_env_doctor(
                 content_factory_root=cfg.root_dir,
@@ -2155,6 +5046,9 @@ def main() -> int:
                 dry_run=dry_run,
                 execute=execute,
                 dirtysecrets_root=args.dirtysecrets_path,
+                allow_partial_tts=bool(getattr(args, "allow_partial_tts", False)),
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                launch_dir=getattr(args, "launch_dir", None),
             )
             if res.get("status") == "blocked":
                 print(f"status=blocked reason={res.get('reason')}")
@@ -2168,6 +5062,13 @@ def main() -> int:
                     print(f"stdout_tail={out}")
                 if err:
                     print(f"stderr_tail={err}")
+                layout = res.get("layout") or {}
+                if layout:
+                    print(f"layout_mode={layout.get('mode')}")
+                    print(f"launch_dir={res.get('launch_dir')}")
+                    print(f"site_publish_root={res.get('site_publish_root')}")
+                    print(f"to_publish_root={res.get('to_publish_root')}")
+                    print(f"manifest_path={res.get('manifest_path')}")
                 print(f"env_report_path={res.get('env_report_path')}")
                 print(f"report_path={res.get('report_path')}")
                 print(f"result_jsonl={res.get('result_jsonl')}")
@@ -2185,6 +5086,13 @@ def main() -> int:
                     print(f"stdout_tail={out}")
                 if err:
                     print(f"stderr_tail={err}")
+            layout = res.get("layout") or {}
+            if layout:
+                print(f"layout_mode={layout.get('mode')}")
+                print(f"launch_dir={res.get('launch_dir')}")
+                print(f"site_publish_root={res.get('site_publish_root')}")
+                print(f"to_publish_root={res.get('to_publish_root')}")
+                print(f"manifest_path={res.get('manifest_path')}")
             print(f"env_report_path={res.get('env_report_path')}")
             print(f"report_path={res.get('report_path')}")
             print(f"result_jsonl={res.get('result_jsonl')}")
@@ -2204,6 +5112,9 @@ def main() -> int:
             execute=execute,
             force=bool(args.force),
             story=str(getattr(args, "story", "") or "").strip(),
+            allow_partial_tts=bool(getattr(args, "allow_partial_tts", False)),
+            launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+            launch_dir=getattr(args, "launch_dir", None),
         )
         print(
             "scanned="
@@ -2225,7 +5136,19 @@ def main() -> int:
             + " missing_text="
             + str(res.get("missing_text_count"))
         )
+        layout = res.get("layout") or {}
+        if layout:
+            print(f"layout_mode={layout.get('mode')}")
+            print(f"launch_dir={res.get('launch_dir')}")
+            print(f"site_root={res.get('site_root')}")
+            print(f"to_publish_root={res.get('to_publish_root')}")
+            print(f"manifest_path={res.get('manifest_path')}")
+            if layout.get("legacy_output_site_no_longer_source_of_truth"):
+                print(f"legacy_output_site_no_longer_source_of_truth={layout.get('legacy_output_site_no_longer_source_of_truth')}")
+            if layout.get("legacy_to_publish_no_longer_source_of_truth"):
+                print(f"legacy_to_publish_no_longer_source_of_truth={layout.get('legacy_to_publish_no_longer_source_of_truth')}")
         print(f"report_path={res.get('report_path')}")
+        print(f"allow_partial_tts={res.get('allow_partial_tts')}")
         return 0
 
     if args.command == "prepare-fish-tts-runpod-pack":

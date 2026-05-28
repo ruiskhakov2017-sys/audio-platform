@@ -1,0 +1,16 @@
+workflow_presets_dir: legacy/director_2_0/workflows
+default_workflow: flux1-default.json
+
+workflows:
+  flux1-default:
+    file: flux1-default.json
+    text_node_id: "93"
+    seed_node_id: "31"
+  flux1-lora-soft:
+    file: flux1-lora-soft.json
+    text_node_id: "93"
+    seed_node_id: "31"
+  flux1-lora-cinematic:
+    file: flux1-lora-cinematic.json
+    text_node_id: "93"
+    seed_node_id: "31"

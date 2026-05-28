@@ -6,7 +6,16 @@ orchestrator:
 pre_filter:
   min_minutes: 15
   words_per_minute: 150
+  min_words: 750
   story_extensions: .txt
+
+youtube_duration:
+  min_minutes: 30
+  max_minutes: 80
+  words_per_minute: 150
+  min_words: 4000
+  max_words: 12000
+  split_long_stories: false
 
 run_policy:
   default_profile: full-real

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.human_launch_layout import D10_LEGACY, D10_TEMP
 from orchestrator.status import StatusStore
 
 
@@ -25,6 +26,7 @@ class PhaseBOptions:
     promo_outro_en: str = "promo_outro_en"
     allow_scaffold: bool = False
     branch: str = "all"
+    launch_dir: Path | None = None
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -200,6 +202,16 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
         return {"ok": False, "message": msg}
 
+    if options.launch_dir is not None:
+        anchor = (options.launch_dir.resolve() / D10_TEMP / D10_LEGACY).resolve()
+        dm = options.deferred_manifest.resolve()
+        try:
+            dm.relative_to(anchor)
+        except ValueError:
+            msg = f"GLOBAL_PATH_WRITE_BLOCKED: deferred_manifest {dm} is not under launch legacy {anchor}"
+            status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
+            return {"ok": False, "message": msg}
+
     branch = str(options.branch or "all").strip().lower()
     site_only = branch == "site"
 
@@ -266,6 +278,11 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
     manual_review: list[dict[str, Any]] = []
 
     total_items = len(deferred_items)
+
+    def _b_progress_after_item(idx0: int) -> None:
+        rem = max(0, total_items - idx0 - 1)
+        print(f"[B] remaining={rem} total={total_items} done={idx0+1}/{total_items}", flush=True)
+
     for i, row in enumerate(deferred_items):
         src_str = row["source_path"]
         cleaned_str = row.get("cleaned_path", src_str)
@@ -277,6 +294,7 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
             manual_review.append({"source_path": src_str, "reason": "source_missing"})
             story_states[src_str] = {"state": "manual_review", "reason": "source_missing"}
             errors.append({"source_path": src_str, "error": "source_missing"})
+            _b_progress_after_item(i)
             continue
 
         text = _read_text(cleaned_src)
@@ -301,6 +319,7 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
             print(f"[B][{i+1}/{total_items}] rejected: {g_reason}", flush=True)
             rejected.append({"source_path": src_str, "reason": g_reason})
             story_states[src_str] = {"state": "rejected", "reason": g_reason}
+            _b_progress_after_item(i)
             continue
 
         # 2) site_info_builder
@@ -318,7 +337,22 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
 
         if site_only:
             print(f"[B][{i+1}/{total_items}] site_ready (branch=site_only)", flush=True)
+            site_ready_item = {
+                "source_path": src_str,
+                "info_output": str(info_path),
+                "tts_runtime": modes.get("site_tts_runtime", "local"),
+                "tts_engine": modes.get("site_tts_engine", "elevenlabs"),
+                "tts_executor": (
+                    "site_tts_colab_runner"
+                    if modes.get("site_tts_runtime") == "colab"
+                    else "site_tts_local_runner"
+                ),
+            }
+            if site_ready_item["tts_engine"] == "elevenlabs":
+                site_ready_item["elevenlabs_mode"] = modes.get("elevenlabs_mode", "normal")
+            site_ready.append(site_ready_item)
             story_states[src_str] = {"state": "site_ready", "reason": "site_only_branch"}
+            _b_progress_after_item(i)
             continue
 
         # 3) youtube_top_tier_selection
@@ -352,6 +386,7 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         if y_decision != "youtube_selected":
             print(f"[B][{i+1}/{total_items}] site_only", flush=True)
             story_states[src_str] = {"state": "site_ready", "reason": "site_only_after_youtube_selection"}
+            _b_progress_after_item(i)
             continue
 
         # 4) youtube_safe_text
@@ -426,6 +461,7 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         youtube_ready.append(yt_item)
         story_states[src_str] = {"state": "youtube_ready", "reason": "full_youtube_phase_b_path_done"}
         print(f"[B][{i+1}/{total_items}] youtube_ready", flush=True)
+        _b_progress_after_item(i)
 
     # artifacts
     _write_jsonl(run_root / "general_selection_results.jsonl", general_rows)

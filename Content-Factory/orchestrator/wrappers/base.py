@@ -47,6 +47,7 @@ class BaseWrapper:
         pipeline: str,
         execute: bool,
         allow_real: bool,
+        stories_dir: Path | None = None,
     ) -> WrapperResult:
         if execute and not allow_real:
             return WrapperResult(

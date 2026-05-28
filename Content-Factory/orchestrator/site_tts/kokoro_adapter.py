@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -8,15 +10,51 @@ import wave
 from pathlib import Path
 from typing import Any
 
+from orchestrator.site_tts.cleaned_text_guard import validate_cleaned_text_for_tts
 from orchestrator.site_tts.config import SiteTtsSettings
 from orchestrator.site_tts.contract import SiteTtsPaths, TTSSynthesisResult
-from orchestrator.site_tts.info_parser import parse_voice_type_mfu
+from orchestrator.site_tts.info_parser import resolve_voice_letter_from_info_content
 from orchestrator.site_tts.text_chunking import pack_paragraph_chunks
 
 
 class KokoroSiteAdapter:
     engine = "kokoro"
     sample_rate = 24000
+
+    voice_metadata_file = ".site_tts_voice.json"
+
+    def _voice_meta_path(self, paths: SiteTtsPaths) -> Path:
+        return paths.story_folder / self.voice_metadata_file
+
+    def _load_existing_voice(self, paths: SiteTtsPaths) -> str | None:
+        p = self._voice_meta_path(paths)
+        if not p.is_file():
+            return None
+        try:
+            obj = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(obj, dict):
+            return None
+        v = str(obj.get("selected_voice", "") or "").strip()
+        return v or None
+
+    def _save_selected_voice(self, paths: SiteTtsPaths, *, voice_label: str, selected_voice: str, source: str) -> None:
+        p = self._voice_meta_path(paths)
+        payload = {
+            "voice_label": str(voice_label or "U").strip().upper()[:1] or "U",
+            "selected_voice": str(selected_voice or "").strip(),
+            "source": str(source or ""),
+        }
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _pick_from_pool(self, *, story_id: str, voice_label: str, pool: list[str]) -> str:
+        if not pool:
+            return ""
+        key = f"{story_id}|{voice_label}".encode("utf-8")
+        h = hashlib.sha256(key).hexdigest()
+        idx = int(h[:8], 16) % len(pool)
+        return pool[idx]
 
     def _pick_voice(self, settings: SiteTtsSettings, voice_type: str) -> str:
         vt = (voice_type or "U").upper()[:1]
@@ -25,6 +63,43 @@ class KokoroSiteAdapter:
         if vt == "F":
             return settings.kokoro_voice_female
         return settings.kokoro_voice_neutral
+
+    def _resolve_voice(
+        self,
+        *,
+        settings: SiteTtsSettings,
+        paths: SiteTtsPaths,
+        voice_label: str,
+        is_label_fallback: bool,
+    ) -> tuple[str, str, str]:
+        existing = self._load_existing_voice(paths)
+        if existing:
+            return voice_label, existing, "existing"
+
+        strategy = (settings.voice_selection_strategy or "single").strip().lower()
+        label = (voice_label or "").strip().upper()[:1]
+        if label not in {"M", "F", "U"}:
+            label = settings.voice_selection_fallback_label or "U"
+        if label not in {"M", "F", "U"}:
+            label = "U"
+        if is_label_fallback:
+            return label, (settings.voice_selection_fallback_voice or "af_bella"), "fallback"
+
+        if strategy == "deterministic_pool":
+            pool = list(settings.voice_pools.get(label, []))
+            if not pool:
+                fb_label = settings.voice_selection_fallback_label or "U"
+                pool = list(settings.voice_pools.get(fb_label, []))
+            if pool:
+                selected = self._pick_from_pool(story_id=paths.story_folder.name, voice_label=label, pool=pool)
+                if selected:
+                    return label, selected, "new"
+
+        selected = self._pick_voice(settings, label)
+        if not selected:
+            selected = settings.default_voice or settings.voice_selection_fallback_voice or "af_bella"
+            return label, selected, "fallback"
+        return label, selected, "fallback"
 
     def _lang_code(self, voice: str, settings: SiteTtsSettings) -> str:
         if settings.kokoro_lang_code:
@@ -161,9 +236,25 @@ class KokoroSiteAdapter:
 
         story_name = paths.story_folder.name
         text = paths.cleaned_story_txt.read_text(encoding="utf-8")
+        ok_txt, bad_reason = validate_cleaned_text_for_tts(text)
+        if not ok_txt:
+            return fail(f"TTS input rejected ({bad_reason}); source={paths.cleaned_story_txt}")
+
         info = paths.info_txt.read_text(encoding="utf-8")
-        voice_type = parse_voice_type_mfu(info)
-        voice = self._pick_voice(settings, voice_type)
+        voice_type, _line, warn = resolve_voice_letter_from_info_content(info)
+        selected_label, voice, voice_source = self._resolve_voice(
+            settings=settings,
+            paths=paths,
+            voice_label=voice_type,
+            is_label_fallback=bool(warn),
+        )
+        if warn:
+            self._append_log(log_path, warn)
+        if settings.voice_selection_save_selected_voice_to_story_metadata:
+            try:
+                self._save_selected_voice(paths, voice_label=selected_label, selected_voice=voice, source=voice_source)
+            except OSError:
+                pass
         lang = self._lang_code(voice, settings)
 
         if paths.output_mp3.is_file() and not force:
@@ -181,7 +272,7 @@ class KokoroSiteAdapter:
         if not execute:
             n_chunks = len(pack_paragraph_chunks(text, settings.kokoro_chunk_max_chars))
             plan = (
-                f"dry-run: engine={self.engine} voice_type={voice_type} voice={voice} "
+                f"dry-run: engine={self.engine} story={story_name} voice_label={selected_label} selected_voice={voice} source={voice_source} "
                 f"lang={lang} speed={settings.kokoro_speed} chunks_est={n_chunks} "
                 f"-> {paths.output_mp3}"
             )
@@ -222,6 +313,7 @@ class KokoroSiteAdapter:
         self._append_log(
             log_path,
             f"execute story={story_name} start_ts={time.time():.3f} voice={voice} lang={lang} "
+            f"voice_label={selected_label} source={voice_source} "
             f"paragraph_chunks={len(chunks)} chunk_max_chars={settings.kokoro_chunk_max_chars}",
         )
 
@@ -309,5 +401,11 @@ class KokoroSiteAdapter:
             duration_sec=duration,
             logs_path=log_path,
             message=ok_msg,
-            details={"voice": voice, "voice_type": voice_type, "chunks": len(chunks)},
+            details={
+                "voice": voice,
+                "voice_label": selected_label,
+                "voice_source": voice_source,
+                "voice_type": voice_type,
+                "chunks": len(chunks),
+            },
         )

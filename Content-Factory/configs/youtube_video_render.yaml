@@ -1,0 +1,18 @@
+drive_root: "G:\\Мой диск\\ContentFactory_YouTube"
+drive_video_root: "video_jobs"
+segment_sec: 180
+workers:
+  - "ru.iskhakov2017@gmail.com"
+  - "isi.cordeiro@gmail.com"
+  - "iheuko119@gmail.com"
+  - "goegoeseijin@gmail.com"
+  - "suteadodesun6@gmail.com"
+future_workers_max: 10
+require_effects: false
+effects_assets:
+  - "film.mp4"
+  - "dust.mp4"
+  - "images/start.*"
+local_output_root: "output/youtube"
+render_mode: "segments_then_concat"
+final_video_name: "final_video.mp4"

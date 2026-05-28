@@ -1,9 +1,8 @@
 modes:
   site_visual: manual
   youtube_publish: manual
-  # Site TTS: Kokoro local (см. configs/site_tts.yaml для голосов/скорости).
   site_tts_runtime: local
-  site_tts_engine: kokoro
+  site_tts_engine: kokoro_colab_drive
   youtube_tts_runtime: local
   youtube_tts_engine: edge_tts
   elevenlabs_mode: normal

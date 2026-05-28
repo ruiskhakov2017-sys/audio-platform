@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "source_path": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\raw\\short_source.txt",
+      "cleaned_path": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\cleaned\\short_cleaned_story.txt",
+      "run_story_dir": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\run_story\\short",
+      "canonical_basename": "fixture_short"
+    },
+    {
+      "source_path": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\raw\\ok_source.txt",
+      "cleaned_path": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\cleaned\\ok_cleaned_story.txt",
+      "run_story_dir": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\run_story\\ok",
+      "canonical_basename": "fixture_ok"
+    },
+    {
+      "source_path": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\raw\\long_source.txt",
+      "cleaned_path": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\cleaned\\long_cleaned_story.txt",
+      "run_story_dir": "D:\\Cursor AI\\Content-Factory\\tests\\fixtures\\youtube_prefilter\\run_story\\long",
+      "canonical_basename": "fixture_long"
+    }
+  ]
+}

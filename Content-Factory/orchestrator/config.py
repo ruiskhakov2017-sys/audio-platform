@@ -20,7 +20,14 @@ class OrchestratorConfig:
     reports_dir: Path
     pre_filter_min_minutes: float
     pre_filter_words_per_minute: int
+    pre_filter_min_words: int
     pre_filter_extensions: list[str]
+    youtube_min_minutes: int
+    youtube_max_minutes: int
+    youtube_words_per_minute: int
+    youtube_min_words: int
+    youtube_max_words: int
+    youtube_split_long_stories: bool
     default_run_profile: str
     real_stage_whitelist: list[str]
     legacy_entrypoints: Dict[str, str]
@@ -80,11 +87,19 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
     pre_filter = parsed.get("pre_filter", {})
     min_minutes = float(pre_filter.get("min_minutes", 15))
     words_per_minute = int(pre_filter.get("words_per_minute", 150))
+    min_words = int(pre_filter.get("min_words", 750))
     extensions_raw = pre_filter.get("story_extensions", ".txt")
     if isinstance(extensions_raw, str):
         extensions = [x.strip() for x in extensions_raw.split(",") if x.strip()]
     else:
         extensions = [str(x).strip() for x in (extensions_raw or [".txt"]) if str(x).strip()]
+    youtube_duration = parsed.get("youtube_duration", {})
+    yt_min_minutes = int(youtube_duration.get("min_minutes", 30))
+    yt_max_minutes = int(youtube_duration.get("max_minutes", 80))
+    yt_wpm = int(youtube_duration.get("words_per_minute", 150))
+    yt_min_words = int(youtube_duration.get("min_words", yt_min_minutes * yt_wpm))
+    yt_max_words = int(youtube_duration.get("max_words", yt_max_minutes * yt_wpm))
+    yt_split_long_stories = bool(youtube_duration.get("split_long_stories", False))
     run_policy = parsed.get("run_policy", {})
     default_profile = str(run_policy.get("default_profile", "dry-run-all"))
     whitelist_raw = run_policy.get("real_stage_whitelist", [])
@@ -154,7 +169,14 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
         reports_dir=reports_dir,
         pre_filter_min_minutes=min_minutes,
         pre_filter_words_per_minute=words_per_minute,
+        pre_filter_min_words=min_words,
         pre_filter_extensions=extensions or [".txt"],
+        youtube_min_minutes=yt_min_minutes,
+        youtube_max_minutes=yt_max_minutes,
+        youtube_words_per_minute=yt_wpm,
+        youtube_min_words=yt_min_words,
+        youtube_max_words=yt_max_words,
+        youtube_split_long_stories=yt_split_long_stories,
         default_run_profile=default_profile,
         real_stage_whitelist=whitelist,
         legacy_entrypoints=legacy,

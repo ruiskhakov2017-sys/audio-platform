@@ -24,9 +24,19 @@ from orchestrator.site_tts.cleaned_text_guard import validate_cleaned_text_for_t
 from orchestrator.site_tts.config import load_site_tts_settings
 from orchestrator.site_tts.batch import iter_human_launch_story_dirs
 from orchestrator.site_tts.contract import SiteTtsPaths
-from orchestrator.site_tts.drive_voice_resolve import VOICE_MANIFEST_FILENAME, write_kokoro_voices_job_json
+from orchestrator.site_tts.drive_voice_resolve import (
+    VOICE_MANIFEST_FILENAME,
+    build_kokoro_drive_voice_item_for_existing_txt,
+    collect_voice_ids_from_pools,
+    write_kokoro_voices_job_json,
+    write_kokoro_voices_job_payload,
+)
 from orchestrator.site_tts.info_parser import resolve_voice_letter_from_info_content
 from orchestrator.site_tts.text_chunking import pack_paragraph_chunks
+from orchestrator.text_cleaning.literotica_header import (
+    literotica_header_remnant_warning,
+    strip_literotica_source_header,
+)
 
 _HANDOFF_ROOT = "_COLAB_EXPORTS"
 _HANDOFF_RESULTS_DIR = "results_drop_here"
@@ -34,7 +44,7 @@ _CURRENT_ROOT = "COLAB_TTS_CURRENT"
 _CURRENT_TEXTS = "TEXTS_TO_COLAB"
 _CURRENT_MP3 = "MP3_FROM_COLAB"
 _EXPORT_DIAG_JSONL = "EXPORT_DIAG.jsonl"
-_DRIVE_EXPORT_CLEAN_STAGE = "drive_tts_final_cleaner_v2"
+_DRIVE_EXPORT_CLEAN_STAGE = "drive_tts_final_cleaner_v5_literotica_header_strip"
 
 # URL-like: schemes, messengers, reddit/discord, forum.* hosts, common TLD hosts (not bare .txt/.pdf etc. as “domains”).
 _URL_TLD = (
@@ -472,9 +482,15 @@ def _count_url_like(text: str) -> int:
     return len(_URL_LIKE_RE.findall(text or ""))
 
 
-def _clean_text_for_drive_tts(raw_text: str) -> tuple[str, int, int, int]:
+def _clean_text_for_drive_tts(raw_text: str) -> tuple[str, int, int, int, dict[str, Any]]:
     text = (raw_text or "").replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
     url_before = _count_url_like(text)
+
+    text, lit_pre = strip_literotica_source_header(text)
+    lit_diag: dict[str, Any] = {
+        "removed_literotica_header_lines_count": int(lit_pre.get("removed_literotica_header_lines_count", 0) or 0),
+        "removed_literotica_header_lines_sample": list(lit_pre.get("removed_literotica_header_lines_sample") or []),
+    }
 
     text = html.unescape(text)
     text = _MARKDOWN_FENCE_RE.sub(" ", text)
@@ -521,8 +537,19 @@ def _clean_text_for_drive_tts(raw_text: str) -> tuple[str, int, int, int]:
     text = _normalize_tts_paragraphs(text)
     text = text.strip()
 
+    text, lit_post = strip_literotica_source_header(text)
+    lit_diag["removed_literotica_header_lines_count"] = int(lit_diag["removed_literotica_header_lines_count"]) + int(
+        lit_post.get("removed_literotica_header_lines_count", 0) or 0
+    )
+    post_samples = list(lit_post.get("removed_literotica_header_lines_sample") or [])
+    combined = list(lit_diag["removed_literotica_header_lines_sample"]) + post_samples
+    lit_diag["removed_literotica_header_lines_sample"] = combined[:12]
+    remnant = literotica_header_remnant_warning(text)
+    if remnant:
+        lit_diag["literotica_header_warning"] = remnant
+
     url_after = _count_url_like(text)
-    return text, url_before, url_after, removed_lines
+    return text, url_before, url_after, removed_lines, lit_diag
 
 
 def _append_export_diag(diag_path: Path, payload: dict[str, Any]) -> None:
@@ -545,6 +572,281 @@ def _load_expected_files(job_dir: Path) -> list[str]:
     return names
 
 
+_COLAB_TERMINAL_NON_MP3 = frozenset({"failed", "manual_skipped"})
+_COLAB_MIN_MP3_BYTES = 256
+_MANUAL_SKIPPED_JSON = "manual_skipped.json"
+_MANUAL_SKIPPED_TXT = "MANUAL_SKIPPED_FILES.txt"
+_TTS_TERMINAL_STATUS_JSON = "TTS_BATCH_TERMINAL_STATUS.json"
+
+
+def _read_colab_status(job_dir: Path) -> dict[str, Any]:
+    p = job_dir / "COLAB_STATUS.json"
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _local_reports_dir(root_dir: Path) -> Path:
+    return (root_dir.resolve() / "reports").resolve()
+
+
+def _read_manual_skipped(job_dir: Path) -> dict[str, dict[str, Any]]:
+    path = job_dir / _MANUAL_SKIPPED_JSON
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    items = raw.get("items") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = Path(str(item.get("expected_mp3_name") or item.get("name") or "")).name
+        if name.lower().endswith(".mp3"):
+            out[name] = item
+    return out
+
+
+def _story_title_from_mp3_name(mp3_name: str) -> str:
+    story, _voice = _split_story_voice(Path(mp3_name).stem)
+    return story
+
+
+def _terminal_status_payload(
+    *,
+    expected_set: set[str],
+    ready_set: set[str],
+    manual_skipped: list[str],
+    failed_terminal: list[str],
+    real_missing: list[str],
+    extra: list[str],
+    zero_size: list[str],
+    mp3_dir: Path,
+    job_dir: Path,
+) -> dict[str, Any]:
+    ready_count = len(ready_set & expected_set)
+    manual_skipped_count = len(set(manual_skipped))
+    failed_terminal_count = len(set(failed_terminal))
+    resolved_total = ready_count + manual_skipped_count + failed_terminal_count
+    can_continue = resolved_total >= len(expected_set) and not real_missing
+    return {
+        "updated_at": _utc_now_iso(),
+        "expected": len(expected_set),
+        "ready": ready_count,
+        "ready_to_publish_count": ready_count,
+        "manual_skipped": manual_skipped_count,
+        "skipped_count": manual_skipped_count,
+        "failed_terminal": failed_terminal_count,
+        "terminal_failed_count": failed_terminal_count,
+        "missing": len(real_missing),
+        "real_missing_count": len(real_missing),
+        "effective_missing": len(real_missing),
+        "zero_size": len(zero_size),
+        "extra": len(extra),
+        "extra_mp3_count": len(extra),
+        "can_continue": can_continue,
+        "can_continue_to_publish": can_continue,
+        "can_continue_to_site_publish": can_continue,
+        "completed": can_continue,
+        "mp3_dir": str(mp3_dir),
+        "job_dir": str(job_dir),
+        "manual_skipped_files": sorted(manual_skipped),
+        "failed_terminal_files": sorted(failed_terminal),
+        "real_missing_files": sorted(real_missing),
+        "extra_mp3_files": extra[:50],
+        "zero_size_files": zero_size[:50],
+    }
+
+
+def _write_terminal_reports(
+    *,
+    root_dir: Path,
+    job_dir: Path,
+    payload: dict[str, Any],
+) -> None:
+    _write_json(job_dir / _TTS_TERMINAL_STATUS_JSON, payload)
+    _write_json(_local_reports_dir(root_dir) / "site_tts_drive_wait_report.json", payload)
+    _write_json(_local_reports_dir(root_dir) / "site_publish_tts_availability_report.json", payload)
+
+
+def _drive_mp3_ready(mp3_dir: Path, mp3_name: str) -> bool:
+    p = mp3_dir / mp3_name
+    try:
+        return p.is_file() and p.stat().st_size >= _COLAB_MIN_MP3_BYTES
+    except OSError:
+        return False
+
+
+def _colab_expected_resolution(
+    *,
+    expected_set: set[str],
+    mp3_dir: Path,
+    job_dir: Path,
+) -> dict[str, Any]:
+    """
+  Для каждого expected mp3: resolved если валидный mp3 на Drive или Colab пометил failed/manual_skipped
+  (после COLAB_DONE.txt).
+    """
+    colab_done = (job_dir / "COLAB_DONE.txt").is_file()
+    status = _read_colab_status(job_dir)
+    file_status = status.get("file_status") if isinstance(status.get("file_status"), dict) else {}
+    manual_marker = _read_manual_skipped(job_dir)
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    failed_terminal: list[str] = []
+    manual_skipped: list[str] = []
+    for name in sorted(expected_set):
+        if _drive_mp3_ready(mp3_dir, name):
+            resolved.append(name)
+            continue
+        if name in manual_marker:
+            resolved.append(name)
+            manual_skipped.append(name)
+            continue
+        st = str(file_status.get(name, "") or "").strip()
+        if colab_done and st in _COLAB_TERMINAL_NON_MP3:
+            resolved.append(name)
+            if st == "failed":
+                failed_terminal.append(name)
+            elif st == "manual_skipped":
+                manual_skipped.append(name)
+            continue
+        unresolved.append(name)
+    return {
+        "colab_done": colab_done,
+        "resolved_count": len(resolved),
+        "unresolved_count": len(unresolved),
+        "unresolved": unresolved,
+        "failed_terminal": failed_terminal,
+        "manual_skipped": manual_skipped,
+        "manual_skipped_marker": manual_marker,
+        "colab_status": status,
+    }
+
+
+def mark_drive_expected_skipped(
+    root_dir: Path,
+    *,
+    names: list[str],
+    reason: str,
+    execute: bool = False,
+) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    job_dir = _drive_dir_from(root, settings, "job", "job")
+    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3")
+    expected = _load_expected_files(job_dir)
+    expected_set = set(expected)
+    cleaned_names = []
+    for raw in names:
+        name = Path(str(raw).strip()).name
+        if name.lower().endswith(".mp3"):
+            cleaned_names.append(name)
+    cleaned_names = sorted(dict.fromkeys(cleaned_names), key=str.lower)
+    now = _utc_now_iso()
+    existing = _read_manual_skipped(job_dir)
+    items_by_name = dict(existing)
+    planned: list[dict[str, Any]] = []
+    skipped_not_expected: list[str] = []
+    for name in cleaned_names:
+        if expected_set and name not in expected_set:
+            skipped_not_expected.append(name)
+            continue
+        item = {
+            "expected_mp3_name": name,
+            "story": _story_title_from_mp3_name(name),
+            "title": _story_title_from_mp3_name(name),
+            "reason": reason,
+            "timestamp": now,
+            "source": "manual_skip",
+            "can_retry_later": True,
+        }
+        items_by_name[name] = item
+        planned.append(item)
+    payload = {
+        "version": 1,
+        "updated_at": now,
+        "source": "manual_skip",
+        "reason": reason,
+        "can_retry_later": True,
+        "items": [items_by_name[name] for name in sorted(items_by_name, key=str.lower)],
+    }
+    report = {
+        "ok": True,
+        "execute": bool(execute),
+        "job_dir": str(job_dir),
+        "expected_count": len(expected_set),
+        "requested_count": len(cleaned_names),
+        "marked_count": len(planned),
+        "already_or_total_manual_skipped": len(items_by_name),
+        "marked": planned,
+        "skipped_not_expected": skipped_not_expected,
+        "manual_skipped_json": str(job_dir / _MANUAL_SKIPPED_JSON),
+        "manual_skipped_txt": str(job_dir / _MANUAL_SKIPPED_TXT),
+        "report_path": str(_local_reports_dir(root) / "site_tts_manual_skipped_report.json"),
+        "written_at": now,
+    }
+    if execute:
+        _write_json(job_dir / _MANUAL_SKIPPED_JSON, payload)
+        txt_lines = [str(item["expected_mp3_name"]) for item in payload["items"]]
+        (job_dir / _MANUAL_SKIPPED_TXT).write_text("\n".join(txt_lines) + ("\n" if txt_lines else ""), encoding="utf-8")
+        expected_set = set(_load_expected_files(job_dir))
+        found_files = [p for p in mp3_dir.glob("*.mp3") if p.is_file()] if mp3_dir.is_dir() else []
+        valid_set = {p.name for p in found_files if p.stat().st_size >= _COLAB_MIN_MP3_BYTES}
+        zero_size = [p.name for p in found_files if p.stat().st_size < _COLAB_MIN_MP3_BYTES]
+        resolution = _colab_expected_resolution(expected_set=expected_set, mp3_dir=mp3_dir, job_dir=job_dir)
+        terminal_payload = _terminal_status_payload(
+            expected_set=expected_set,
+            ready_set=valid_set & expected_set,
+            manual_skipped=list(resolution["manual_skipped"]),
+            failed_terminal=list(resolution["failed_terminal"]),
+            real_missing=list(resolution["unresolved"]),
+            extra=sorted(valid_set - expected_set),
+            zero_size=zero_size,
+            mp3_dir=mp3_dir,
+            job_dir=job_dir,
+        )
+        _write_terminal_reports(root_dir=root, job_dir=job_dir, payload=terminal_payload)
+    _write_json(_local_reports_dir(root) / "site_tts_manual_skipped_report.json", report)
+    return report
+
+
+def mark_missing_drive_expected_skipped(
+    root_dir: Path,
+    *,
+    reason: str = "manual skip missing expected mp3",
+    execute: bool = False,
+) -> dict[str, Any]:
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3")
+    job_dir = _drive_dir_from(root, settings, "job", "job")
+    expected = _load_expected_files(job_dir)
+    expected_set = set(expected)
+    resolution = _colab_expected_resolution(expected_set=expected_set, mp3_dir=mp3_dir, job_dir=job_dir)
+    missing = sorted(list(resolution["unresolved"]), key=str.lower)
+    result = mark_drive_expected_skipped(root, names=missing, reason=reason, execute=execute)
+    result["missing_before_mark"] = missing
+    result["missing_before_mark_count"] = len(missing)
+    _write_json(_local_reports_dir(root) / "site_tts_manual_skipped_report.json", result)
+    return result
+
+
 def _read_local_job_status(job_dir: Path) -> dict[str, Any] | None:
     p = job_dir / "LOCAL_STATUS.json"
     if not p.is_file():
@@ -554,6 +856,289 @@ def _read_local_job_status(job_dir: Path) -> dict[str, Any] | None:
         return raw if isinstance(raw, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _list_drive_text_files(texts_dir: Path) -> list[Path]:
+    """Фактические TXT на Drive: точные имена, без перезаписи."""
+    by_name: dict[str, Path] = {}
+    if not texts_dir.is_dir():
+        return []
+    for pattern in ("*.txt", "*.TXT"):
+        for p in texts_dir.glob(pattern):
+            if p.is_file():
+                by_name[p.name] = p
+    return sorted(by_name.values(), key=lambda x: x.name.lower())
+
+
+def _find_site_folder_for_drive_story_part(site_root: Path, story_part: str) -> Path | None:
+    if not site_root.is_dir() or not (story_part or "").strip():
+        return None
+    safe = _safe_name(story_part)
+    for folder in site_root.iterdir():
+        if not folder.is_dir():
+            continue
+        if folder.name == story_part or _safe_name(folder.name) == safe:
+            return folder
+    return None
+
+
+def rebuild_drive_voice_job(
+    root_dir: Path,
+    *,
+    texts_dir: Path | None = None,
+    job_dir: Path | None = None,
+    site_root: Path | None = None,
+    human_launch: Path | None = None,
+    execute: bool = False,
+) -> dict[str, Any]:
+    """
+    Пересобрать только job/kokoro_voices_job.json (и EXPECTED_*) по уже лежащим TXT на Drive.
+    Не читает и не пишет texts/ и mp3/.
+    """
+    root = root_dir.resolve()
+    settings = load_site_tts_settings(root)
+    target_texts = (
+        (texts_dir if texts_dir.is_absolute() else (root / texts_dir)).resolve()
+        if texts_dir is not None
+        else _drive_dir_from(root, settings, "texts", "texts")
+    )
+    target_job = (
+        (job_dir if job_dir.is_absolute() else (root / job_dir)).resolve()
+        if job_dir is not None
+        else _drive_dir_from(root, settings, "job", "job")
+    )
+    site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
+    hl = human_launch.resolve() if human_launch is not None else None
+
+    txt_paths = _list_drive_text_files(target_texts)
+    label_counts: dict[str, int] = {"F": 0, "M": 0, "U": 0}
+    voice_counts: dict[str, int] = {}
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    empty_txt: list[str] = []
+    no_suffix_label: list[str] = []
+    site_matched = 0
+    human_matched = 0
+
+    for txt_path in txt_paths:
+        txt_name = txt_path.name
+        if txt_path.stat().st_size <= 0:
+            empty_txt.append(txt_name)
+        story_part, filename_label = _split_story_voice(txt_path.stem)
+        if "__" not in txt_path.stem:
+            no_suffix_label.append(txt_name)
+        story_id = story_part
+        paths: SiteTtsPaths | None = None
+
+        if hl is not None:
+            folder = _human_story_dir_for_drive_mp3_name(hl, Path(txt_name).with_suffix(".mp3").name)
+            if folder is not None:
+                human_matched += 1
+                story_id = folder.name
+                paths = SiteTtsPaths.from_human_launch_story(hl, story_id, ensure_dirs=False)
+        elif site_output_root.is_dir():
+            site_folder = _find_site_folder_for_drive_story_part(site_output_root, story_part)
+            if site_folder is not None:
+                site_matched += 1
+                story_id = site_folder.name
+                paths = SiteTtsPaths.for_site_output_folder(root, site_output_root, story_id)
+
+        item = build_kokoro_drive_voice_item_for_existing_txt(
+            txt_name=txt_name,
+            settings=settings,
+            story_id=story_id,
+            paths=paths,
+            filename_voice_label=filename_label,
+        )
+        items.append(item)
+        lbl = str(item.get("voice_label") or "U").strip().upper()[:1] or "U"
+        if lbl in label_counts:
+            label_counts[lbl] += 1
+        voice_id = str(item.get("kokoro_voice") or "").strip()
+        if voice_id:
+            voice_counts[voice_id] = voice_counts.get(voice_id, 0) + 1
+        else:
+            warnings.append(f"empty_kokoro_voice:{txt_name}")
+
+    expected_mp3 = [str(it.get("mp3_name") or "").strip() for it in items if str(it.get("mp3_name") or "").strip()]
+    pool_voice_ids = collect_voice_ids_from_pools(settings)
+    missing_pool_voices = sorted(v for v in pool_voice_ids if voice_counts.get(v, 0) == 0)
+    min_items_for_pool_warn = max(30, len(pool_voice_ids) * 5)
+    pool_coverage_warn = bool(missing_pool_voices and len(items) >= min_items_for_pool_warn)
+
+    if pool_coverage_warn:
+        warnings.append(f"pool_voices_never_assigned:{','.join(missing_pool_voices)}")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_stem = f"VOICE_JOB_REBUILD_{ts}"
+    report_json = target_job / f"{report_stem}.json"
+    report_csv = target_job / f"{report_stem}.csv"
+
+    note = (
+        "Пересобрано rebuild_drive_voice_job из фактических TXT на Drive (texts/ не изменялись). "
+        "Источник голосов: configs/site_tts.yaml (voice_pools, deterministic_pool, info.txt при сопоставлении с output/site)."
+    )
+    if hl is not None:
+        note = (
+            "Пересобрано rebuild_drive_voice_job (human-launch) из TXT на Drive. "
+            "Источник: configs/site_tts.yaml + info.txt из 05_Рассказы при совпадении имени."
+        )
+
+    payload: dict[str, Any] = {
+        "version": 1,
+        "default_speed": float(settings.kokoro_speed),
+        "note": note,
+        "items": items,
+    }
+
+    summary: dict[str, Any] = {
+        "ok": not pool_coverage_warn,
+        "dry_run": not execute,
+        "texts_dir": str(target_texts),
+        "job_dir": str(target_job),
+        "txt_found": len(txt_paths),
+        "items_written": len(items) if execute else 0,
+        "items_planned": len(items),
+        "label_counts": label_counts,
+        "voice_counts": dict(sorted(voice_counts.items(), key=lambda x: (-x[1], x[0]))),
+        "voice_selection_strategy": settings.voice_selection_strategy,
+        "pool_voice_ids_expected": sorted(pool_voice_ids),
+        "pool_voices_missing_in_job": missing_pool_voices,
+        "pool_coverage_warning": pool_coverage_warn,
+        "site_story_matches": site_matched,
+        "human_story_matches": human_matched,
+        "empty_txt_count": len(empty_txt),
+        "no_suffix_label_count": len(no_suffix_label),
+        "warnings": warnings,
+        "texts_touched": False,
+        "mp3_touched": False,
+        "execute": execute,
+    }
+
+    if execute:
+        write_kokoro_voices_job_payload(job_dir=target_job, payload=payload)
+        target_job.mkdir(parents=True, exist_ok=True)
+        (target_job / "EXPECTED_COUNT.txt").write_text(str(len(expected_mp3)) + "\n", encoding="utf-8")
+        (target_job / "EXPECTED_FILES.txt").write_text(
+            "\n".join(expected_mp3) + ("\n" if expected_mp3 else ""),
+            encoding="utf-8",
+        )
+        summary["items_written"] = len(items)
+        summary["voices_job_json"] = str((target_job / VOICE_MANIFEST_FILENAME).resolve())
+        summary["expected_files"] = str((target_job / "EXPECTED_FILES.txt").resolve())
+    else:
+        summary["voices_job_json"] = str((target_job / VOICE_MANIFEST_FILENAME).resolve())
+
+    report_body = {**summary, "empty_txt_sample": empty_txt[:20], "no_suffix_label_sample": no_suffix_label[:20]}
+    if execute:
+        report_json.parent.mkdir(parents=True, exist_ok=True)
+        report_json.write_text(json.dumps(report_body, ensure_ascii=False, indent=2), encoding="utf-8")
+        with report_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["txt_name", "voice_label", "kokoro_voice", "voice_source", "speed", "story_folder"])
+            for it in items:
+                w.writerow(
+                    [
+                        it.get("txt_name", ""),
+                        it.get("voice_label", ""),
+                        it.get("kokoro_voice", ""),
+                        it.get("voice_source", ""),
+                        it.get("speed", ""),
+                        it.get("story_folder", ""),
+                    ]
+                )
+        summary["report_json"] = str(report_json)
+        summary["report_csv"] = str(report_csv)
+
+    summary["message"] = (
+        "dry-run: job не записан (добавьте --execute)"
+        if not execute
+        else (
+            "voice job пересобран"
+            if summary["ok"]
+            else "voice job пересобран, но не все голоса из voice_pools встретились в назначениях"
+        )
+    )
+    return summary
+
+
+def _print_rebuild_voice_job_summary(res: dict[str, Any]) -> None:
+    print(res.get("message", ""))
+    print(f"texts_dir={res.get('texts_dir')}")
+    print(f"job_dir={res.get('job_dir')}")
+    print(f"TXT found on Drive: {res.get('txt_found')}")
+    print(f"items planned: {res.get('items_planned')}")
+    print(f"items written to kokoro_voices_job.json: {res.get('items_written')}")
+    print(f"dry_run={res.get('dry_run')}")
+    print(f"texts_touched={res.get('texts_touched')} mp3_touched={res.get('mp3_touched')}")
+    lc = res.get("label_counts") or {}
+    print(f"label counts F/M/U: F={lc.get('F', 0)} M={lc.get('M', 0)} U={lc.get('U', 0)}")
+    print("voice counts by kokoro_voice:")
+    for vid, cnt in (res.get("voice_counts") or {}).items():
+        print(f"  {vid}: {cnt}")
+    missing = res.get("pool_voices_missing_in_job") or []
+    print(f"pool voices missing in job (0 assignments): {len(missing)}")
+    if missing:
+        print(f"  missing: {', '.join(missing)}")
+    if res.get("pool_coverage_warning"):
+        print("WARN: not all voices from voice_pools appear in assignments — check configs/site_tts.yaml")
+    warns = res.get("warnings") or []
+    if warns:
+        print(f"warnings ({len(warns)}):")
+        for w in warns[:15]:
+            print(f"  - {w}")
+        if len(warns) > 15:
+            print(f"  ... and {len(warns) - 15} more")
+    if res.get("voices_job_json"):
+        print(f"voices_job_json={res.get('voices_job_json')}")
+    if res.get("report_json"):
+        print(f"report_json={res.get('report_json')}")
+    if res.get("report_csv"):
+        print(f"report_csv={res.get('report_csv')}")
+
+
+def drive_kokoro_job_pending_on_drive(root_dir: Path) -> tuple[bool, dict[str, Any]]:
+    """
+    True, если на Drive уже есть активный Kokoro job (ожидание mp3), даже если повторный export не нужен.
+    Используется site_tts_stage, чтобы не выходить после export с exported=0.
+    """
+    root = root_dir.resolve()
+    try:
+        settings = load_site_tts_settings(root)
+        job_dir = _drive_dir_from(root, settings, "job", "job")
+    except ValueError as exc:
+        return False, {"reason": str(exc)}
+    st = _read_local_job_status(job_dir) or {}
+    state = str(st.get("state", "")).strip()
+    expected = _load_expected_files(job_dir)
+    if state == "imported_success":
+        return False, {"reason": "already_imported_success", "job_dir": str(job_dir)}
+    if not expected:
+        return False, {"reason": "no_expected_files", "job_dir": str(job_dir)}
+    if state == "exported_waiting_mp3":
+        return True, {
+            "reason": "local_status_exported_waiting_mp3",
+            "job_dir": str(job_dir),
+            "expected_count": len(expected),
+        }
+    try:
+        texts_dir = _drive_dir_from(root, settings, "texts", "texts")
+    except ValueError:
+        texts_dir = None
+    if texts_dir is not None and texts_dir.is_dir():
+        present = 0
+        for name in expected[:50]:
+            txt = texts_dir / Path(name).with_suffix(".txt").name
+            if txt.is_file() and txt.stat().st_size > 0:
+                present += 1
+        if present > 0:
+            return True, {
+                "reason": "drive_txt_and_expected_job",
+                "job_dir": str(job_dir),
+                "expected_count": len(expected),
+                "txt_sample_present": present,
+            }
+    return False, {"reason": "no_pending_markers", "job_state": state, "job_dir": str(job_dir)}
 
 
 def _should_skip_redundant_drive_export(*, texts_dir: Path, job_dir: Path, site_root: Path) -> tuple[bool, str]:
@@ -634,13 +1219,24 @@ def export_drive_texts(
     stories_filter_dir: Path | None = None,
     site_root: Path | None = None,
     human_launch: Path | None = None,
+    job_only: bool = False,
+    execute: bool = True,
 ) -> dict[str, Any]:
     """
     stories_filter_dir: если задан и не пуст по *.txt, экспортируются только папки output/site,
     чьё normalize_site_story_name(folder) совпадает с одним из стемов в этом каталоге
     (тот же контракт, что у site-tts batch для *-site). Иначе — вся очередь без mp3 (старое поведение).
+    job_only: только пересборка kokoro_voices_job.json по TXT на Drive (texts/mp3 не трогать).
     """
     root = root_dir.resolve()
+    if job_only:
+        return rebuild_drive_voice_job(
+            root,
+            texts_dir=texts_dir,
+            site_root=site_root,
+            human_launch=human_launch,
+            execute=execute,
+        )
     settings = load_site_tts_settings(root)
     hl = human_launch.resolve() if human_launch is not None else None
     target = (
@@ -866,7 +1462,7 @@ def export_drive_texts(
             continue
         dst = target / txt_name
         raw_text = src.tts_text_path.read_text(encoding="utf-8")
-        cleaned_text, url_before, url_after, removed_lines = _clean_text_for_drive_tts(raw_text)
+        cleaned_text, url_before, url_after, removed_lines, lit_diag = _clean_text_for_drive_tts(raw_text)
         if url_after > 0:
             skipped_rows.append([f"{i:03d}", src.story_id, src.tts_text_path.name, mp3_name, str(src.expected_output_mp3), "skip:dirty_after_clean"])
             _append_export_diag(
@@ -932,6 +1528,9 @@ def export_drive_texts(
                 "url_like_count_before": url_before,
                 "url_like_count_after": 0,
                 "removed_lines_count": removed_lines,
+                "removed_literotica_header_lines_count": lit_diag.get("removed_literotica_header_lines_count", 0),
+                "removed_literotica_header_lines_sample": lit_diag.get("removed_literotica_header_lines_sample", []),
+                "literotica_header_warning": lit_diag.get("literotica_header_warning"),
                 "preview_500": cleaned_text[:500],
                 "expected_files_entry": mp3_name,
                 "status": "exported",
@@ -1070,6 +1669,8 @@ def import_drive_mp3(
     source.mkdir(parents=True, exist_ok=True)
     job_dir = _drive_dir_from(root, settings, "job", "job")
     expected = set(_load_expected_files(job_dir))
+    resolution = _colab_expected_resolution(expected_set=expected, mp3_dir=source, job_dir=job_dir) if expected else {}
+    terminal_non_mp3 = set(resolution.get("failed_terminal") or []) | set(resolution.get("manual_skipped") or [])
     site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
     hl = human_launch.resolve() if human_launch is not None else None
 
@@ -1138,8 +1739,8 @@ def import_drive_mp3(
     handled = {d["file"] for d in details if d.get("status") in ("imported", "skipped_identical")}
     missing_after: list[str] = []
     if expected:
-        missing_after = sorted(expected - handled)
-    ok_import = errors == 0 and not missing_after
+        missing_after = sorted(expected - handled - terminal_non_mp3)
+    ok_import = errors == 0
     out: dict[str, Any] = {
         "ok": ok_import,
         "mp3_dir": str(source),
@@ -1151,7 +1752,13 @@ def import_drive_mp3(
         "errors": errors,
         "details": details,
         "missing_after_import": missing_after,
+        "manual_skipped": sorted(resolution.get("manual_skipped") or []),
+        "failed_terminal": sorted(resolution.get("failed_terminal") or []),
+        "terminal_non_mp3_count": len(terminal_non_mp3),
+        "partial_import": bool(missing_after),
+        "can_continue_to_site_publish": errors == 0,
     }
+    _write_json(_local_reports_dir(root) / "site_tts_drive_import_report.json", out)
     if hl is not None:
         try:
             tag = _utc_now_iso().replace(":", "-")
@@ -1385,6 +1992,7 @@ def wait_drive_mp3_and_import(
     force: bool = False,
     site_root: Path | None = None,
     artifact_root: Path | None = None,
+    human_launch: Path | None = None,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
@@ -1400,37 +2008,102 @@ def wait_drive_mp3_and_import(
         return {"ok": False, "message": f"EXPECTED_FILES.txt is empty or missing in {job_dir}"}
     interval = max(1, int(wait_interval_minutes or settings.google_drive_wait_interval_minutes))
     max_hours = max(1, int(max_wait_hours or settings.google_drive_max_wait_hours))
-    deadline = time.time() + max_hours * 3600
+    started = time.time()
+    deadline = started + max_hours * 3600
     expected_set = set(expected)
+    hl = human_launch.resolve() if human_launch is not None else None
+
+    print("Waiting for Kokoro MP3 on Google Drive...", flush=True)
+    print(f"mp3_dir={source}", flush=True)
+    print(f"job_dir={job_dir}", flush=True)
+    print(f"expected_total={len(expected_set)}", flush=True)
+    print(f"wait_interval_minutes={interval}", flush=True)
+    print(f"timeout_hours={max_hours}", flush=True)
 
     last_status: dict[str, Any] = {}
     while True:
         found_files = [p for p in source.glob("*.mp3") if p.is_file()]
-        valid_set = {p.name for p in found_files if p.stat().st_size > 0}
-        zero_size = [p.name for p in found_files if p.stat().st_size <= 0]
-        missing = sorted(expected_set - valid_set)
+        valid_set = {p.name for p in found_files if p.stat().st_size >= _COLAB_MIN_MP3_BYTES}
+        zero_size = [p.name for p in found_files if p.stat().st_size < _COLAB_MIN_MP3_BYTES]
+        resolution = _colab_expected_resolution(expected_set=expected_set, mp3_dir=source, job_dir=job_dir)
+        missing = list(resolution["unresolved"])
+        ready_set = valid_set & expected_set
+        failed_terminal = list(resolution["failed_terminal"])
+        manual_skipped = list(resolution["manual_skipped"])
         extra = sorted(valid_set - expected_set)
+        elapsed_h = (time.time() - started) / 3600.0
+        colab_st = resolution.get("colab_status") if isinstance(resolution.get("colab_status"), dict) else {}
+        terminal_payload = _terminal_status_payload(
+            expected_set=expected_set,
+            ready_set=ready_set,
+            manual_skipped=manual_skipped,
+            failed_terminal=failed_terminal,
+            real_missing=missing,
+            extra=extra,
+            zero_size=zero_size,
+            mp3_dir=source,
+            job_dir=job_dir,
+        )
+        _write_terminal_reports(root_dir=root, job_dir=job_dir, payload=terminal_payload)
         last_status = {
             "expected": len(expected_set),
-            "found": len(valid_set & expected_set),
+            "ready": len(ready_set),
+            "found": int(resolution["resolved_count"]),
             "missing": len(missing),
+            "real_missing": len(missing),
+            "effective_missing": len(missing),
             "zero_size": len(zero_size),
             "extra": len(extra),
+            "colab_done": bool(resolution["colab_done"]),
+            "failed_terminal": len(failed_terminal),
+            "manual_skipped": len(manual_skipped),
+            "colab_failed_count": int(colab_st.get("failed_count", 0) or 0),
+            "completed_with_failed": bool(colab_st.get("completed_with_failed", False)),
+            "completed": bool(terminal_payload["completed"]),
+            "can_continue": bool(terminal_payload["can_continue"]),
+            "can_continue_to_publish": bool(terminal_payload["can_continue_to_publish"]),
+            "can_continue_to_site_publish": bool(terminal_payload["can_continue_to_site_publish"]),
+            "ready_to_publish_count": int(terminal_payload["ready_to_publish_count"]),
+            "real_missing_count": int(terminal_payload["real_missing_count"]),
+            "extra_mp3_count": int(terminal_payload["extra_mp3_count"]),
             "next_check_in_minutes": interval,
+            "elapsed_hours": round(elapsed_h, 2),
+            "timeout_hours": max_hours,
+            "mp3_dir": str(source),
+            "report_path": str(_local_reports_dir(root) / "site_tts_drive_wait_report.json"),
         }
         print(
-            f"expected={last_status['expected']} found={last_status['found']} missing={last_status['missing']} "
-            f"zero_size={last_status['zero_size']} extra={last_status['extra']} next_check_in={interval}_minutes",
+            f"expected={last_status['expected']} ready={last_status['ready']} missing={last_status['missing']} "
+            f"zero_size={last_status['zero_size']} extra={last_status['extra']} "
+            f"colab_done={last_status['colab_done']} failed_terminal={last_status['failed_terminal']} "
+            f"manual_skipped={last_status['manual_skipped']} "
+            f"can_continue={last_status['can_continue']} completed={last_status['completed']} "
+            f"elapsed_h={last_status['elapsed_hours']:.2f} timeout_h={max_hours} "
+            f"next_check_in={interval}_min",
             flush=True,
         )
-        if not missing and not zero_size:
+        if missing:
+            print(f"missing_sample={missing[:5]}", flush=True)
+        if terminal_payload["can_continue_to_publish"]:
             break
         if time.time() >= deadline:
-            return {"ok": False, "message": "max wait time exceeded", "status": last_status, "missing_files": missing[:50], "zero_size_files": zero_size[:50]}
+            return {
+                "ok": False,
+                "message": "max wait time exceeded",
+                "status": last_status,
+                "missing_files": missing[:50],
+                "zero_size_files": zero_size[:50],
+            }
         time.sleep(interval * 60)
 
     site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
-    imp = import_drive_mp3(root, mp3_dir=source, force=force, site_root=site_output_root)
+    imp = import_drive_mp3(
+        root,
+        mp3_dir=source,
+        force=force,
+        site_root=site_output_root,
+        human_launch=hl,
+    )
     if not imp.get("ok", False) or int(imp.get("errors", 0) or 0) > 0:
         return {"ok": False, "message": "import-drive failed", "import": imp, "status": last_status}
 
@@ -1439,16 +2112,24 @@ def wait_drive_mp3_and_import(
         return {"ok": False, "message": f"distribute-images failed: {err_di}", "import": imp, "status": last_status}
     print("[site_tts] distribute-images выполнен после import mp3 с Drive.", flush=True)
 
-    # post-check: expected output files exist and non-zero
+    # post-check: expected output files exist and non-zero (failed/manual_skipped on Colab — не блокируют)
+    resolution_final = _colab_expected_resolution(expected_set=expected_set, mp3_dir=source, job_dir=job_dir)
+    terminal_non_mp3 = set(resolution_final["failed_terminal"]) | set(resolution_final["manual_skipped"])
     failed_local: list[str] = []
     for name in expected:
+        if name in terminal_non_mp3:
+            continue
         story, _v = _split_story_voice(Path(name).stem)
         story = _safe_name(story)
         out_mp3 = site_output_root / story / f"{story}.mp3"
         if not out_mp3.is_file() or out_mp3.stat().st_size <= 0:
             failed_local.append(story)
     if failed_local:
-        return {"ok": False, "message": "local post-check failed", "failed_stories": failed_local[:50], "import": imp}
+        print(
+            "[WARN] partial TTS import: some expected non-terminal stories still have no local mp3; "
+            f"ready stories continue. sample={failed_local[:20]}",
+            flush=True,
+        )
 
     _human_mirror_site_artifacts_after_import(site_output_root, list(expected))
 
@@ -1478,6 +2159,11 @@ def wait_drive_mp3_and_import(
                 "state": "imported_success",
                 "expected_count": len(expected),
                 "imported": int(imp.get("imported", 0) or 0),
+                "colab_failed_terminal": len(resolution_final["failed_terminal"]),
+                "colab_manual_skipped": len(resolution_final["manual_skipped"]),
+                "completed_with_failed": bool(
+                    (_read_colab_status(job_dir) or {}).get("completed_with_failed", False)
+                ),
                 "cleanup": cleaned,
                 "updated_at": _utc_now_iso(),
             },
@@ -1486,7 +2172,14 @@ def wait_drive_mp3_and_import(
         ),
         encoding="utf-8",
     )
-    return {"ok": True, "status": last_status, "import": imp, "cleanup": cleaned}
+    return {
+        "ok": True,
+        "status": last_status,
+        "import": imp,
+        "cleanup": cleaned,
+        "colab_failed_terminal": resolution_final["failed_terminal"][:50],
+        "colab_manual_skipped": resolution_final["manual_skipped"][:50],
+    }
 
 
 def _current_paths(root: Path) -> tuple[Path, Path, Path]:
