@@ -33,6 +33,7 @@ REPORT_SETUP = "video_setup_colab_workers_report.json"
 REPORT_DISPATCH = "video_dispatch_segments_report.json"
 REPORT_RECLAIM = "video_reclaim_stale_segments_report.json"
 REPORT_QUEUE_STATUS = "video_queue_status_report.json"
+REPORT_WORKERS_AUDIT = "video_workers_audit_report.json"
 REPORT_INSPECT = "video_inspect_segment_report.json"
 REPORT_IMPORT = "video_import_results_report.json"
 REPORT_FINAL = "final_video_report.json"
@@ -82,6 +83,12 @@ class YoutubeVideoColabBrowserProfilesOptions:
 
 
 @dataclass
+class YoutubeVideoWorkersAuditOptions:
+    story_id: str
+    config_path: Path = COLAB_WORKERS_CONFIG_PATH
+
+
+@dataclass
 class YoutubeVideoDispatchSegmentsOptions:
     story_id: str
     workers: str = ""
@@ -103,6 +110,7 @@ class YoutubeVideoReclaimStaleSegmentsOptions:
 class YoutubeVideoQueueStatusOptions:
     story_id: str
     stale_minutes: int = 10
+    quick: bool = False
 
 
 @dataclass
@@ -519,6 +527,102 @@ def run_youtube_video_colab_browser_profiles(
 
 def _safe_email(email: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", email.strip()).strip("._-") or "worker"
+
+
+def _colab_launcher_workers(config_path: Path) -> list[dict[str, Any]]:
+    raw = _load_yaml(config_path)
+    rows: list[dict[str, Any]] = []
+    if isinstance(raw, dict):
+        for group_name, group_data in raw.items():
+            if not isinstance(group_data, dict):
+                continue
+            group_browser = str(group_data.get("browser") or group_name).strip().lower()
+            group_profile_strategy = str(group_data.get("profile_strategy") or "").strip()
+            group_launch_mode = str(group_data.get("launch_mode") or "").strip()
+            for item in group_data.get("workers") or []:
+                if not isinstance(item, dict):
+                    continue
+                email = str(item.get("email") or "").strip()
+                if not email:
+                    continue
+                rows.append(
+                    {
+                        "group": str(group_name),
+                        "email": email,
+                        "browser": str(item.get("browser") or group_browser).strip().lower(),
+                        "profile_strategy": str(item.get("profile_strategy") or group_profile_strategy).strip(),
+                        "launch_mode": str(item.get("launch_mode") or group_launch_mode).strip(),
+                        "profile_dir": str(item.get("profile_dir") or "").strip(),
+                        "notebook_path": str(item.get("notebook_path") or "").strip(),
+                        "notebook_url": str(item.get("notebook_url") or "").strip(),
+                        "require_t4": bool(item.get("require_t4", False)),
+                    }
+                )
+    if rows:
+        return rows
+    return _parse_colab_launcher_workers_fallback(config_path)
+
+
+def _parse_colab_launcher_workers_fallback(config_path: Path) -> list[dict[str, Any]]:
+    if not config_path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    group_name = ""
+    group_defaults: dict[str, str] = {}
+    current_worker: dict[str, Any] | None = None
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not line.startswith(" ") and stripped.endswith(":"):
+            group_name = stripped[:-1]
+            group_defaults = {}
+            current_worker = None
+            continue
+        if not group_name:
+            continue
+        if stripped.startswith("- email:"):
+            current_worker = {
+                "group": group_name,
+                "email": str(_parse_scalar(stripped.split(":", 1)[1])),
+                "browser": group_defaults.get("browser", group_name),
+                "profile_strategy": group_defaults.get("profile_strategy", ""),
+                "launch_mode": group_defaults.get("launch_mode", ""),
+                "profile_dir": "",
+                "notebook_path": "",
+                "notebook_url": "",
+                "require_t4": False,
+            }
+            rows.append(current_worker)
+            continue
+        if ":" not in stripped:
+            continue
+        key, raw_value = stripped.split(":", 1)
+        value = _parse_scalar(raw_value)
+        if current_worker is None:
+            if key in {"browser", "profile_strategy", "launch_mode"}:
+                group_defaults[key] = str(value)
+            continue
+        if key in {"browser", "profile_strategy", "launch_mode", "profile_dir", "notebook_path", "notebook_url"}:
+            current_worker[key] = str(value)
+        elif key == "require_t4":
+            current_worker[key] = bool(value)
+    return rows
+
+
+def _status_by_worker_email(job_root: Path) -> dict[str, dict[str, Any]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    for row in _worker_statuses(job_root):
+        email = str(row.get("worker_email") or row.get("email") or "").strip()
+        if not email:
+            continue
+        statuses[email] = row
+    return statuses
 
 
 def _assigned_worker_dirs(job_root: Path, worker_email: str) -> dict[str, Path]:
@@ -1203,20 +1307,50 @@ def _build_queue_status(
             status_dt = status_dt.replace(tzinfo=timezone.utc)
         status_age_seconds = int((now - status_dt).total_seconds()) if status_dt else None
         status_offline = (status_age_seconds is None) or (status_age_seconds >= stale_seconds)
+        last_status = row.get("status") or "NO_HEARTBEAT"
+        last_exit_reason = row.get("last_exit_reason") or ""
         worker_details[worker] = {
             "pending": counts.get(worker, {}).get("pending", 0),
             "processing": counts.get(worker, {}).get("processing", 0),
             "stale_processing": stale_processing_by_worker.get(worker, 0),
             "done": counts.get(worker, {}).get("done", 0),
             "failed": counts.get(worker, {}).get("failed", 0),
-            "last_status": row.get("status") or "NO_HEARTBEAT",
+            "last_status": last_status,
             "current_segment": row.get("current_segment_id") or row.get("current_job") or "",
             "last_heartbeat_at": heartbeat,
             "worker_status_age_seconds": status_age_seconds,
             "worker_status_offline": status_offline,
             "last_message": row.get("last_message") or "",
             "last_error": row.get("last_error") or row.get("error") or "",
+            "last_exit_reason": last_exit_reason,
+            "exited_at": row.get("exited_at") or "",
+            "exited_by_idle_timeout": str(last_status).lower() == "exited" and (last_exit_reason == "idle_timeout" or row.get("last_message") == "idle timeout"),
         }
+    active_workers = sorted(
+        worker
+        for worker, detail in worker_details.items()
+        if not bool(detail.get("worker_status_offline"))
+    )
+    offline_workers = sorted(
+        worker
+        for worker, detail in worker_details.items()
+        if bool(detail.get("worker_status_offline"))
+    )
+    idle_workers = sorted(
+        worker
+        for worker, detail in worker_details.items()
+        if str(detail.get("last_status") or "").lower() == "idle"
+    )
+    workers_with_assigned_pending = sorted(
+        worker
+        for worker, detail in worker_details.items()
+        if int(detail.get("pending") or 0) > 0
+    )
+    workers_exited_by_idle_timeout = sorted(
+        worker
+        for worker, detail in worker_details.items()
+        if bool(detail.get("exited_by_idle_timeout"))
+    )
 
     warnings: list[str] = []
     if legacy_pending_left:
@@ -1307,6 +1441,7 @@ def _build_queue_status(
         "partial_segments_count": checkpoints["partial_segments_count"],
         "checkpoints_per_segment": checkpoints["per_segment"],
         "asset_preflight_ok": asset_preflight_ok,
+        "asset_preflight_included": asset_preflight_included,
         "missing_asset_segments_count": missing_asset_segments_count,
         "missing_assets_count": missing_assets_count,
         "missing_asset_segments": missing_asset_segments,
@@ -1316,6 +1451,16 @@ def _build_queue_status(
         "legacy_segments_pending_json": legacy_pending_left,
         "warnings": warnings,
         "workers": workers_status,
+        "worker_count": len(workers),
+        "active_worker_count": len(active_workers),
+        "active_workers": active_workers,
+        "offline_workers": offline_workers,
+        "idle_workers": idle_workers,
+        "idle_worker_count": len(idle_workers),
+        "workers_with_assigned_pending": workers_with_assigned_pending,
+        "workers_with_assigned_pending_count": len(workers_with_assigned_pending),
+        "workers_exited_by_idle_timeout": workers_exited_by_idle_timeout,
+        "workers_exited_by_idle_timeout_count": len(workers_exited_by_idle_timeout),
         "worker_details": worker_details,
         "can_import": segments_done_count > 0,
         "local_segments": local_segments,
@@ -1424,7 +1569,125 @@ def run_youtube_video_queue_status(
         str(options.story_id).strip(),
         write_report=True,
         stale_minutes=int(getattr(options, "stale_minutes", 10) or 10),
+        include_asset_preflight=not bool(getattr(options, "quick", False)),
     )
+
+
+def run_youtube_video_workers_audit(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubeVideoWorkersAuditOptions,
+) -> dict[str, Any]:
+    settings = _render_settings(config)
+    story_id = str(options.story_id).strip()
+    story_slug = _safe_slug(story_id)
+    story_dir = _story_dir(config, settings, story_id)
+    local_dirs = _video_dirs(story_dir)
+    job_root = _drive_job_root(settings, story_slug)
+    job_dirs = _job_dirs(job_root)
+    launcher_config_path = (config.root_dir / options.config_path).resolve() if not options.config_path.is_absolute() else options.config_path
+    launcher_workers = _colab_launcher_workers(launcher_config_path)
+    render_workers = list(settings["workers"])
+    launcher_emails = [str(row.get("email") or "").strip() for row in launcher_workers if str(row.get("email") or "").strip()]
+    launcher_email_set = set(launcher_emails)
+    render_email_set = set(render_workers)
+    missing_in_render_config = sorted(launcher_email_set - render_email_set)
+    extra_in_render_config = sorted(render_email_set - launcher_email_set)
+    assigned_root = job_dirs["assigned"]
+    assigned_folder_names = sorted([p.name for p in assigned_root.iterdir() if p.is_dir()], key=str.lower) if assigned_root.is_dir() else []
+    statuses_by_email = _status_by_worker_email(job_root)
+    now = datetime.now(timezone.utc)
+    stale_seconds = 10 * 60
+
+    rows: list[dict[str, Any]] = []
+    for worker in launcher_workers:
+        email = str(worker.get("email") or "").strip()
+        assigned_dirs = _assigned_worker_dirs(job_root, email)
+        status = statuses_by_email.get(email) or {}
+        last_heartbeat = (
+            status.get("last_heartbeat_at")
+            or status.get("heartbeat_at")
+            or status.get("updated_at")
+            or ""
+        )
+        heartbeat_dt = _parse_iso(last_heartbeat)
+        heartbeat_age_seconds = int((now - heartbeat_dt).total_seconds()) if heartbeat_dt else None
+        rows.append(
+            {
+                "group": worker.get("group", ""),
+                "email": email,
+                "browser": worker.get("browser", ""),
+                "profile_dir": worker.get("profile_dir", ""),
+                "profile_dir_exists": Path(str(worker.get("profile_dir") or "")).is_dir(),
+                "worker_id": email,
+                "safe_worker_id": _safe_email(email),
+                "in_render_queue_config": email in render_email_set,
+                "assigned_dir": str(assigned_dirs["base"]),
+                "assigned_dir_exists": assigned_dirs["base"].is_dir(),
+                "assigned_pending_dir_exists": assigned_dirs["pending"].is_dir(),
+                "assigned_processing_dir_exists": assigned_dirs["processing"].is_dir(),
+                "assigned_done_dir_exists": assigned_dirs["done"].is_dir(),
+                "assigned_failed_dir_exists": assigned_dirs["failed"].is_dir(),
+                "assigned_pending_count": _count_files(assigned_dirs["pending"], "segment_*.json"),
+                "assigned_processing_count": _count_files(assigned_dirs["processing"], "segment_*.json"),
+                "assigned_done_count": _count_files(assigned_dirs["done"], "segment_*.json"),
+                "assigned_failed_count": _count_files(assigned_dirs["failed"], "segment_*.json"),
+                "heartbeat_exists": bool(last_heartbeat),
+                "last_heartbeat": last_heartbeat,
+                "heartbeat_age_seconds": heartbeat_age_seconds,
+                "worker_status_offline": heartbeat_age_seconds is None or heartbeat_age_seconds >= stale_seconds,
+                "last_status": status.get("status") or "NO_HEARTBEAT",
+                "current_segment": status.get("current_segment_id") or status.get("current_job") or "",
+                "status_path": status.get("path", ""),
+                "notebook_path": worker.get("notebook_path", ""),
+                "notebook_url": worker.get("notebook_url", ""),
+            }
+        )
+
+    missing_assigned_dirs = sorted([row["email"] for row in rows if not row["assigned_dir_exists"]])
+    missing_heartbeat = sorted([row["email"] for row in rows if not row["heartbeat_exists"]])
+    config_alignment_ok = not missing_in_render_config and not extra_in_render_config
+    assigned_dirs_complete = not missing_assigned_dirs
+    report = {
+        "ok": config_alignment_ok,
+        "status": "aligned" if config_alignment_ok else "mismatch",
+        "story_id": story_id,
+        "story_slug": story_slug,
+        "launcher_config_path": str(launcher_config_path),
+        "render_queue_config_path": str((config.root_dir / CONFIG_PATH).resolve()),
+        "drive_job_root": str(job_root),
+        "job_exists": job_root.is_dir(),
+        "job_ready": (job_root / "VIDEO_JOB_READY.json").is_file(),
+        "workers_in_launcher": launcher_emails,
+        "workers_in_launcher_count": len(launcher_emails),
+        "workers_in_render_queue_config": render_workers,
+        "workers_in_render_queue_config_count": len(render_workers),
+        "missing_in_render_config": missing_in_render_config,
+        "extra_in_render_config": extra_in_render_config,
+        "mismatch_count": len(missing_in_render_config) + len(extra_in_render_config),
+        "existing_assigned_folders": assigned_folder_names,
+        "missing_assigned_dirs": missing_assigned_dirs,
+        "assigned_dirs_complete": assigned_dirs_complete,
+        "missing_heartbeat": missing_heartbeat,
+        "workers": rows,
+        "single_worker_command": (
+            'python tools/colab_launcher/launch_colab_group.py --config "configs/youtube_video_colab_workers.yaml" '
+            "--group yandex --limit 1 --mode prepared-notebook-url --wait-after-open-seconds 0 --wait-for-run-start-seconds 0"
+        ),
+        "five_yandex_workers_command": (
+            'python tools/colab_launcher/launch_colab_group.py --config "configs/youtube_video_colab_workers.yaml" '
+            "--group yandex --mode prepared-notebook-url --auto-run --sequential"
+        ),
+        "ten_workers_command": (
+            'python tools/colab_launcher/launch_colab_group.py --config "configs/youtube_video_colab_workers.yaml" '
+            "--group all --mode prepared-notebook-url --auto-run --sequential"
+        ),
+        "queue_status_command": f'python -m orchestrator youtube video queue-status --story-id "{story_id}" --quick',
+        "report_path": str(local_dirs["reports"] / REPORT_WORKERS_AUDIT),
+        "written_at": _now_iso(),
+    }
+    _write_json(local_dirs["reports"] / REPORT_WORKERS_AUDIT, report)
+    return report
 
 
 def _parse_workers_arg(workers_arg: str, settings: dict[str, Any]) -> list[str]:

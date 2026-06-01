@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,6 +23,7 @@ DEFAULT_STORY_SLUG = "Becoming_A_Slut_Wife_Alma"
 DEFAULT_DRIVE_ROOT = Path(r"G:\Мой диск\ContentFactory_YouTube")
 NEW_COLAB_URL = "https://colab.research.google.com/#create=true"
 REPORT_NAME = "colab_launcher_report.json"
+AUDIT_REPORT_PATH = PROJECT_ROOT / "output" / "youtube" / "_diagnostics" / "colab_launch_audit_report.json"
 
 
 @dataclass
@@ -217,6 +221,173 @@ def load_workers(path: Path, group: str, browser_override: str = "", mode_overri
     return workers
 
 
+def story_slug_from_id(story_id: str) -> str:
+    cleaned = []
+    for char in str(story_id or "").strip():
+        cleaned.append(char if char.isalnum() or char in "._-" else "_")
+    return "_".join("".join(cleaned).split("_")).strip("_") or DEFAULT_STORY_SLUG
+
+
+def read_prepared_notebook_urls_csv(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            return [{str(k): str(v or "") for k, v in row.items()} for row in csv.DictReader(f)]
+    except OSError:
+        return []
+
+
+def read_render_config_workers(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    try:
+        raw = read_yaml_like(path)
+        workers = raw.get("workers") if isinstance(raw, dict) else []
+        if isinstance(workers, list):
+            return [str(item).strip() for item in workers if str(item).strip()]
+    except Exception:
+        pass
+    workers: list[str] = []
+    in_workers = False
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not raw_line.startswith(" ") and stripped.endswith(":"):
+                in_workers = stripped == "workers:"
+                continue
+            if in_workers and stripped.startswith("- "):
+                workers.append(unquote(stripped[2:].strip()))
+                continue
+            if in_workers and not raw_line.startswith(" "):
+                break
+    except OSError:
+        return []
+    return [worker for worker in workers if worker]
+
+
+def build_colab_launch_audit(*, config_path: Path, story_id: str) -> dict[str, Any]:
+    all_workers = load_workers(config_path, "all")
+    render_config_path = PROJECT_ROOT / "configs" / "youtube_video_render.yaml"
+    render_workers = read_render_config_workers(render_config_path)
+    launch_worker_emails = sorted({worker.email for worker in all_workers})
+    render_worker_emails = sorted(set(render_workers))
+    browser_exes = {browser: first_existing(browser_candidates(browser)) for browser in {"chrome", "yandex"}}
+    story_slug = story_slug_from_id(story_id)
+    drive_job_root = DEFAULT_DRIVE_ROOT / "video_jobs" / story_slug
+    drive_scripts_dir = DEFAULT_DRIVE_ROOT / "scripts"
+    prepared_csv = PROJECT_ROOT / "tools" / "colab_launcher" / "workers_prepared_notebook_urls.csv"
+    csv_rows = read_prepared_notebook_urls_csv(prepared_csv)
+    local_worker_script = PROJECT_ROOT / "colab" / "youtube_video_worker_colab.py"
+    local_bootstrap_script = PROJECT_ROOT / "colab" / "youtube_video_bootstrap_colab.py"
+    workers = []
+    for worker in all_workers:
+        local_notebook = PROJECT_ROOT / worker.notebook_path if worker.notebook_path else Path("")
+        profile_dir = Path(worker.profile_dir) if worker.profile_dir else Path("")
+        workers.append(
+            {
+                "email": worker.email,
+                "group": worker.group,
+                "browser": worker.browser,
+                "profile_strategy": worker.profile_strategy,
+                "launch_mode": worker.launch_mode,
+                "profile_dir": worker.profile_dir,
+                "profile_dir_exists": bool(worker.profile_dir and profile_dir.is_dir()),
+                "notebook_path": worker.notebook_path,
+                "notebook_exists": bool(worker.notebook_path and local_notebook.is_file()),
+                "notebook_url": worker.notebook_url,
+                "require_t4": worker.require_t4,
+                "open_command": (
+                    f'python tools/colab_launcher/launch_colab_group.py --config "{config_path}" '
+                    f'--group {worker.group} --email "{worker.email}" --mode prepared-notebook-url'
+                ),
+            }
+        )
+    report = {
+        "ok": True,
+        "status": "audit",
+        "config_path": str(config_path.resolve()),
+        "config_exists": config_path.is_file(),
+        "workers_total": len(all_workers),
+        "workers_by_group": {
+            "yandex": sum(1 for worker in all_workers if worker.group == "yandex"),
+            "chrome": sum(1 for worker in all_workers if worker.group == "chrome"),
+        },
+        "launch_modes": sorted({worker.launch_mode for worker in all_workers}),
+        "profile_strategies": sorted({worker.profile_strategy for worker in all_workers}),
+        "browser_executables": {key: str(value) if value else "" for key, value in browser_exes.items()},
+        "prepared_notebook_urls_csv": str(prepared_csv),
+        "prepared_notebook_urls_csv_exists": prepared_csv.is_file(),
+        "prepared_notebook_urls_csv_rows": len(csv_rows),
+        "queue_render_config_path": str(render_config_path),
+        "queue_render_config_exists": render_config_path.is_file(),
+        "queue_render_workers_count": len(render_worker_emails),
+        "queue_render_workers": render_worker_emails,
+        "workers_missing_from_queue_render_config": sorted(set(launch_worker_emails) - set(render_worker_emails)),
+        "queue_workers_missing_from_launcher_config": sorted(set(render_worker_emails) - set(launch_worker_emails)),
+        "local_worker_script": str(local_worker_script),
+        "local_worker_script_exists": local_worker_script.is_file(),
+        "local_bootstrap_script": str(local_bootstrap_script),
+        "local_bootstrap_script_exists": local_bootstrap_script.is_file(),
+        "drive_root": str(DEFAULT_DRIVE_ROOT),
+        "drive_root_exists": DEFAULT_DRIVE_ROOT.is_dir(),
+        "drive_scripts_dir": str(drive_scripts_dir),
+        "drive_worker_script": str(drive_scripts_dir / "youtube_video_worker_colab.py"),
+        "drive_worker_script_exists": (drive_scripts_dir / "youtube_video_worker_colab.py").is_file(),
+        "drive_bootstrap_script": str(drive_scripts_dir / "youtube_video_bootstrap_colab.py"),
+        "drive_bootstrap_script_exists": (drive_scripts_dir / "youtube_video_bootstrap_colab.py").is_file(),
+        "story_id": story_id,
+        "story_slug": story_slug,
+        "drive_job_root": str(drive_job_root),
+        "drive_job_exists": drive_job_root.is_dir(),
+        "expected_job_ready_marker": str(drive_job_root / "VIDEO_JOB_READY.json"),
+        "job_ready_marker_exists": (drive_job_root / "VIDEO_JOB_READY.json").is_file(),
+        "expected_queue_root": str(drive_job_root / "queue"),
+        "expected_assigned_queue": str(drive_job_root / "queue" / "assigned" / "<worker_email>" / "pending"),
+        "expected_status_dir": str(drive_job_root / "status"),
+        "expected_worker_status_glob": str(drive_job_root / "status" / "workers" / "*.json"),
+        "expected_legacy_status_glob": str(drive_job_root / "status" / "COLAB_WORKER_STATUS_*.json"),
+        "expected_reports_dir": str(drive_job_root / "reports"),
+        "operator_workflow": [
+            "Open prepared notebook URL in the existing logged-in profile.",
+            "If auto-run is unreliable, click Runtime -> Run all or run the first bootstrap cell manually.",
+            "The prepared notebook runs scripts/youtube_video_bootstrap_colab.py from ContentFactory_YouTube/scripts.",
+            "Status is checked with: python -m orchestrator youtube video queue-status --story-id \"<story>\".",
+        ],
+        "single_worker_smoke_command": (
+            f'python tools/colab_launcher/launch_colab_group.py --config "{config_path}" '
+            "--group yandex --limit 1 --mode prepared-notebook-url --wait-after-open-seconds 0 --wait-for-run-start-seconds 0"
+        ),
+        "single_worker_smoke_autorun_command": (
+            f'python tools/colab_launcher/launch_colab_group.py --config "{config_path}" '
+            "--group yandex --limit 1 --mode prepared-notebook-url --auto-run --wait-after-open-seconds 30 --wait-for-run-start-seconds 60"
+        ),
+        "group_worker_command_yandex": (
+            f'python tools/colab_launcher/launch_colab_group.py --config "{config_path}" '
+            "--group yandex --mode prepared-notebook-url --auto-run --sequential"
+        ),
+        "group_worker_command_chrome": (
+            f'python tools/colab_launcher/launch_colab_group.py --config "{config_path}" '
+            "--group chrome --mode prepared-notebook-url --auto-run --sequential"
+        ),
+        "status_command": f'python -m orchestrator youtube video queue-status --story-id "{story_id}" --quick',
+        "full_status_command": f'python -m orchestrator youtube video queue-status --story-id "{story_id}"',
+        "workers": workers,
+        "warnings": [
+            "prepared_notebook_url is the stable launch mode; avoid old code injection modes for production.",
+            "Auto-run through browser UI is best-effort. Manual Run all is the reliable fallback.",
+            "No production run is started by audit.",
+        ],
+        "written_at": utc_now(),
+        "report_path": str(AUDIT_REPORT_PATH),
+    }
+    AUDIT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    AUDIT_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
 def first_existing(paths: list[Path]) -> Path | None:
     for path in paths:
         try:
@@ -362,6 +533,16 @@ def get_clipboard_text() -> str:
         return ""
 
 
+def configure_pyautogui_for_launcher(pyautogui: Any) -> None:
+    # Production Colab automation may run while the cursor is parked in a screen corner.
+    # The default failsafe aborts screenshots/hotkeys before the run sequence starts.
+    try:
+        pyautogui.FAILSAFE = False
+        pyautogui.PAUSE = 0.15
+    except Exception:
+        pass
+
+
 def save_debug_screenshot(debug_dir: Path | None, filename: str) -> str:
     if debug_dir is None:
         return ""
@@ -369,6 +550,7 @@ def save_debug_screenshot(debug_dir: Path | None, filename: str) -> str:
         import pyautogui  # type: ignore
     except Exception:
         return ""
+    configure_pyautogui_for_launcher(pyautogui)
     try:
         debug_dir.mkdir(parents=True, exist_ok=True)
         path = debug_dir / filename
@@ -385,6 +567,7 @@ def verify_code_injected(email: str) -> dict[str, Any]:
         import pyautogui  # type: ignore
     except Exception as exc:
         return {"ok": False, "reason": "pyautogui_unavailable", "error": repr(exc)}
+    configure_pyautogui_for_launcher(pyautogui)
     try:
         pyautogui.hotkey("ctrl", "a")
         time.sleep(0.2)
@@ -409,6 +592,7 @@ def verify_login_or_oauth_block() -> dict[str, Any]:
         import pyautogui  # type: ignore
     except Exception as exc:
         return {"ok": False, "reason": "pyautogui_unavailable", "error": repr(exc)}
+    configure_pyautogui_for_launcher(pyautogui)
     try:
         pyautogui.hotkey("ctrl", "l")
         time.sleep(0.2)
@@ -914,6 +1098,1352 @@ def launch_existing_profile_operator(
     }
 
 
+def focus_browser_window(browser: str) -> dict[str, Any]:
+    try:
+        import pygetwindow as gw  # type: ignore
+    except Exception as exc:
+        return {"ok": False, "reason": "pygetwindow_unavailable", "error": repr(exc)}
+    markers = ["Colab", "Google Colab", "Untitled"]
+    markers.append("Yandex" if browser == "yandex" else "Chrome")
+    windows = []
+    try:
+        windows = [window for window in gw.getAllWindows() if any(marker.lower() in (window.title or "").lower() for marker in markers)]
+    except Exception as exc:
+        return {"ok": False, "reason": "window_list_failed", "error": repr(exc)}
+    if not windows:
+        return {"ok": False, "reason": "browser_window_not_found"}
+    window = windows[-1]
+    try:
+        window.activate()
+        time.sleep(0.5)
+        try:
+            window.maximize()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "title": window.title or "",
+            "left": int(window.left),
+            "top": int(window.top),
+            "width": int(window.width),
+            "height": int(window.height),
+        }
+    except Exception as exc:
+        return {"ok": False, "reason": "window_activate_failed", "title": window.title or "", "error": repr(exc)}
+
+
+def detect_prepared_worker_start(email: str) -> dict[str, Any]:
+    sentinel = f"CONTENT_FACTORY_PREPARED_RUN_VERIFY_{int(time.time() * 1000)}"
+    set_clipboard_text(sentinel)
+    try:
+        import pyautogui  # type: ignore
+    except Exception as exc:
+        return {"attempted": True, "ok": False, "reason": "pyautogui_unavailable", "error": repr(exc)}
+    configure_pyautogui_for_launcher(pyautogui)
+    try:
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.3)
+        pyautogui.hotkey("ctrl", "c")
+        time.sleep(0.8)
+    except Exception as exc:
+        return {"attempted": True, "ok": False, "reason": "copy_page_text_failed", "error": repr(exc)}
+    copied = get_clipboard_text()
+    markers = [
+        "WORKER_EMAIL",
+        email,
+        "ContentFactory_YouTube",
+        "nvidia-smi",
+        "[BOOT]",
+        "youtube video bootstrap resolved root",
+        "[CLAIM]",
+        "[LOOP]",
+        "[HEARTBEAT]",
+    ]
+    found = [marker for marker in markers if marker in copied]
+    stale_clipboard = copied == sentinel
+    return {
+        "attempted": True,
+        "ok": bool(found and not stale_clipboard),
+        "reason": "worker_output_detected" if found and not stale_clipboard else "worker_output_not_detected",
+        "found_markers": found,
+        "stale_clipboard": stale_clipboard,
+        "copied_chars": len(copied),
+    }
+
+
+def click_relative_to_window(pyautogui: Any, window_info: dict[str, Any], x_ratio: float, y_ratio: float) -> None:
+    if window_info.get("ok") and window_info.get("width") and window_info.get("height"):
+        x = int(window_info["left"] + (window_info["width"] * x_ratio))
+        y = int(window_info["top"] + (window_info["height"] * y_ratio))
+    else:
+        screen_width, screen_height = pyautogui.size()
+        x = int(screen_width * x_ratio)
+        y = int(screen_height * y_ratio)
+    pyautogui.click(x, y)
+
+
+def autorun_event(kind: str, **payload: Any) -> dict[str, Any]:
+    return {"kind": kind, "ts": utc_now(), **payload}
+
+
+def _event_kinds(events: list[dict[str, Any]]) -> set[str]:
+    return {str(item.get("kind") or "") for item in events if isinstance(item, dict)}
+
+
+def summarize_browser_tab_autorun(events: list[dict[str, Any]], *, confirmation: dict[str, Any], failure_reason: str = "") -> dict[str, Any]:
+    kinds = _event_kinds(events)
+    backend = "playwright_cdp"
+    for item in events:
+        if isinstance(item, dict) and item.get("backend"):
+            backend = str(item.get("backend"))
+            break
+    run_all_clicked = "run_all_clicked" in kinds
+    ctrl_f9_sent = "ctrl_f9_attempted" in kinds
+    heartbeat_restored = "heartbeat_restored" in kinds
+    page_output_detected = bool(confirmation.get("page_output_detected") or "page_output_detected" in kinds)
+    stopped_at = failure_reason or ""
+    if not stopped_at and not heartbeat_restored:
+        for step in (
+            "browser_connection_failed",
+            "colab_tab_not_found",
+            "drive_permission_required",
+            "oauth_required",
+            "runtime_menu_not_found",
+            "run_all_not_found",
+            "browser_tab_autorun_failed",
+        ):
+            if step in kinds:
+                stopped_at = step
+                break
+        if not stopped_at and page_output_detected:
+            stopped_at = "cell_output_only_no_heartbeat"
+        if not stopped_at and "manual_run_required" in kinds:
+            stopped_at = "manual_run_required"
+        if not stopped_at:
+            stopped_at = "heartbeat_not_restored"
+    oauth_continue_click_count = sum(1 for item in events if isinstance(item, dict) and item.get("kind") == "oauth_continue_clicked")
+    return {
+        "backend": backend,
+        "browser_tab_autorun_attempted": "browser_tab_autorun_started" in kinds,
+        "browser_connected": "browser_connection_ok" in kinds,
+        "browser_connection_failed": "browser_connection_failed" in kinds,
+        "colab_tab_found": "colab_tab_found" in kinds,
+        "runtime_menu_found": "runtime_menu_found" in kinds,
+        "runtime_menu_clicked": "runtime_menu_clicked" in kinds,
+        "run_all_found": "run_all_found" in kinds,
+        "run_all_clicked": run_all_clicked,
+        "ctrl_f9_sent_to_tab": ctrl_f9_sent,
+        "warning_modal_detected": "warning_modal_detected" in kinds,
+        "warning_modal_confirmed": "warning_modal_confirmed" in kinds,
+        "cell_start_attempted": "cell_start_attempted" in kinds,
+        "cell_started_unconfirmed": "cell_started_unconfirmed" in kinds,
+        "page_output_detected": page_output_detected,
+        "drive_connect_detected": "drive_connect_detected" in kinds,
+        "drive_connect_clicked": "drive_connect_clicked" in kinds,
+        "drive_permission_required": "drive_permission_required" in kinds,
+        "drive_permission_handled": "drive_permission_handled" in kinds,
+        "oauth_popup_detected": "oauth_popup_detected" in kinds,
+        "oauth_continue_clicked": "oauth_continue_clicked" in kinds,
+        "oauth_continue_click_count": oauth_continue_click_count,
+        "oauth_required": "oauth_required" in kinds,
+        "oauth_handled": "oauth_handled" in kinds,
+        "heartbeat_wait_started": "heartbeat_wait_started" in kinds,
+        "heartbeat_restored": heartbeat_restored,
+        "worker_started_confirmed": "worker_started_confirmed" in kinds,
+        "autorun_success": "autorun_success" in kinds,
+        "worker_output_detected": page_output_detected,
+        "failure_step": stopped_at,
+        "exact_failure_reason": failure_reason or stopped_at or "",
+    }
+
+
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return int(sock.getsockname()[1])
+
+
+def wait_for_cdp_port(port: int, timeout_seconds: int = 30) -> bool:
+    deadline = time.monotonic() + max(1, int(timeout_seconds))
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
+def _prepared_output_markers(email: str) -> list[str]:
+    return [
+        "WORKER_EMAIL",
+        email,
+        "ContentFactory_YouTube",
+        "nvidia-smi",
+        "[BOOT]",
+        "[BOOT] worker starting",
+        "worker starting",
+        "youtube video bootstrap resolved root",
+        "[CLAIM]",
+        "[LOOP]",
+        "[HEARTBEAT]",
+    ]
+
+
+def _page_has_prepared_worker_output(page: Any, email: str) -> dict[str, Any]:
+    try:
+        text = page.locator("body").inner_text(timeout=3000)
+    except Exception:
+        try:
+            text = page.content()
+        except Exception as exc:
+            return {"attempted": True, "ok": False, "reason": "page_text_unavailable", "error": repr(exc)}
+    found = [marker for marker in _prepared_output_markers(email) if marker in text]
+    return {
+        "attempted": True,
+        "ok": bool(found),
+        "reason": "worker_output_detected" if found else "worker_output_not_detected",
+        "found_markers": found,
+        "copied_chars": len(text),
+    }
+
+
+def _live_worker_output_markers() -> list[str]:
+    return [
+        "[BOOT] worker starting",
+        "[BOOT]",
+        "[HEARTBEAT]",
+        "[LOOP]",
+        "[CLAIM]",
+        "youtube video bootstrap resolved root",
+        "nvidia-smi",
+    ]
+
+
+def _page_has_live_worker_output(page: Any, email: str) -> dict[str, Any]:
+    try:
+        text = page.locator("body").inner_text(timeout=3000)
+    except Exception:
+        try:
+            text = page.content()
+        except Exception as exc:
+            return {"attempted": True, "ok": False, "reason": "page_text_unavailable", "error": repr(exc)}
+    found = [marker for marker in _live_worker_output_markers() if marker in text]
+    email_runtime_hint = email in text and any(marker in text for marker in ("[HEARTBEAT]", "[BOOT]", "[LOOP]", "[CLAIM]"))
+    if email_runtime_hint and email not in found:
+        found.append(email)
+    return {
+        "attempted": True,
+        "ok": bool(found),
+        "reason": "live_worker_output_detected" if found else "live_worker_output_not_detected",
+        "found_markers": found,
+        "copied_chars": len(text),
+    }
+
+
+def _click_first_visible_text(page: Any, patterns: list[str], *, timeout_ms: int = 2500) -> str:
+    for pattern in patterns:
+        regex = re.compile(pattern, re.IGNORECASE)
+        candidates = [
+            page.get_by_role("button", name=regex),
+            page.get_by_role("menuitem", name=regex),
+            page.get_by_role("link", name=regex),
+            page.get_by_text(regex),
+        ]
+        for candidate in candidates:
+            try:
+                first = candidate.first
+                first.click(timeout=timeout_ms)
+                return pattern
+            except Exception:
+                continue
+    return ""
+
+
+def _focus_first_code_cell_cdp(page: Any, events: list[dict[str, Any]]) -> bool:
+    selectors = [
+        "colab-cell",
+        "colab-code-cell",
+        ".cell.code",
+        ".code-cell",
+        ".cm-content",
+        ".CodeMirror-code",
+        "[role='textbox']",
+        "textarea",
+        "[contenteditable='true']",
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            locator.scroll_into_view_if_needed(timeout=3000)
+            locator.click(timeout=3000)
+            events.append(autorun_event("cell_focused", strategy="cdp_selector", selector=selector))
+            return True
+        except Exception:
+            continue
+    try:
+        page.mouse.click(520, 330)
+        events.append(autorun_event("cell_focused", strategy="cdp_fallback_body_click"))
+        return True
+    except Exception as exc:
+        events.append(autorun_event("cell_focus_failed", strategy="cdp", error=repr(exc)))
+        return False
+
+
+def _handle_oauth_popups_cdp(context: Any, colab_page: Any, events: list[dict[str, Any]]) -> None:
+    for _ in range(4):
+        clicked_any = False
+        for page in list(context.pages):
+            try:
+                title = page.title(timeout=1000)
+                url = page.url
+            except Exception:
+                title = ""
+                url = ""
+            is_oauth_like = page is not colab_page and (
+                "accounts.google.com" in url or "OAuth" in title or "Google" in title or "Sign in" in title
+            )
+            if not is_oauth_like:
+                continue
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+            matched = _click_first_visible_text(page, [r"Продолжить", r"Continue"], timeout_ms=3000)
+            if matched:
+                clicked_any = True
+                events.append(autorun_event("oauth_popup_continue_clicked", matched=matched, page_url=url))
+                time.sleep(2)
+        if not clicked_any:
+            break
+    try:
+        colab_page.bring_to_front()
+    except Exception:
+        pass
+
+
+def _handle_permission_prompts_cdp(page: Any, events: list[dict[str, Any]]) -> None:
+    warning_matched = _click_first_visible_text(
+        page,
+        [
+            r"Выполнить",
+            r"Run anyway",
+            r"^Run$",
+        ],
+        timeout_ms=2500,
+    )
+    if warning_matched:
+        events.append(autorun_event("warning_modal_confirmed", matched=warning_matched))
+        time.sleep(2)
+
+    drive_matched = _click_first_visible_text(
+        page,
+        [
+            r"Подключиться к Google Диску",
+            r"Connect to Google Drive",
+        ],
+        timeout_ms=2500,
+    )
+    if drive_matched:
+        events.append(autorun_event("drive_connect_clicked", matched=drive_matched))
+        time.sleep(2)
+
+    try:
+        _handle_oauth_popups_cdp(page.context, page, events)
+    except Exception as exc:
+        events.append(autorun_event("oauth_popup_continue_failed", error=repr(exc)))
+
+
+def _wait_for_cdp_worker_output(page: Any, email: str, seconds: int, events: list[dict[str, Any]], strategy: str) -> dict[str, Any]:
+    deadline = time.monotonic() + max(1, int(seconds))
+    confirmation: dict[str, Any] = {"attempted": True, "ok": False, "reason": "not_checked"}
+    while time.monotonic() < deadline:
+        _handle_permission_prompts_cdp(page, events)
+        confirmation = _page_has_prepared_worker_output(page, email)
+        if confirmation.get("ok"):
+            events.append(autorun_event("autorun_success", strategy=strategy, confirmation=confirmation))
+            return confirmation
+        time.sleep(2)
+    return confirmation
+
+
+def _find_colab_page_for_url(browser: Any, notebook_url: str) -> Any | None:
+    target = (notebook_url or "").strip().lower()
+    target_tail = target.rstrip("/").split("/")[-1] if target else ""
+    candidates: list[Any] = []
+    for context in browser.contexts:
+        for page in context.pages:
+            url = (page.url or "").lower()
+            if "colab.research.google.com" not in url:
+                continue
+            if target and target in url:
+                return page
+            if target_tail and target_tail in url:
+                return page
+            candidates.append(page)
+    return candidates[-1] if candidates else None
+
+
+def _page_text_contains_any(page: Any, patterns: list[str]) -> str:
+    try:
+        text = page.locator("body").inner_text(timeout=2000)
+    except Exception:
+        try:
+            text = page.content()
+        except Exception:
+            return ""
+    for pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return pattern
+    return ""
+
+
+def _handle_permission_prompts_browser_tab(page: Any, events: list[dict[str, Any]], *, max_oauth_continue_clicks: int = 2) -> dict[str, Any]:
+    state = {
+        "warning_detected": False,
+        "warning_confirmed": False,
+        "drive_permission_required": False,
+        "drive_permission_handled": False,
+        "oauth_required": False,
+        "oauth_handled": False,
+        "oauth_continue_click_count": 0,
+    }
+    warning_detected = _page_text_contains_any(
+        page,
+        [
+            r"wasn.t authored by Google",
+            r"не создан Google",
+            r"not authored by Google",
+            r"untrusted notebook",
+        ],
+    )
+    if warning_detected:
+        state["warning_detected"] = True
+        events.append(autorun_event("warning_modal_detected", matched=warning_detected))
+    warning_matched = _click_first_visible_text(
+        page,
+        [
+            r"Выполнить",
+            r"Run anyway",
+            r"^Run$",
+        ],
+        timeout_ms=2500,
+    )
+    if warning_matched:
+        state["warning_confirmed"] = True
+        events.append(autorun_event("warning_modal_confirmed", matched=warning_matched))
+        time.sleep(2)
+
+    drive_detected = _page_text_contains_any(
+        page,
+        [
+            r"Подключиться к Google Диску",
+            r"Connect to Google Drive",
+            r"Connect to Drive",
+        ],
+    )
+    if drive_detected:
+        state["drive_permission_required"] = True
+        events.append(autorun_event("drive_connect_detected", matched=drive_detected))
+        events.append(autorun_event("drive_permission_required", matched=drive_detected))
+    drive_matched = _click_first_visible_text(
+        page,
+        [
+            r"Подключиться к Google Диску",
+            r"Connect to Google Drive",
+            r"Connect to Drive",
+        ],
+        timeout_ms=2500,
+    )
+    if drive_matched:
+        state["drive_permission_handled"] = True
+        events.append(autorun_event("drive_connect_clicked", matched=drive_matched))
+        events.append(autorun_event("drive_permission_handled", matched=drive_matched))
+        time.sleep(2)
+
+    for page_item in list(page.context.pages):
+        try:
+            url = page_item.url
+            title = page_item.title(timeout=1000)
+        except Exception:
+            url = ""
+            title = ""
+        is_oauth_like = page_item is not page and (
+            "accounts.google.com" in url or "OAuth" in title or "Sign in" in title
+        )
+        if not is_oauth_like:
+            continue
+        state["oauth_required"] = True
+        events.append(autorun_event("oauth_popup_detected", page_url=url, title=title))
+        events.append(autorun_event("oauth_required", page_url=url, title=title))
+        try:
+            page_item.bring_to_front()
+        except Exception:
+            pass
+        for _ in range(max(0, int(max_oauth_continue_clicks))):
+            matched = _click_first_visible_text(page_item, [r"Продолжить", r"Continue"], timeout_ms=3000)
+            if not matched:
+                break
+            state["oauth_handled"] = True
+            state["oauth_continue_click_count"] += 1
+            events.append(autorun_event("oauth_continue_clicked", matched=matched, page_url=url))
+            time.sleep(2)
+        if state["oauth_handled"]:
+            events.append(
+                autorun_event(
+                    "oauth_handled",
+                    page_url=url,
+                    continue_click_count=state["oauth_continue_click_count"],
+                )
+            )
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    return state
+
+
+def _attempt_runtime_run_all_browser_tab(page: Any, events: list[dict[str, Any]]) -> bool:
+    events.append(autorun_event("runtime_menu_search_started"))
+    runtime_selectors = [
+        "#runtime-menu-button",
+        "#colab-toolbar .actionbutton",
+        "colab-main-menu-button#runtime",
+        "[aria-label='Runtime']",
+        "[aria-label='Среда выполнения']",
+        "button:has-text('Runtime')",
+        "button:has-text('Среда выполнения')",
+    ]
+    runtime_matched = ""
+    for selector in runtime_selectors:
+        try:
+            locator = page.locator(selector).first
+            locator.click(timeout=3000)
+            runtime_matched = selector
+            break
+        except Exception:
+            continue
+    if not runtime_matched:
+        runtime_patterns = [
+            r"^Runtime$",
+            r"Среда выполнения",
+            r"Время выполнения",
+            r"Среда",
+        ]
+        runtime_matched = _click_first_visible_text(page, runtime_patterns, timeout_ms=5000)
+    if not runtime_matched:
+        events.append(autorun_event("runtime_menu_not_found"))
+        return False
+    events.append(autorun_event("runtime_menu_found", matched=runtime_matched))
+    events.append(autorun_event("runtime_menu_clicked", matched=runtime_matched))
+    time.sleep(0.8)
+
+    events.append(autorun_event("run_all_search_started"))
+    run_all_patterns = [
+        r"Run all",
+        r"Выполнить все",
+        r"Run all cells",
+        r"Выполнить все ячейки",
+    ]
+    run_all_matched = _click_first_visible_text(page, run_all_patterns, timeout_ms=5000)
+    if not run_all_matched:
+        events.append(autorun_event("run_all_not_found"))
+        return False
+    events.append(autorun_event("run_all_found", matched=run_all_matched))
+    events.append(autorun_event("run_all_clicked", matched=run_all_matched))
+    return True
+
+
+def _wait_for_browser_tab_worker_output(
+    page: Any,
+    email: str,
+    seconds: int,
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    events.append(autorun_event("heartbeat_wait_started"))
+    deadline = time.monotonic() + max(1, int(seconds))
+    confirmation: dict[str, Any] = {
+        "attempted": True,
+        "ok": False,
+        "reason": "page_output_not_detected",
+        "page_output_detected": False,
+        "drive_permission_required": False,
+        "drive_permission_handled": False,
+        "oauth_required": False,
+        "oauth_handled": False,
+        "oauth_continue_click_count": 0,
+    }
+    while time.monotonic() < deadline:
+        prompt_state = _handle_permission_prompts_browser_tab(page, events)
+        confirmation["drive_permission_required"] = bool(
+            confirmation.get("drive_permission_required") or prompt_state.get("drive_permission_required")
+        )
+        confirmation["drive_permission_handled"] = bool(
+            confirmation.get("drive_permission_handled") or prompt_state.get("drive_permission_handled")
+        )
+        confirmation["oauth_required"] = bool(confirmation.get("oauth_required") or prompt_state.get("oauth_required"))
+        confirmation["oauth_handled"] = bool(confirmation.get("oauth_handled") or prompt_state.get("oauth_handled"))
+        confirmation["oauth_continue_click_count"] = int(confirmation.get("oauth_continue_click_count") or 0) + int(
+            prompt_state.get("oauth_continue_click_count") or 0
+        )
+
+        page_confirmation = _page_has_live_worker_output(page, email)
+        if page_confirmation.get("ok"):
+            confirmation.update(page_confirmation)
+            confirmation["ok"] = False
+            confirmation["page_output_detected"] = True
+            confirmation["reason"] = "cell_started_unconfirmed"
+            events.append(autorun_event("page_output_detected", confirmation=page_confirmation))
+            events.append(autorun_event("cell_started_unconfirmed", confirmation=page_confirmation))
+            return confirmation
+        time.sleep(2)
+    return confirmation
+
+
+def _build_launch_args_with_cdp_port(launch_args: list[str], port: int) -> list[str]:
+    args = list(launch_args)
+    if not any(item.startswith("--remote-debugging-port=") for item in args):
+        insert_at = 2 if len(args) >= 2 else len(args)
+        args.insert(insert_at, f"--remote-debugging-port={port}")
+        args.insert(insert_at + 1, "--remote-allow-origins=*")
+    return args
+
+
+def run_browser_tab_autorun(
+    *,
+    worker: WorkerConfig,
+    browser_exe: Path,
+    launch_args: list[str],
+    notebook_url: str,
+    debug_dir: Path,
+    wait_after_open_seconds: int,
+    wait_for_run_start_seconds: int,
+    reuse_profile_window: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    backend = "playwright_cdp"
+    autorun_started_at = utc_now()
+    events: list[dict[str, Any]] = [
+        autorun_event(
+            "browser_tab_autorun_started",
+            backend=backend,
+            autorun_mode="browser-tab",
+            autorun_started_at=autorun_started_at,
+        ),
+    ]
+    attempts: list[dict[str, Any]] = []
+    screenshots: dict[str, str] = {}
+    warnings: list[str] = []
+    failure_reason = ""
+
+    if dry_run:
+        events.extend(
+            [
+                autorun_event("browser_connection_attempted", backend=backend, dry_run=True),
+                autorun_event("runtime_menu_search_started", dry_run=True),
+                autorun_event("run_all_search_started", dry_run=True),
+            ]
+        )
+        summary = summarize_browser_tab_autorun(events, confirmation={"attempted": False, "ok": False, "reason": "dry_run"})
+        return {
+            "opened": False,
+            "run_attempted": True,
+            "worker_started_detected": False,
+            "confirmation": {"attempted": False, "ok": False, "reason": "dry_run"},
+            "screenshots": screenshots,
+            "warnings": warnings,
+            "attempts": attempts,
+            "prompt_attempts": [],
+            "events": events,
+            "autorun_mode": "browser-tab",
+            "autorun_summary": summary,
+            "failure_reason": "dry_run",
+        }
+
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
+    except Exception as exc:
+        failure_reason = "playwright_unavailable"
+        events.append(autorun_event("browser_connection_attempted", backend=backend))
+        events.append(autorun_event("browser_connection_failed", error=repr(exc)))
+        events.append(autorun_event("browser_tab_autorun_failed", failure_step="playwright_unavailable", error=repr(exc)))
+        events.append(autorun_event("manual_run_required", reason=failure_reason))
+        confirmation = {"attempted": False, "ok": False, "reason": failure_reason, "error": repr(exc)}
+        summary = summarize_browser_tab_autorun(events, confirmation=confirmation, failure_reason=failure_reason)
+        return {
+            "opened": False,
+            "run_attempted": False,
+            "worker_started_detected": False,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": [f"browser_tab_autorun_unavailable: {exc!r}"],
+            "attempts": attempts,
+            "prompt_attempts": [],
+            "events": events,
+            "autorun_mode": "browser-tab",
+            "autorun_summary": summary,
+            "failure_reason": failure_reason,
+        }
+
+    port = find_free_port()
+    args = _build_launch_args_with_cdp_port(launch_args, port)
+    if reuse_profile_window and "--new-window" in args:
+        args = [item for item in args if item != "--new-window"]
+
+    events.append(autorun_event("browser_connection_attempted", backend=backend, cdp_port=port))
+    proc: subprocess.Popen[Any] | None = None
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        events.append(autorun_event("notebook_opened", strategy="browser-tab", cdp_port=port))
+        if wait_after_open_seconds > 0:
+            time.sleep(int(wait_after_open_seconds))
+
+        if not wait_for_cdp_port(port, timeout_seconds=45):
+            failure_reason = "cdp_port_not_available"
+            events.append(autorun_event("browser_connection_failed", reason=failure_reason, cdp_port=port))
+            events.append(autorun_event("browser_tab_autorun_failed", failure_step=failure_reason))
+            events.append(autorun_event("manual_run_required", reason=failure_reason))
+            confirmation = {"attempted": True, "ok": False, "reason": failure_reason}
+            summary = summarize_browser_tab_autorun(events, confirmation=confirmation, failure_reason=failure_reason)
+            return {
+                "opened": True,
+                "run_attempted": False,
+                "worker_started_detected": False,
+                "confirmation": confirmation,
+                "screenshots": screenshots,
+                "warnings": ["browser_tab_cdp_port_not_available"],
+                "attempts": attempts,
+                "prompt_attempts": [],
+                "events": events,
+                "autorun_mode": "browser-tab",
+                "autorun_summary": summary,
+                "failure_reason": failure_reason,
+            }
+
+        events.append(autorun_event("browser_connection_ok", backend=backend, cdp_port=port))
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            deadline = time.monotonic() + 30
+            page = None
+            while time.monotonic() < deadline:
+                page = _find_colab_page_for_url(browser, notebook_url)
+                if page is not None:
+                    break
+                time.sleep(1)
+
+            if page is None:
+                failure_reason = "colab_tab_not_found"
+                events.append(autorun_event("colab_tab_not_found", notebook_url=notebook_url))
+                events.append(autorun_event("browser_tab_autorun_failed", failure_step=failure_reason))
+                events.append(autorun_event("manual_run_required", reason=failure_reason))
+                browser.close()
+                confirmation = {"attempted": True, "ok": False, "reason": failure_reason}
+                summary = summarize_browser_tab_autorun(events, confirmation=confirmation, failure_reason=failure_reason)
+                return {
+                    "opened": True,
+                    "run_attempted": False,
+                    "worker_started_detected": False,
+                    "confirmation": confirmation,
+                    "screenshots": screenshots,
+                    "warnings": ["browser_tab_colab_tab_not_found"],
+                    "attempts": attempts,
+                    "prompt_attempts": [],
+                    "events": events,
+                    "autorun_mode": "browser-tab",
+                    "autorun_summary": summary,
+                    "failure_reason": failure_reason,
+                }
+
+            events.append(autorun_event("colab_tab_found", page_url=page.url))
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+            page.wait_for_load_state("domcontentloaded", timeout=60000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
+            events.append(autorun_event("colab_loaded", page_url=page.url))
+
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            screenshot_path = debug_dir / "browser_tab_after_load.png"
+            try:
+                page.screenshot(path=str(screenshot_path), full_page=False)
+                screenshots["browser_tab_after_load"] = str(screenshot_path)
+            except Exception:
+                pass
+
+            _handle_permission_prompts_browser_tab(page, events)
+            run_all_clicked = _attempt_runtime_run_all_browser_tab(page, events)
+            ctrl_f9_sent = False
+            if not run_all_clicked:
+                events.append(autorun_event("ctrl_f9_attempted", backend=backend))
+                page.keyboard.press("Control+F9")
+                ctrl_f9_sent = True
+                time.sleep(1)
+            events.append(
+                autorun_event(
+                    "cell_start_attempted",
+                    method="ctrl_f9" if ctrl_f9_sent else "runtime_run_all_menu",
+                    run_all_clicked=run_all_clicked,
+                    ctrl_f9_sent=ctrl_f9_sent,
+                )
+            )
+
+            confirmation = _wait_for_browser_tab_worker_output(
+                page,
+                worker.email,
+                max(20, int(wait_for_run_start_seconds)),
+                events,
+            )
+            attempts.append(
+                {
+                    "method": "ctrl_f9" if ctrl_f9_sent else "runtime_run_all_menu",
+                    "strategy": "browser_tab_cdp",
+                    "run_all_clicked": run_all_clicked,
+                    "ctrl_f9_sent": ctrl_f9_sent,
+                    "confirmation": confirmation,
+                }
+            )
+
+            worker_started = False
+            if confirmation.get("drive_permission_required") and not confirmation.get("drive_permission_handled"):
+                failure_reason = "drive_permission_not_handled"
+            elif confirmation.get("oauth_required") and not confirmation.get("oauth_handled"):
+                failure_reason = "oauth_popup_not_handled"
+            elif confirmation.get("page_output_detected"):
+                failure_reason = "cell_output_only_no_heartbeat"
+            elif not run_all_clicked and not ctrl_f9_sent:
+                failure_reason = "runtime_not_started"
+            else:
+                failure_reason = "heartbeat_not_restored"
+            events.append(
+                autorun_event(
+                    "browser_tab_autorun_failed",
+                    failure_step=failure_reason,
+                    confirmation=confirmation,
+                    run_all_clicked=run_all_clicked,
+                    ctrl_f9_sent=ctrl_f9_sent,
+                )
+            )
+            events.append(
+                autorun_event(
+                    "manual_run_required",
+                    reason=failure_reason,
+                    operator_action=(
+                        "Нажать Connect to Google Drive / Подключиться к Google Диску, "
+                        "затем Continue / Продолжить два раза"
+                    )
+                    if failure_reason in {"drive_permission_not_handled", "oauth_popup_not_handled"}
+                    else "Проверить Colab output и запустить Runtime -> Run all вручную",
+                )
+            )
+
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+            summary = summarize_browser_tab_autorun(events, confirmation=confirmation, failure_reason=failure_reason)
+            summary["run_all_clicked"] = run_all_clicked
+            summary["ctrl_f9_sent_to_tab"] = ctrl_f9_sent
+            return {
+                "opened": True,
+                "run_attempted": True,
+                "worker_started_detected": worker_started,
+                "confirmation": confirmation,
+                "screenshots": screenshots,
+                "warnings": warnings,
+                "attempts": attempts,
+                "prompt_attempts": [],
+                "events": events,
+                "autorun_mode": "browser-tab",
+                "autorun_summary": summary,
+                "failure_reason": failure_reason,
+            }
+    except Exception as exc:
+        failure_reason = "browser_tab_autorun_exception"
+        events.append(autorun_event("browser_tab_autorun_failed", failure_step=failure_reason, error=repr(exc)))
+        events.append(autorun_event("manual_run_required", reason=failure_reason, error=repr(exc)))
+        confirmation = {"attempted": True, "ok": False, "reason": failure_reason, "error": repr(exc)}
+        summary = summarize_browser_tab_autorun(events, confirmation=confirmation, failure_reason=failure_reason)
+        return {
+            "opened": bool(proc),
+            "run_attempted": bool(proc),
+            "worker_started_detected": False,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": [f"browser_tab_autorun_failed: {exc!r}"],
+            "attempts": attempts,
+            "prompt_attempts": [],
+            "events": events,
+            "autorun_mode": "browser-tab",
+            "autorun_summary": summary,
+            "failure_reason": failure_reason,
+        }
+
+
+def run_prepared_notebook_sequence_cdp(
+    *,
+    worker: WorkerConfig,
+    browser_exe: Path,
+    launch_args: list[str],
+    debug_dir: Path,
+    wait_for_run_start_seconds: int,
+) -> dict[str, Any]:
+    events: list[dict[str, Any]] = [autorun_event("autorun_strategy_started", strategy="cdp")]
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
+    except Exception as exc:
+        return {
+            "opened": False,
+            "run_attempted": False,
+            "worker_started_detected": False,
+            "confirmation": {"attempted": False, "ok": False, "reason": "playwright_unavailable", "error": repr(exc)},
+            "screenshots": {},
+            "warnings": [f"prepared_notebook_cdp_unavailable: {exc!r}"],
+            "attempts": [],
+            "prompt_attempts": [],
+            "events": events,
+        }
+
+    port = find_free_port()
+    args = list(launch_args)
+    args.insert(2, f"--remote-debugging-port={port}")
+    args.insert(3, "--remote-allow-origins=*")
+    attempts: list[dict[str, Any]] = []
+    screenshots: dict[str, str] = {}
+    warnings: list[str] = []
+    proc: subprocess.Popen[Any] | None = None
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        events.append(autorun_event("notebook_opened", strategy="cdp", cdp_port=port))
+        if not wait_for_cdp_port(port, timeout_seconds=35):
+            return {
+                "opened": True,
+                "run_attempted": False,
+                "worker_started_detected": False,
+                "confirmation": {"attempted": False, "ok": False, "reason": "cdp_port_not_available"},
+                "screenshots": screenshots,
+                "warnings": ["prepared_notebook_cdp_port_not_available"],
+                "attempts": attempts,
+                "prompt_attempts": [],
+                "events": events,
+            }
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            pages = list(context.pages)
+            page = next((item for item in reversed(pages) if "colab.research.google.com" in item.url), pages[-1] if pages else context.new_page())
+            page.bring_to_front()
+            page.wait_for_load_state("domcontentloaded", timeout=60000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            screenshots["cdp_after_load"] = str(debug_dir / "cdp_after_load.png")
+            try:
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=screenshots["cdp_after_load"], full_page=False)
+            except Exception:
+                screenshots.pop("cdp_after_load", None)
+
+            if not _focus_first_code_cell_cdp(page, events):
+                warnings.append("prepared_notebook_cdp_cell_focus_failed")
+
+            for shortcut_name, keys in (("ctrl_enter", "Control+Enter"), ("shift_enter", "Shift+Enter")):
+                events.append(autorun_event("hotkey_attempted", strategy="cdp", hotkey=shortcut_name))
+                attempts.append({"method": shortcut_name, "strategy": "cdp"})
+                page.keyboard.press(keys)
+                confirmation = _wait_for_cdp_worker_output(page, worker.email, 8, events, shortcut_name)
+                attempts[-1]["confirmation"] = confirmation
+                if confirmation.get("ok"):
+                    events.append(autorun_event("hotkey_success", hotkey=shortcut_name, confirmation=confirmation))
+                    browser.close()
+                    return {
+                        "opened": True,
+                        "run_attempted": True,
+                        "worker_started_detected": True,
+                        "confirmation": confirmation,
+                        "screenshots": screenshots,
+                        "warnings": warnings,
+                        "attempts": attempts,
+                        "prompt_attempts": [],
+                        "events": events,
+                    }
+
+            events.append(autorun_event("context_menu_attempted", strategy="cdp"))
+            attempts.append({"method": "context_menu", "strategy": "cdp"})
+            _focus_first_code_cell_cdp(page, events)
+            try:
+                page.mouse.click(520, 330, button="right")
+            except Exception:
+                page.locator("body").click(button="right", timeout=3000)
+            matched_context = _click_first_visible_text(
+                page,
+                [
+                    r"Выполнить код с фокусированной ячейки",
+                    r"Run focused cell",
+                    r"Run cell",
+                    r"Выполнить ячейку",
+                ],
+                timeout_ms=4000,
+            )
+            if matched_context:
+                events.append(autorun_event("context_menu_item_clicked", matched=matched_context))
+                confirmation = _wait_for_cdp_worker_output(page, worker.email, 12, events, "context_menu")
+                attempts[-1]["confirmation"] = confirmation
+                if confirmation.get("ok"):
+                    browser.close()
+                    return {
+                        "opened": True,
+                        "run_attempted": True,
+                        "worker_started_detected": True,
+                        "confirmation": confirmation,
+                        "screenshots": screenshots,
+                        "warnings": warnings,
+                        "attempts": attempts,
+                        "prompt_attempts": [],
+                        "events": events,
+                    }
+
+            events.append(autorun_event("runtime_menu_attempted", strategy="cdp", shortcut="Control+F9"))
+            attempts.append({"method": "ctrl_f9", "strategy": "cdp"})
+            page.keyboard.press("Control+F9")
+            confirmation = _wait_for_cdp_worker_output(page, worker.email, max(20, int(wait_for_run_start_seconds)), events, "runtime_ctrl_f9")
+            attempts[-1]["confirmation"] = confirmation
+            browser.close()
+            return {
+                "opened": True,
+                "run_attempted": True,
+                "worker_started_detected": bool(confirmation.get("ok")),
+                "confirmation": confirmation,
+                "screenshots": screenshots,
+                "warnings": warnings,
+                "attempts": attempts,
+                "prompt_attempts": [],
+                "events": events,
+            }
+    except Exception as exc:
+        return {
+            "opened": bool(proc),
+            "run_attempted": bool(proc),
+            "worker_started_detected": False,
+            "confirmation": {"attempted": True, "ok": False, "reason": "cdp_autorun_exception", "error": repr(exc)},
+            "screenshots": screenshots,
+            "warnings": [f"prepared_notebook_cdp_autorun_failed: {exc!r}"],
+            "attempts": attempts,
+            "prompt_attempts": [],
+            "events": events,
+        }
+
+
+def handle_prepared_notebook_prompts(
+    pyautogui: Any,
+    *,
+    window_info: dict[str, Any],
+    debug_dir: Path,
+    screenshots: dict[str, str],
+    phase: str,
+) -> list[dict[str, Any]]:
+    prompt_attempts: list[dict[str, Any]] = []
+
+    # GitHub notebooks show a first-run warning modal. We prefer explicit clicks
+    # on the right button area first; plain Enter can be sent into the cell if
+    # focus is not on the modal.
+    modal_focus_points = [(0.54, 0.52), (0.56, 0.54)]
+    for x_ratio, y_ratio in modal_focus_points:
+        click_relative_to_window(pyautogui, window_info, x_ratio, y_ratio)
+        time.sleep(0.2)
+    run_anyway_points = [(0.70, 0.64), (0.74, 0.64), (0.78, 0.64), (0.76, 0.68)]
+    for index, (x_ratio, y_ratio) in enumerate(run_anyway_points, start=1):
+        click_relative_to_window(pyautogui, window_info, x_ratio, y_ratio)
+        time.sleep(0.6)
+        path = save_debug_screenshot(debug_dir, f"after_github_warning_confirm_{phase}_{index}.png")
+        screenshots.setdefault("after_github_warning_confirm", path)
+        screenshots[f"after_github_warning_confirm_{phase}_{index}"] = path
+        prompt_attempts.append(
+            {
+                "prompt": "github_warning",
+                "phase": phase,
+                "attempt": index,
+                "method": "click_run_anyway_area",
+                "x_ratio": x_ratio,
+                "y_ratio": y_ratio,
+                "screenshot": path,
+            }
+        )
+    # Only after click attempts, do a conservative keyboard fallback.
+    pyautogui.press("tab")
+    time.sleep(0.2)
+    pyautogui.press("right")
+    time.sleep(0.2)
+    pyautogui.press("enter")
+    time.sleep(0.5)
+    fallback_path = save_debug_screenshot(debug_dir, f"after_github_warning_confirm_{phase}_kbd.png")
+    screenshots[f"after_github_warning_confirm_{phase}_kbd"] = fallback_path
+    prompt_attempts.append(
+        {
+            "prompt": "github_warning",
+            "phase": phase,
+            "method": "tab_right_enter_fallback",
+            "screenshot": fallback_path,
+        }
+    )
+
+    # Drive mount can render a lightweight confirmation in the output area. This
+    # is best-effort only and does not handle password/2FA/account pages.
+    drive_points = [(0.50, 0.66), (0.62, 0.70), (0.72, 0.72)]
+    for index, (x_ratio, y_ratio) in enumerate(drive_points, start=1):
+        click_relative_to_window(pyautogui, window_info, x_ratio, y_ratio)
+        time.sleep(0.5)
+        pyautogui.press("enter")
+        time.sleep(0.5)
+        path = save_debug_screenshot(debug_dir, f"after_drive_mount_confirm_{phase}_{index}.png")
+        screenshots.setdefault("after_drive_mount_confirm", path)
+        screenshots[f"after_drive_mount_confirm_{phase}_{index}"] = path
+        prompt_attempts.append(
+            {
+                "prompt": "drive_mount",
+                "phase": phase,
+                "attempt": index,
+                "method": "click_possible_confirm_then_enter",
+                "x_ratio": x_ratio,
+                "y_ratio": y_ratio,
+                "screenshot": path,
+            }
+        )
+    return prompt_attempts
+
+
+def attempt_runtime_run_all_menu(
+    pyautogui: Any,
+    *,
+    window_info: dict[str, Any],
+    debug_dir: Path,
+    screenshots: dict[str, str],
+    phase: str,
+) -> list[dict[str, Any]]:
+    """Best-effort Runtime -> Run all clicks for prepared Colab notebooks."""
+    attempts: list[dict[str, Any]] = []
+    runtime_menu_points = [(0.16, 0.045), (0.20, 0.045), (0.24, 0.045)]
+    run_all_points = [(0.16, 0.12), (0.20, 0.14), (0.24, 0.16), (0.18, 0.18)]
+
+    for index, (x_ratio, y_ratio) in enumerate(runtime_menu_points, start=1):
+        click_relative_to_window(pyautogui, window_info, x_ratio, y_ratio)
+        time.sleep(0.8)
+        path = save_debug_screenshot(debug_dir, f"runtime_menu_{phase}_{index}.png")
+        screenshots[f"runtime_menu_{phase}_{index}"] = path
+        attempts.append(
+            {
+                "method": "runtime_menu_click",
+                "phase": phase,
+                "attempt": index,
+                "x_ratio": x_ratio,
+                "y_ratio": y_ratio,
+                "screenshot": path,
+            }
+        )
+        for run_index, (run_x, run_y) in enumerate(run_all_points, start=1):
+            click_relative_to_window(pyautogui, window_info, run_x, run_y)
+            time.sleep(0.4)
+            run_path = save_debug_screenshot(debug_dir, f"runtime_run_all_{phase}_{index}_{run_index}.png")
+            screenshots[f"runtime_run_all_{phase}_{index}_{run_index}"] = run_path
+            attempts.append(
+                {
+                    "method": "runtime_run_all_click",
+                    "phase": phase,
+                    "menu_attempt": index,
+                    "attempt": run_index,
+                    "x_ratio": run_x,
+                    "y_ratio": run_y,
+                    "screenshot": run_path,
+                }
+            )
+        pyautogui.press("esc")
+        time.sleep(0.3)
+    return attempts
+
+
+def run_prepared_notebook_sequence(
+    *,
+    worker: WorkerConfig,
+    debug_dir: Path,
+    wait_for_run_start_seconds: int,
+) -> dict[str, Any]:
+    events: list[dict[str, Any]] = [autorun_event("autorun_strategy_started", strategy="pyautogui")]
+    try:
+        import pyautogui  # type: ignore
+    except Exception as exc:
+        return {
+            "run_attempted": False,
+            "worker_started_detected": False,
+            "confirmation": {"attempted": False, "ok": False, "reason": "pyautogui_unavailable", "error": repr(exc)},
+            "screenshots": {},
+            "warnings": [f"prepared_notebook_autorun_failed: {exc!r}"],
+            "attempts": [],
+            "prompt_attempts": [],
+            "events": events,
+        }
+    configure_pyautogui_for_launcher(pyautogui)
+
+    screenshots: dict[str, str] = {}
+    warnings: list[str] = []
+    attempts: list[dict[str, Any]] = []
+    prompt_attempts: list[dict[str, Any]] = []
+    window_info = focus_browser_window(worker.browser)
+    if not window_info.get("ok"):
+        warnings.append(f"prepared_notebook_focus_failed: {window_info}")
+
+    for _ in range(2):
+        pyautogui.press("esc")
+        time.sleep(0.3)
+
+    events.append(autorun_event("cell_focused", strategy="pyautogui_body_click"))
+    for x_ratio, y_ratio in ((0.50, 0.35), (0.50, 0.42), (0.45, 0.38)):
+        click_relative_to_window(pyautogui, window_info, x_ratio, y_ratio)
+        time.sleep(0.35)
+    pyautogui.click(clicks=2, interval=0.15)
+    time.sleep(0.5)
+
+    events.append(autorun_event("hotkey_attempted", strategy="pyautogui", hotkey="ctrl_enter"))
+    pyautogui.hotkey("ctrl", "enter")
+    screenshots["after_ctrl_enter"] = save_debug_screenshot(debug_dir, "after_ctrl_enter.png")
+    prompt_attempts.extend(handle_prepared_notebook_prompts(pyautogui, window_info=window_info, debug_dir=debug_dir, screenshots=screenshots, phase="ctrl_enter"))
+    time.sleep(10)
+    confirmation = detect_prepared_worker_start(worker.email)
+    attempts.append({"method": "ctrl_enter", "confirmation": confirmation})
+    if confirmation.get("ok"):
+        events.append(autorun_event("hotkey_success", hotkey="ctrl_enter", confirmation=confirmation))
+        events.append(autorun_event("autorun_success", strategy="hotkey_ctrl_enter", confirmation=confirmation))
+        return {
+            "run_attempted": True,
+            "worker_started_detected": True,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": warnings,
+            "attempts": attempts,
+            "prompt_attempts": prompt_attempts,
+            "events": events,
+        }
+
+    click_relative_to_window(pyautogui, window_info, 0.50, 0.35)
+    time.sleep(0.5)
+    events.append(autorun_event("hotkey_attempted", strategy="pyautogui", hotkey="shift_enter"))
+    pyautogui.hotkey("shift", "enter")
+    screenshots["after_shift_enter"] = save_debug_screenshot(debug_dir, "after_shift_enter.png")
+    prompt_attempts.extend(handle_prepared_notebook_prompts(pyautogui, window_info=window_info, debug_dir=debug_dir, screenshots=screenshots, phase="shift_enter"))
+    time.sleep(10)
+    confirmation = detect_prepared_worker_start(worker.email)
+    attempts.append({"method": "shift_enter", "confirmation": confirmation})
+    if confirmation.get("ok"):
+        events.append(autorun_event("hotkey_success", hotkey="shift_enter", confirmation=confirmation))
+        events.append(autorun_event("autorun_success", strategy="hotkey_shift_enter", confirmation=confirmation))
+        return {
+            "run_attempted": True,
+            "worker_started_detected": True,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": warnings,
+            "attempts": attempts,
+            "prompt_attempts": prompt_attempts,
+            "events": events,
+        }
+
+    events.append(autorun_event("context_menu_attempted", strategy="pyautogui"))
+    click_relative_to_window(pyautogui, window_info, 0.50, 0.35)
+    time.sleep(0.3)
+    pyautogui.click(button="right")
+    time.sleep(0.8)
+    screenshots["after_context_menu"] = save_debug_screenshot(debug_dir, "after_context_menu.png")
+    # The DOM/CDP path clicks this menu item by text. In pure pyautogui fallback
+    # we use a conservative keyboard pick instead of aiming at the Play icon.
+    pyautogui.press("down")
+    time.sleep(0.1)
+    pyautogui.press("enter")
+    prompt_attempts.extend(handle_prepared_notebook_prompts(pyautogui, window_info=window_info, debug_dir=debug_dir, screenshots=screenshots, phase="context_menu"))
+    time.sleep(10)
+    confirmation = detect_prepared_worker_start(worker.email)
+    attempts.append({"method": "context_menu_keyboard_fallback", "confirmation": confirmation})
+    if confirmation.get("ok"):
+        events.append(autorun_event("context_menu_item_clicked", strategy="pyautogui_keyboard_fallback"))
+        events.append(autorun_event("autorun_success", strategy="context_menu", confirmation=confirmation))
+        return {
+            "run_attempted": True,
+            "worker_started_detected": True,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": warnings,
+            "attempts": attempts,
+            "prompt_attempts": prompt_attempts,
+            "events": events,
+        }
+
+    events.append(autorun_event("runtime_menu_attempted", strategy="pyautogui_menu_clicks"))
+    runtime_attempts = attempt_runtime_run_all_menu(
+        pyautogui,
+        window_info=window_info,
+        debug_dir=debug_dir,
+        screenshots=screenshots,
+        phase="after_context_menu",
+    )
+    attempts.extend(runtime_attempts)
+    prompt_attempts.extend(handle_prepared_notebook_prompts(pyautogui, window_info=window_info, debug_dir=debug_dir, screenshots=screenshots, phase="runtime_run_all"))
+    time.sleep(10)
+    confirmation = detect_prepared_worker_start(worker.email)
+    attempts.append({"method": "runtime_run_all", "confirmation": confirmation})
+    if confirmation.get("ok"):
+        events.append(autorun_event("autorun_success", strategy="runtime_menu", confirmation=confirmation))
+        return {
+            "run_attempted": True,
+            "worker_started_detected": True,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": warnings,
+            "attempts": attempts,
+            "prompt_attempts": prompt_attempts,
+            "events": events,
+        }
+
+    events.append(autorun_event("runtime_menu_attempted", strategy="pyautogui_ctrl_f9"))
+    pyautogui.hotkey("ctrl", "f9")
+    prompt_attempts.extend(handle_prepared_notebook_prompts(pyautogui, window_info=window_info, debug_dir=debug_dir, screenshots=screenshots, phase="ctrl_f9"))
+    time.sleep(10)
+    confirmation = detect_prepared_worker_start(worker.email)
+    attempts.append({"method": "ctrl_f9", "confirmation": confirmation})
+    if confirmation.get("ok"):
+        events.append(autorun_event("autorun_success", strategy="ctrl_f9", confirmation=confirmation))
+        return {
+            "run_attempted": True,
+            "worker_started_detected": True,
+            "confirmation": confirmation,
+            "screenshots": screenshots,
+            "warnings": warnings,
+            "attempts": attempts,
+            "prompt_attempts": prompt_attempts,
+            "events": events,
+        }
+
+    remaining_wait = max(0, int(wait_for_run_start_seconds) - 40)
+    if remaining_wait:
+        time.sleep(remaining_wait)
+    confirmation = detect_prepared_worker_start(worker.email)
+    attempts.append({"method": "final_wait", "wait_seconds": remaining_wait, "confirmation": confirmation})
+    return {
+        "run_attempted": True,
+        "worker_started_detected": bool(confirmation.get("ok")),
+        "confirmation": confirmation,
+        "screenshots": screenshots,
+        "warnings": warnings,
+        "attempts": attempts,
+        "prompt_attempts": prompt_attempts,
+        "events": events,
+    }
+
+
 def launch_prepared_notebook_url(
     worker: WorkerConfig,
     browser_exe: Path | None,
@@ -921,12 +2451,26 @@ def launch_prepared_notebook_url(
     story_id: str,
     dry_run: bool,
     auto_run: bool,
+    wait_after_open_seconds: int,
+    wait_for_run_start_seconds: int,
+    reuse_profile_window: bool = False,
+    autorun_mode: str = "legacy",
 ) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
     args: list[str] = []
     opened = False
     run_attempted = False
+    worker_started_detected = False
+    run_confirmation: dict[str, Any] = {"attempted": False, "ok": False, "reason": "not_attempted"}
+    run_attempts: list[dict[str, Any]] = []
+    prompt_attempts: list[dict[str, Any]] = []
+    auto_run_events: list[dict[str, Any]] = []
+    autorun_summary: dict[str, Any] = {}
+    failure_reason = ""
+    normalized_autorun_mode = str(autorun_mode or "legacy").strip().lower().replace("_", "-")
+    debug_dir = debug_dir_for(story_id, worker.email)
+    screenshots: dict[str, str] = {}
     if not worker.notebook_url:
         errors.append("notebook_url_missing")
     if not worker.profile_dir:
@@ -939,27 +2483,129 @@ def launch_prepared_notebook_url(
         args = [
             str(browser_exe),
             f"--user-data-dir={worker.profile_dir}",
-            "--new-window",
             worker.notebook_url,
         ]
+        if not reuse_profile_window:
+            args.insert(2, "--new-window")
 
     if not dry_run and not errors:
         try:
-            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            opened = True
-            if auto_run:
-                try:
-                    import pyautogui  # type: ignore
+            launched_for_autorun = False
+            if auto_run and normalized_autorun_mode == "browser-tab":
+                browser_tab_result = run_browser_tab_autorun(
+                    worker=worker,
+                    browser_exe=browser_exe,
+                    launch_args=args,
+                    notebook_url=worker.notebook_url,
+                    debug_dir=debug_dir,
+                    wait_after_open_seconds=wait_after_open_seconds,
+                    wait_for_run_start_seconds=wait_for_run_start_seconds,
+                    reuse_profile_window=reuse_profile_window,
+                    dry_run=False,
+                )
+                opened = opened or bool(browser_tab_result.get("opened"))
+                launched_for_autorun = bool(browser_tab_result.get("opened"))
+                run_attempted = bool(browser_tab_result.get("run_attempted"))
+                worker_started_detected = bool(browser_tab_result.get("worker_started_detected"))
+                run_confirmation = dict(browser_tab_result.get("confirmation") or {})
+                run_attempts.extend(list(browser_tab_result.get("attempts") or []))
+                prompt_attempts.extend(list(browser_tab_result.get("prompt_attempts") or []))
+                auto_run_events.extend(list(browser_tab_result.get("events") or []))
+                screenshots.update(dict(browser_tab_result.get("screenshots") or {}))
+                warnings.extend(list(browser_tab_result.get("warnings") or []))
+                autorun_summary = dict(browser_tab_result.get("autorun_summary") or {})
+                failure_reason = str(browser_tab_result.get("failure_reason") or "")
+                if not worker_started_detected and not any(
+                    str(item.get("kind") or "") == "manual_run_required" for item in auto_run_events if isinstance(item, dict)
+                ):
+                    auto_run_events.append(
+                        autorun_event("manual_run_required", reason=failure_reason or "browser_tab_autorun_not_confirmed")
+                    )
+            elif auto_run and normalized_autorun_mode != "manual":
+                cdp_result = run_prepared_notebook_sequence_cdp(
+                    worker=worker,
+                    browser_exe=browser_exe,
+                    launch_args=args,
+                    debug_dir=debug_dir,
+                    wait_for_run_start_seconds=wait_for_run_start_seconds,
+                )
+                opened = opened or bool(cdp_result.get("opened"))
+                launched_for_autorun = bool(cdp_result.get("opened"))
+                run_attempted = bool(cdp_result.get("run_attempted"))
+                worker_started_detected = bool(cdp_result.get("worker_started_detected"))
+                run_confirmation = dict(cdp_result.get("confirmation") or {})
+                run_attempts.extend(list(cdp_result.get("attempts") or []))
+                prompt_attempts.extend(list(cdp_result.get("prompt_attempts") or []))
+                auto_run_events.extend(list(cdp_result.get("events") or []))
+                screenshots.update(dict(cdp_result.get("screenshots") or {}))
+                warnings.extend(list(cdp_result.get("warnings") or []))
 
-                    time.sleep(20)
-                    pyautogui.hotkey("ctrl", "f9")
-                    run_attempted = True
-                except Exception as exc:
-                    warnings.append(f"prepared_notebook_autorun_failed: {exc!r}")
+                if not opened:
+                    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    opened = True
+
+                if not worker_started_detected:
+                    try:
+                        if not launched_for_autorun:
+                            time.sleep(max(0, int(wait_after_open_seconds)))
+                        screenshots["after_wait_before_run"] = save_debug_screenshot(debug_dir, "prepared_after_wait_before_run.png")
+                        run_result = run_prepared_notebook_sequence(
+                            worker=worker,
+                            debug_dir=debug_dir,
+                            wait_for_run_start_seconds=wait_for_run_start_seconds,
+                        )
+                        run_attempted = run_attempted or bool(run_result.get("run_attempted"))
+                        worker_started_detected = worker_started_detected or bool(run_result.get("worker_started_detected"))
+                        run_confirmation = dict(run_result.get("confirmation") or {})
+                        run_attempts.extend(list(run_result.get("attempts") or []))
+                        prompt_attempts.extend(list(run_result.get("prompt_attempts") or []))
+                        auto_run_events.extend(list(run_result.get("events") or []))
+                        screenshots.update(dict(run_result.get("screenshots") or {}))
+                        warnings.extend(list(run_result.get("warnings") or []))
+                        screenshots["after_run_wait"] = save_debug_screenshot(debug_dir, "prepared_after_run_wait.png")
+                    except Exception as exc:
+                        warnings.append(f"prepared_notebook_autorun_failed: {exc!r}")
+                        run_confirmation = {"attempted": True, "ok": False, "reason": "autorun_exception", "error": repr(exc)}
+                        auto_run_events.append(autorun_event("manual_run_required", reason="autorun_exception", error=repr(exc)))
+            elif not auto_run or normalized_autorun_mode == "manual":
+                if not dry_run:
+                    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    opened = True
         except OSError as exc:
             errors.append(f"browser_launch_failed: {exc}")
+    elif dry_run and auto_run and normalized_autorun_mode == "browser-tab" and not errors:
+        browser_tab_result = run_browser_tab_autorun(
+            worker=worker,
+            browser_exe=browser_exe or Path("browser.exe"),
+            launch_args=args,
+            notebook_url=worker.notebook_url,
+            debug_dir=debug_dir,
+            wait_after_open_seconds=wait_after_open_seconds,
+            wait_for_run_start_seconds=wait_for_run_start_seconds,
+            reuse_profile_window=reuse_profile_window,
+            dry_run=True,
+        )
+        run_attempted = bool(browser_tab_result.get("run_attempted"))
+        auto_run_events.extend(list(browser_tab_result.get("events") or []))
+        autorun_summary = dict(browser_tab_result.get("autorun_summary") or {})
 
-    manual_action_required = bool(errors) or (not dry_run and (not opened or (auto_run and not run_attempted)))
+    manual_action_required = bool(errors) or (not dry_run and (not opened or (auto_run and (not run_attempted or not worker_started_detected))))
+    if auto_run and normalized_autorun_mode == "browser-tab" and not autorun_summary:
+        autorun_summary = summarize_browser_tab_autorun(
+            auto_run_events,
+            confirmation=run_confirmation,
+            failure_reason=failure_reason,
+        )
+    reason = "dry_run"
+    if not dry_run:
+        if errors:
+            reason = "prepared_notebook_not_opened"
+        elif auto_run and not run_attempted:
+            reason = "run_not_attempted"
+        elif auto_run and not worker_started_detected:
+            reason = failure_reason or "run_not_confirmed"
+        else:
+            reason = "prepared_notebook_opened"
     return {
         "email": worker.email,
         "browser": worker.browser,
@@ -975,16 +2621,35 @@ def launch_prepared_notebook_url(
         "notebook_url": worker.notebook_url,
         "require_t4": worker.require_t4,
         "code_injected": True if worker.notebook_url else False,
+        "run_attempted": run_attempted,
+        "worker_started_detected": worker_started_detected,
         "auto_run_attempted": run_attempted,
         "auto_run_result": {
             "attempted": bool(auto_run),
-            "ok": bool(run_attempted) if auto_run else True,
-            "reason": "prepared_notebook_opened_ctrl_f9" if run_attempted else ("dry_run" if dry_run else "manual_run_required"),
+            "ok": bool(worker_started_detected) if auto_run else True,
+            "reason": (
+                "worker_started_detected"
+                if worker_started_detected
+                else ("dry_run" if dry_run else (failure_reason or "run_not_confirmed"))
+            ),
+            "confirmation": run_confirmation,
+            "attempts": run_attempts,
+            "prompt_attempts": prompt_attempts,
+            "events": auto_run_events,
+            "autorun_mode": normalized_autorun_mode,
+            "autorun_summary": autorun_summary,
+            "failure_reason": failure_reason,
         },
-        "reason": "dry_run" if dry_run else ("prepared_notebook_opened" if opened else "prepared_notebook_not_opened"),
+        "autorun_mode": normalized_autorun_mode,
+        "autorun_summary": autorun_summary,
+        "failure_reason": failure_reason,
+        "reason": reason,
         "manual_action_required": manual_action_required,
-        "debug_screenshots": False,
-        "debug_dir": "",
+        "wait_after_open_seconds": wait_after_open_seconds,
+        "wait_for_run_start_seconds": wait_for_run_start_seconds,
+        "debug_screenshots": bool(screenshots),
+        "debug_dir": str(debug_dir) if screenshots else "",
+        "screenshots": screenshots,
         "worker_cell_preview": "",
         "launch_args": args,
         "warnings": warnings,
@@ -996,8 +2661,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--check-deps", action="store_true", help="Print launcher dependency status and exit.")
+    parser.add_argument("--audit", action="store_true", help="Write read-only YouTube Colab launch audit and exit.")
     parser.add_argument("--group", choices=["yandex", "chrome", "all"], default="")
     parser.add_argument("--email", default="", help="Run only this worker email from the selected group.")
+    parser.add_argument("--limit", type=int, default=0, help="Limit selected workers after group/email filtering.")
     parser.add_argument("--browser", choices=["yandex", "chrome"], default="")
     parser.add_argument(
         "--mode",
@@ -1014,17 +2681,53 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--story-id", default=DEFAULT_STORY_ID)
     parser.add_argument("--auto-run", action="store_true")
+    parser.add_argument(
+        "--autorun-mode",
+        choices=["browser-tab", "legacy", "manual"],
+        default="legacy",
+        help="browser-tab: safe Playwright/CDP tab autorun (no pyautogui); legacy: CDP then pyautogui fallback; manual: open only.",
+    )
     parser.add_argument("--debug-screenshots", action="store_true", help="Save screenshots for each launch/injection stage.")
     parser.add_argument("--sequential", action="store_true", help="Process workers sequentially. Auto-run uses sequential mode by default.")
     parser.add_argument("--stagger-seconds", type=int, default=30, help="Delay between workers when running sequential group launches.")
+    parser.add_argument("--wait-after-open-seconds", type=int, default=180, help="Prepared notebooks: wait after opening notebook before Run all.")
+    parser.add_argument("--wait-before-next-worker-seconds", type=int, default=300, help="Prepared notebooks: wait before opening next worker.")
+    parser.add_argument("--wait-for-run-start-seconds", type=int, default=180, help="Prepared notebooks: wait after Run all before checking output.")
+    parser.add_argument(
+        "--reuse-profile-window",
+        action="store_true",
+        help="Prepared notebooks: open URL in existing browser profile without forcing --new-window (reduces duplicate tabs).",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     if args.check_deps:
         print_dependency_status(dependency_status())
         return 0
+    if args.audit:
+        report = build_colab_launch_audit(config_path=args.config, story_id=args.story_id)
+        print(f"status={report.get('status')}")
+        print(f"ok={report.get('ok')}")
+        print(f"config_path={report.get('config_path')}")
+        print(f"workers_total={report.get('workers_total')}")
+        print(f"workers_by_group={json.dumps(report.get('workers_by_group') or {}, ensure_ascii=True)}")
+        print(f"queue_render_workers_count={report.get('queue_render_workers_count')}")
+        print(f"workers_missing_from_queue_render_config={json.dumps(report.get('workers_missing_from_queue_render_config') or [], ensure_ascii=True)}")
+        print(f"launch_modes={json.dumps(report.get('launch_modes') or [], ensure_ascii=True)}")
+        print(f"prepared_notebook_urls_csv={report.get('prepared_notebook_urls_csv')}")
+        print(f"drive_root_exists={report.get('drive_root_exists')}")
+        print(f"drive_worker_script_exists={report.get('drive_worker_script_exists')}")
+        print(f"drive_bootstrap_script_exists={report.get('drive_bootstrap_script_exists')}")
+        print(f"drive_job_exists={report.get('drive_job_exists')}")
+        print(f"job_ready_marker_exists={report.get('job_ready_marker_exists')}")
+        print(f"single_worker_smoke_command={report.get('single_worker_smoke_command')}")
+        print(f"group_worker_command_yandex={report.get('group_worker_command_yandex')}")
+        print(f"group_worker_command_chrome={report.get('group_worker_command_chrome')}")
+        print(f"status_command={report.get('status_command')}")
+        print(f"report_path={report.get('report_path')}")
+        return 0
     if not args.group:
-        parser.error("--group is required unless --check-deps is used")
+        parser.error("--group is required unless --check-deps or --audit is used")
 
     mode_override = args.mode.replace("-", "_") if args.mode else ""
     workers = load_workers(args.config, args.group, args.browser, mode_override=mode_override)
@@ -1035,18 +2738,24 @@ def main(argv: list[str] | None = None) -> int:
             available = ", ".join(worker.email for worker in workers)
             parser.error(f"--email {args.email!r} was not found in group {args.group!r}. Available: {available}")
         workers = selected
+    if int(args.limit or 0) > 0:
+        workers = workers[: int(args.limit)]
     operator_required = any(worker.launch_mode == "existing_profiles_sequential_operator" for worker in workers)
     cdp_operator_required = any(worker.launch_mode == "existing_profiles_cdp_operator" for worker in workers)
     prepared_notebook_requested = any(worker.launch_mode == "prepared_notebook_url" for worker in workers)
+    browser_tab_autorun_requested = bool(args.auto_run) and str(getattr(args, "autorun_mode", "legacy")) == "browser-tab"
     injection_requested = any(worker.launch_mode in {"browser_default_tabs", "new_colab_inject_tabs", "browser_operator", "existing_profiles_sequential_operator", "existing_profiles_cdp_operator"} for worker in workers)
-    if not args.dry_run and injection_requested:
+    if not args.dry_run and (injection_requested or browser_tab_autorun_requested):
         dep_status = dependency_status()
-        reason = dependency_failure_reason(
-            dep_status,
-            debug_screenshots=bool(args.debug_screenshots),
-            operator_required=operator_required,
-            cdp_operator_required=cdp_operator_required,
-        )
+        if browser_tab_autorun_requested:
+            reason = "playwright_unavailable_preflight" if not dep_status.get("playwright_installed") else ""
+        else:
+            reason = dependency_failure_reason(
+                dep_status,
+                debug_screenshots=bool(args.debug_screenshots),
+                operator_required=operator_required,
+                cdp_operator_required=cdp_operator_required,
+            )
         if reason:
             report, local_report, drive_report = write_preflight_failure_report(
                 story_id=args.story_id,
@@ -1088,10 +2797,14 @@ def main(argv: list[str] | None = None) -> int:
                     story_id=args.story_id,
                     dry_run=bool(args.dry_run),
                     auto_run=bool(args.auto_run),
+                    wait_after_open_seconds=max(0, int(args.wait_after_open_seconds or 0)),
+                    wait_for_run_start_seconds=max(0, int(args.wait_for_run_start_seconds or 0)),
+                    reuse_profile_window=bool(getattr(args, "reuse_profile_window", False)),
+                    autorun_mode=str(getattr(args, "autorun_mode", "legacy")),
                 )
             )
             if sequential and not args.dry_run and index < len(workers):
-                time.sleep(stagger_seconds)
+                time.sleep(max(0, int(args.wait_before_next_worker_seconds or 0)))
             continue
         if worker.launch_mode in {"existing_profiles_sequential_operator", "existing_profiles_cdp_operator"}:
             result = launch_existing_profile_operator(worker, story_id=args.story_id, dry_run=bool(args.dry_run))
@@ -1205,9 +2918,14 @@ def main(argv: list[str] | None = None) -> int:
         "dry_run": bool(args.dry_run),
         "auto_run_requested": bool(args.auto_run),
         "email_filter": args.email.strip(),
+        "limit": int(args.limit or 0),
         "debug_screenshots": bool(args.debug_screenshots),
         "sequential": sequential,
         "stagger_seconds": stagger_seconds,
+        "wait_after_open_seconds": max(0, int(args.wait_after_open_seconds or 0)),
+        "wait_before_next_worker_seconds": max(0, int(args.wait_before_next_worker_seconds or 0)),
+        "wait_for_run_start_seconds": max(0, int(args.wait_for_run_start_seconds or 0)),
+        "reuse_profile_window": bool(getattr(args, "reuse_profile_window", False)),
         "browser_executables": {key: str(value) if value else "" for key, value in browser_exes.items()},
         "workers_total": len(results),
         "opened_count": opened_count,
@@ -1230,16 +2948,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"group={report['group']}")
     print(f"mode={report['mode']}")
     print(f"email_filter={report['email_filter']}")
+    print(f"limit={report['limit']}")
     print(f"uses_user_data_dir={report['uses_user_data_dir']}")
     print(f"debug_screenshots={report['debug_screenshots']}")
     print(f"sequential={report['sequential']}")
     print(f"stagger_seconds={report['stagger_seconds']}")
+    print(f"wait_after_open_seconds={report['wait_after_open_seconds']}")
+    print(f"wait_before_next_worker_seconds={report['wait_before_next_worker_seconds']}")
+    print(f"wait_for_run_start_seconds={report['wait_for_run_start_seconds']}")
     print(f"workers_total={report['workers_total']}")
     print(f"opened_count={report['opened_count']}")
     print(f"code_injected_count={report['code_injected_count']}")
     print(f"manual_action_required_count={report['manual_action_required_count']}")
     print(f"report_path={local_report}")
     print(f"drive_report_path={drive_report}")
+    if any(item.get("reason") == "run_not_confirmed" for item in results):
+        print("Notebook открыт с кодом, но автозапуск не подтверждён. Нажмите Run у первой ячейки вручную.")
     for item in results:
         print(
             "worker="

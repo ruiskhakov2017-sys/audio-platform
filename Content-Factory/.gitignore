@@ -64,3 +64,6 @@ legacy/Gemini_Auto/user_data_*/
 # Gemini / browser live profiles - do not commit
 legacy/Gemini_Auto/user_data/
 legacy/Gemini_Auto/user_data_*/
+
+# Local browser profiles for Colab automation
+.browser_profiles/

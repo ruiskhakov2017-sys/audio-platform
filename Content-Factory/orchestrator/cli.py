@@ -86,6 +86,10 @@ from orchestrator.youtube_video_segments import (
     run_youtube_video_render_segment,
     run_youtube_video_segment_status,
 )
+from orchestrator.youtube_colab_supervisor import (
+    YoutubeVideoColabSupervisorOptions,
+    run_youtube_video_colab_supervisor,
+)
 from orchestrator.youtube_video_drive import (
     YoutubeVideoAssembleFinalOptions,
     YoutubeVideoDispatchSegmentsOptions,
@@ -101,6 +105,7 @@ from orchestrator.youtube_video_drive import (
     YoutubeVideoSetupColabWorkersOptions,
     YoutubeVideoValidateJobAssetsOptions,
     YoutubeVideoWatchQueueOptions,
+    YoutubeVideoWorkersAuditOptions,
     run_youtube_video_assemble_final,
     run_youtube_video_cleanup_partial_checkpoints,
     run_youtube_video_colab_browser_profiles,
@@ -115,6 +120,7 @@ from orchestrator.youtube_video_drive import (
     run_youtube_video_setup_colab_workers,
     run_youtube_video_validate_job_assets,
     run_youtube_video_watch_queue,
+    run_youtube_video_workers_audit,
 )
 from orchestrator.youtube_visuals_bridge import (
     YoutubeCharactersBridgeOptions,
@@ -562,6 +568,77 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="Имя запуска в Запуски, не трогать (можно указать несколько раз).",
     )
+
+    site = sub.add_parser("site", help="Site production diagnostics and safe orchestration helpers")
+    site_sub = site.add_subparsers(dest="site_cmd", required=True)
+    site_intake = site_sub.add_parser(
+        "intake",
+        help="Create a new SITE_FULL launch with sampled input stories only.",
+    )
+    site_intake.add_argument("--source-dir", type=Path, required=True, help="Library root with top-level folders")
+    site_intake.add_argument("--per-folder", type=int, required=True, help="How many .txt stories to copy from each top-level folder")
+    site_intake.add_argument("--seed", default="", help="Optional deterministic sampler seed")
+    site_intake.add_argument("--execute", action="store_true", help="Create launch folder and copy sampled .txt files")
+    site_process = site_sub.add_parser(
+        "process-launch",
+        help="Run existing launch run-site-flow for an intake launch, then post diagnostics.",
+    )
+    site_process.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_process.add_argument("--execute", action="store_true", help="Запустить run-site-flow и post-diagnostics")
+    site_gemini_preflight = site_sub.add_parser(
+        "gemini-preflight",
+        help="Safe Gemini/phase_a preflight for a SITE_FULL launch.",
+    )
+    site_gemini_preflight.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_gemini_preflight.add_argument(
+        "--gemini-registry",
+        type=Path,
+        default=Path("configs/gemini_bots_registry.example.yaml"),
+        help="YAML registry with Gemini accounts/stage URLs",
+    )
+    site_gemini_preflight.add_argument("--stage-key", default="general_selection")
+    site_gemini_preflight.add_argument("--info-stage-key", default="site_info_builder")
+    site_gemini_preflight.add_argument("--profiles-total", type=int, default=5)
+    site_gemini_preflight.add_argument("--target-active-workers", type=int, default=3)
+    site_ready = site_sub.add_parser(
+        "readiness",
+        help="Read-only readiness summary for Запуски/<launch>; with --execute writes readiness reports.",
+    )
+    site_ready.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_ready.add_argument("--execute", action="store_true", help="Записать reports в 10_Отчёты")
+    site_sync = site_sub.add_parser(
+        "sync-artifacts",
+        help="Dry-run artifact index; with --execute safely mirrors missing site artifacts into launch folder.",
+    )
+    site_sync.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_sync.add_argument("--execute", action="store_true", help="Копировать только недостающие artifacts и записать reports")
+    site_pub_state = site_sub.add_parser(
+        "sync-published-state",
+        help="Dry-run/execute local published marker sync without publishing.",
+    )
+    site_pub_state.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_pub_state.add_argument("--execute", action="store_true", help="Создать published_marker.json для inferred published stories")
+    site_pending = site_sub.add_parser(
+        "pending-report",
+        help="Dry-run pending selected stories report; with --execute writes resume instructions.",
+    )
+    site_pending.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_pending.add_argument("--execute", action="store_true", help="Записать pending reports в 10_Отчёты")
+    site_publish_ready = site_sub.add_parser(
+        "publish-ready",
+        help="Dry-run/execute publishing only ready_unpublished site stories.",
+    )
+    site_publish_ready.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_publish_ready.add_argument("--execute", action="store_true", help="Опубликовать только ready_unpublished stories")
+    site_watch = site_sub.add_parser(
+        "readiness-watch",
+        help="Watch launch readiness and ask before publish-ready.",
+    )
+    site_watch.add_argument("--launch-name", required=True, help="Имя папки Запуски/<launch>")
+    site_watch.add_argument("--threshold-percent", type=float, default=90.0)
+    site_watch.add_argument("--check-interval-minutes", type=int, default=180)
+    site_watch.add_argument("--max-wait-hours", type=float, default=0.0)
+    site_watch.add_argument("--execute", action="store_true", help="Включить execute-подкоманды и интерактивные действия")
 
     phb = sub.add_parser("phase-b")
     phb.add_argument("--story-id", default="phase-b-run")
@@ -1055,6 +1132,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     yt_video_browser_profiles.add_argument("--config-path", type=Path, default=Path("configs/youtube_video_colab_workers.yaml"))
 
+    yt_video_workers_audit = yt_video_sub.add_parser(
+        "workers-audit",
+        help="Read-only diagnostic: compare Colab launcher workers with render queue workers and Drive assigned/status folders.",
+    )
+    yt_video_workers_audit.add_argument("--story-id", required=True)
+    yt_video_workers_audit.add_argument("--config-path", type=Path, default=Path("configs/youtube_video_colab_workers.yaml"))
+
     yt_video_dispatch = yt_video_sub.add_parser(
         "dispatch-segments",
         help="Assign global pending video segments to worker-specific queues.",
@@ -1100,6 +1184,11 @@ def _parser() -> argparse.ArgumentParser:
         default=10,
         help="Heartbeat age in minutes used to flag stale processing segments in the status report (default: 10).",
     )
+    yt_video_queue_status.add_argument(
+        "--quick",
+        action="store_true",
+        help="Skip heavier asset preflight and show queue/worker heartbeat status only.",
+    )
 
     yt_video_validate_assets = yt_video_sub.add_parser(
         "validate-job-assets",
@@ -1141,6 +1230,32 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip validate-job-assets gate before dispatch. Use only if you know assets are fine.",
     )
+
+    yt_video_supervisor = yt_video_sub.add_parser(
+        "colab-supervisor",
+        help="Monitor Colab worker heartbeats and auto-relaunch stale/offline prepared notebooks.",
+    )
+    yt_video_supervisor.add_argument("--story-id", required=True)
+    yt_video_supervisor.add_argument("--workers", default="", help="Comma-separated worker emails; empty = config defaults.")
+    yt_video_supervisor.add_argument("--poll-seconds", type=int, default=60)
+    yt_video_supervisor.add_argument("--stale-minutes", type=int, default=10)
+    yt_video_supervisor.add_argument("--cooldown-minutes", type=int, default=7, help="Min minutes between relaunch attempts per worker (5-10).")
+    yt_video_supervisor.add_argument("--wait-after-open-seconds", type=int, default=45)
+    yt_video_supervisor.add_argument("--wait-for-run-start-seconds", type=int, default=120)
+    yt_video_supervisor.add_argument("--heartbeat-wait-seconds", type=int, default=180)
+    yt_video_supervisor.add_argument("--config-path", type=Path, default=Path("configs/youtube_video_colab_workers.yaml"))
+    yt_video_supervisor.add_argument("--once", action="store_true", help="Run exactly one supervisor tick and exit.")
+    yt_video_supervisor.add_argument("--max-runtime-minutes", type=float, default=0.0, help="0 means no limit.")
+    yt_video_supervisor.add_argument("--no-auto-run", action="store_true", help="Open notebook only; operator must Run all manually.")
+    yt_video_supervisor.add_argument(
+        "--autorun-mode",
+        choices=["browser-tab", "legacy", "manual"],
+        default="browser-tab",
+        help="browser-tab: safe Playwright/CDP tab autorun (default); legacy: CDP+pyautogui; manual: open only.",
+    )
+    yt_video_supervisor.add_argument("--new-window", action="store_true", help="Force --new-window on relaunch (may duplicate tabs).")
+    yt_video_supervisor.add_argument("--dry-run", action="store_true", help="Force dry-run (no browser launch). Default when --execute is not provided.")
+    yt_video_supervisor.add_argument("--execute", action="store_true")
 
     yt_video_inspect = yt_video_sub.add_parser(
         "inspect-segment",
@@ -2977,6 +3092,114 @@ def main() -> int:
         print_scan(result)
         return 0
 
+    if args.command == "site":
+        from orchestrator.site_readiness import print_site_readiness_summary, run_site_readiness
+
+        sub_cmd = str(getattr(args, "site_cmd", "") or "").strip().lower()
+        if sub_cmd == "intake":
+            from orchestrator.site_intake import print_site_intake_summary, run_site_intake
+
+            report = run_site_intake(
+                config=cfg,
+                source_dir=getattr(args, "source_dir"),
+                per_folder=int(getattr(args, "per_folder", 0) or 0),
+                execute=bool(getattr(args, "execute", False)),
+                seed=str(getattr(args, "seed", "") or ""),
+            )
+            print_site_intake_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "process-launch":
+            from orchestrator.site_process_launch import print_site_process_launch_summary, run_site_process_launch
+
+            report = run_site_process_launch(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_process_launch_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "gemini-preflight":
+            from orchestrator.site_gemini_preflight import print_site_gemini_preflight_summary, run_site_gemini_preflight
+
+            report = run_site_gemini_preflight(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                gemini_registry_path=getattr(args, "gemini_registry", Path("configs/gemini_bots_registry.example.yaml")),
+                stage_key=str(getattr(args, "stage_key", "general_selection") or "general_selection").strip(),
+                info_stage_key=str(getattr(args, "info_stage_key", "site_info_builder") or "site_info_builder").strip(),
+                profiles_total=int(getattr(args, "profiles_total", 5) or 5),
+                target_active_workers=int(getattr(args, "target_active_workers", 3) or 3),
+            )
+            print_site_gemini_preflight_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "readiness":
+            report = run_site_readiness(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_readiness_summary(report)
+            if report.get("ok") and bool(getattr(args, "execute", False)):
+                reports = report.get("reports") if isinstance(report.get("reports"), dict) else {}
+                print(f"readiness_report={reports.get('readiness_report_json', '')}")
+                print(f"missing_assets_report={reports.get('missing_assets_report_csv', '')}")
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "sync-artifacts":
+            from orchestrator.site_artifact_sync import print_site_artifact_sync_summary, run_site_artifact_sync
+
+            report = run_site_artifact_sync(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_artifact_sync_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "sync-published-state":
+            from orchestrator.site_published_state import print_site_published_state_summary, run_site_published_state_sync
+
+            report = run_site_published_state_sync(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_published_state_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "pending-report":
+            from orchestrator.site_pending_report import print_site_pending_report_summary, run_site_pending_report
+
+            report = run_site_pending_report(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_pending_report_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "publish-ready":
+            from orchestrator.site_publish_ready import print_site_publish_ready_summary, run_site_publish_ready
+
+            report = run_site_publish_ready(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_publish_ready_summary(report)
+            return 0 if report.get("ok") else 2
+        if sub_cmd == "readiness-watch":
+            from orchestrator.site_readiness_watch import print_site_readiness_watch_summary, run_site_readiness_watch
+
+            report = run_site_readiness_watch(
+                config=cfg,
+                launch_name=str(getattr(args, "launch_name", "") or "").strip(),
+                threshold_percent=float(getattr(args, "threshold_percent", 90.0) or 90.0),
+                check_interval_minutes=int(getattr(args, "check_interval_minutes", 180) or 180),
+                max_wait_hours=float(getattr(args, "max_wait_hours", 0.0) or 0.0),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print_site_readiness_watch_summary(report)
+            return 0 if report.get("ok") else 2
+        print("Неизвестная подкоманда site")
+        return 2
+
     if args.command == "youtube":
         sub_cmd = str(getattr(args, "youtube_cmd", "") or "").strip().lower()
         if sub_cmd == "prefilter-from-site":
@@ -4329,6 +4552,34 @@ def main() -> int:
                 print(f"report_path={result.get('report_path')}")
                 print(f"drive_report_path={result.get('drive_report_path')}")
                 return 0 if result.get("ok") else 2
+            if video_sub == "workers-audit":
+                result = run_youtube_video_workers_audit(
+                    config=cfg,
+                    options=YoutubeVideoWorkersAuditOptions(
+                        story_id=str(args.story_id).strip(),
+                        config_path=Path(str(getattr(args, "config_path", "configs/youtube_video_colab_workers.yaml"))),
+                    ),
+                )
+                print(f"status={result.get('status')}")
+                print(f"ok={result.get('ok')}")
+                print(f"story_id={result.get('story_id')}")
+                print(f"drive_job_root={result.get('drive_job_root')}")
+                print(f"job_ready={result.get('job_ready')}")
+                print(f"workers_in_launcher_count={result.get('workers_in_launcher_count')}")
+                print(f"workers_in_render_queue_config_count={result.get('workers_in_render_queue_config_count')}")
+                print(f"missing_in_render_config={json.dumps(result.get('missing_in_render_config') or [], ensure_ascii=True)}")
+                print(f"extra_in_render_config={json.dumps(result.get('extra_in_render_config') or [], ensure_ascii=True)}")
+                print(f"mismatch_count={result.get('mismatch_count')}")
+                print(f"assigned_dirs_complete={result.get('assigned_dirs_complete')}")
+                print(f"missing_assigned_dirs={json.dumps(result.get('missing_assigned_dirs') or [], ensure_ascii=True)}")
+                print(f"missing_heartbeat={json.dumps(result.get('missing_heartbeat') or [], ensure_ascii=True)}")
+                print(f"workers={json.dumps(result.get('workers') or [], ensure_ascii=True)}")
+                print(f"single_worker_command={result.get('single_worker_command')}")
+                print(f"five_yandex_workers_command={result.get('five_yandex_workers_command')}")
+                print(f"ten_workers_command={result.get('ten_workers_command')}")
+                print(f"queue_status_command={result.get('queue_status_command')}")
+                print(f"report_path={result.get('report_path')}")
+                return 0 if result.get("ok") else 2
             if video_sub == "dispatch-segments":
                 result = run_youtube_video_dispatch_segments(
                     config=cfg,
@@ -4391,12 +4642,23 @@ def main() -> int:
                     options=YoutubeVideoQueueStatusOptions(
                         story_id=str(args.story_id).strip(),
                         stale_minutes=int(getattr(args, "stale_minutes", 10)),
+                        quick=bool(getattr(args, "quick", False)),
                     ),
                 )
                 print(f"status={result.get('status')}")
                 print(f"job_ready={result.get('job_ready')}")
                 print(f"drive_job_root={result.get('drive_job_root')}")
                 print(f"stale_minutes_threshold={result.get('stale_minutes_threshold')}")
+                print(f"worker_count={result.get('worker_count')}")
+                print(f"active_worker_count={result.get('active_worker_count')}")
+                print(f"active_workers={json.dumps(result.get('active_workers') or [], ensure_ascii=True)}")
+                print(f"offline_workers={json.dumps(result.get('offline_workers') or [], ensure_ascii=True)}")
+                print(f"idle_worker_count={result.get('idle_worker_count')}")
+                print(f"idle_workers={json.dumps(result.get('idle_workers') or [], ensure_ascii=True)}")
+                print(f"workers_with_assigned_pending_count={result.get('workers_with_assigned_pending_count')}")
+                print(f"workers_with_assigned_pending={json.dumps(result.get('workers_with_assigned_pending') or [], ensure_ascii=True)}")
+                print(f"workers_exited_by_idle_timeout_count={result.get('workers_exited_by_idle_timeout_count')}")
+                print(f"workers_exited_by_idle_timeout={json.dumps(result.get('workers_exited_by_idle_timeout') or [], ensure_ascii=True)}")
                 print(f"global_pending={result.get('global_pending')}")
                 print(f"assigned_pending_by_worker={json.dumps(result.get('assigned_pending_by_worker') or {}, ensure_ascii=True)}")
                 print(f"assigned_processing_by_worker={json.dumps(result.get('assigned_processing_by_worker') or {}, ensure_ascii=True)}")
@@ -4411,6 +4673,7 @@ def main() -> int:
                 print(f"checkpointed_segments_count={result.get('checkpointed_segments_count')}")
                 print(f"partial_segments_count={result.get('partial_segments_count')}")
                 print(f"asset_preflight_ok={result.get('asset_preflight_ok')}")
+                print(f"asset_preflight_included={result.get('asset_preflight_included')}")
                 print(f"missing_asset_segments_count={result.get('missing_asset_segments_count')}")
                 print(f"missing_assets_count={result.get('missing_assets_count')}")
                 print(f"missing_asset_segments={json.dumps(result.get('missing_asset_segments') or [], ensure_ascii=True)}")
@@ -4522,6 +4785,58 @@ def main() -> int:
                 print(f"report_path={result.get('report_path')}")
                 print(f"drive_report_path={result.get('drive_report_path')}")
                 print(f"local_events_path={result.get('local_events_path')}")
+                print(f"drive_events_path={result.get('drive_events_path')}")
+                return 0 if result.get("ok") else 2
+            if video_sub == "colab-supervisor":
+                result = run_youtube_video_colab_supervisor(
+                    config=cfg,
+                    options=YoutubeVideoColabSupervisorOptions(
+                        story_id=str(args.story_id).strip(),
+                        workers=str(getattr(args, "workers", "") or ""),
+                        poll_seconds=int(getattr(args, "poll_seconds", 60)),
+                        stale_minutes=int(getattr(args, "stale_minutes", 10)),
+                        cooldown_minutes=int(getattr(args, "cooldown_minutes", 7)),
+                        wait_after_open_seconds=int(getattr(args, "wait_after_open_seconds", 45)),
+                        wait_for_run_start_seconds=int(getattr(args, "wait_for_run_start_seconds", 120)),
+                        heartbeat_wait_seconds=int(getattr(args, "heartbeat_wait_seconds", 180)),
+                        colab_config_path=Path(getattr(args, "config_path", Path("configs/youtube_video_colab_workers.yaml"))),
+                        execute=bool(getattr(args, "execute", False)),
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                        once=bool(getattr(args, "once", False)),
+                        max_runtime_minutes=float(getattr(args, "max_runtime_minutes", 0.0) or 0.0),
+                        auto_run=not bool(getattr(args, "no_auto_run", False)),
+                        autorun_mode=str(getattr(args, "autorun_mode", "browser-tab") or "browser-tab"),
+                        reuse_profile_window=not bool(getattr(args, "new_window", False)),
+                    ),
+                )
+                launch_reports = result.get("worker_launch_reports") if isinstance(result.get("worker_launch_reports"), dict) else {}
+                for worker_email, launch_report in launch_reports.items():
+                    if not isinstance(launch_report, dict):
+                        continue
+                    print(f"launch_report.{worker_email}={json.dumps(launch_report, ensure_ascii=True)}")
+                if not launch_reports:
+                    print("launch_report=none (no relaunch this tick)")
+                print(f"status={result.get('status')}")
+                print(f"stop_reason={result.get('stop_reason')}")
+                print(f"execute={result.get('execute')}")
+                print(f"dry_run={result.get('dry_run')}")
+                print(f"once={result.get('once')}")
+                print(f"interrupted={result.get('interrupted')}")
+                print(f"ticks={result.get('ticks')}")
+                print(f"runtime_seconds={result.get('runtime_seconds')}")
+                print(f"totals={json.dumps(result.get('totals') or {}, ensure_ascii=True)}")
+                last_status = result.get("last_status") if isinstance(result.get("last_status"), dict) else {}
+                print(f"global_pending={last_status.get('global_pending')}")
+                print(f"active_workers={json.dumps(last_status.get('active_workers') or [], ensure_ascii=True)}")
+                print(f"offline_workers={json.dumps(last_status.get('offline_workers') or [], ensure_ascii=True)}")
+                print(f"workers_exited_by_idle_timeout={json.dumps(last_status.get('workers_exited_by_idle_timeout') or [], ensure_ascii=True)}")
+                print(f"stale_processing_count={last_status.get('stale_processing_count')}")
+                print(f"autorun_mode={result.get('autorun_mode')}")
+                print(f"autorun_audit={json.dumps(result.get('autorun_audit') or {}, ensure_ascii=True)}")
+                print(f"supervisor_state_path={result.get('supervisor_state_path')}")
+                print(f"report_path={result.get('report_path')}")
+                print(f"local_events_path={result.get('local_events_path')}")
+                print(f"drive_report_path={result.get('drive_report_path')}")
                 print(f"drive_events_path={result.get('drive_events_path')}")
                 return 0 if result.get("ok") else 2
             if video_sub == "inspect-segment":

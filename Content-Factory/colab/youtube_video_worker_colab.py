@@ -2119,25 +2119,31 @@ def main() -> int:
     max_jobs_env = os.environ.get("CONTENT_FACTORY_MAX_JOBS_PER_RUN", "").strip()
     max_segments = max(0, int(max_jobs_env or args.max_segments))
     logger.log("LOOP", "loop configured", poll_seconds=poll_seconds, idle_timeout_seconds=idle_timeout, max_segments=max_segments)
+
+    def reset_idle_timer(reason: str, segment_id: str = "") -> None:
+        nonlocal idle_started
+        idle_started = time.time()
+        logger.log("LOOP", "idle timer reset", reason=reason, segment_id=segment_id or None)
+
     while True:
         counts = queue_counts(dirs)
         idle_seconds = int(time.time() - idle_started)
         logger.log("LOOP", "tick", timestamp=utc_now(), pending_count=counts["pending"], idle_seconds=idle_seconds, last_message="checking assigned pending")
         if max_segments and (processed_count + failed_count) >= max_segments:
             logger.log("EXIT", "max jobs reached", reason="finished_max_segments", processed_count=processed_count, failed_count=failed_count, runtime_seconds=int(time.time() - started_at))
-            update_status(job_root, worker_email, status="exited", current_segment_id="", processed_count=processed_count, failed_count=failed_count, last_message="finished max jobs per run")
+            update_status(job_root, worker_email, status="exited", current_segment_id="", processed_count=processed_count, failed_count=failed_count, last_message="finished max jobs per run", last_exit_reason="finished_max_segments", exited_at=utc_now())
             return 0
         processing_job, payload = claim_assigned_job(job_root, worker_email)
         if processing_job is None or payload is None:
             if time.time() - idle_started >= idle_timeout:
                 logger.log("EXIT", "idle timeout", reason="idle_timeout", processed_count=processed_count, failed_count=failed_count, runtime_seconds=int(time.time() - started_at))
-                update_status(job_root, worker_email, status="exited", current_segment_id="", processed_count=processed_count, failed_count=failed_count, last_message="idle timeout")
+                update_status(job_root, worker_email, status="exited", current_segment_id="", processed_count=processed_count, failed_count=failed_count, last_message="idle timeout", last_exit_reason="idle_timeout", exited_at=utc_now(), idle_seconds=int(time.time() - idle_started))
                 return 0
             update_status(job_root, worker_email, status="idle", current_segment_id="", processed_count=processed_count, failed_count=failed_count, assigned_queue=str(dirs["pending"]), last_message="no assigned pending job")
             time.sleep(poll_seconds)
             continue
-        idle_started = time.time()
         segment_id = str(payload.get("segment_id") or processing_job.stem)
+        reset_idle_timer("job_claimed", segment_id)
         logger.log(
             "CLAIM",
             "claimed assigned segment",
@@ -2154,6 +2160,7 @@ def main() -> int:
             report = render_segment(job_root, worker_email, processing_job, payload, Path(args.tmp_root), logger)
             mark_done(job_root, worker_email, processing_job, payload, report, logger)
             processed_count += 1
+            reset_idle_timer("segment_completed", segment_id)
             update_status(job_root, worker_email, status="done", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="segment done")
         except KeyboardInterrupt as exc:
             failed_count += 1
@@ -2163,7 +2170,7 @@ def main() -> int:
                 logger.log("FAILED", "mark_failed drive write failed", error=repr(oserr))
             logger.log("EXIT", "keyboard interrupt", reason="KeyboardInterrupt", processed_count=processed_count, failed_count=failed_count, runtime_seconds=int(time.time() - started_at))
             try:
-                update_status(job_root, worker_email, status="exited", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="KeyboardInterrupt", last_error=repr(exc))
+                update_status(job_root, worker_email, status="exited", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="KeyboardInterrupt", last_error=repr(exc), last_exit_reason="KeyboardInterrupt", exited_at=utc_now())
             except OSError:
                 pass
             return 130
@@ -2217,6 +2224,7 @@ def main() -> int:
             except OSError as oserr:
                 logger.log("FAILED", "mark_failed drive write failed", error=repr(oserr))
             try:
+                reset_idle_timer("segment_failed", segment_id)
                 update_status(
                     job_root,
                     worker_email,
@@ -2255,6 +2263,7 @@ def main() -> int:
             except OSError as oserr:
                 logger.log("FAILED", "mark_failed drive write failed", error=repr(oserr))
             try:
+                reset_idle_timer("segment_failed", segment_id)
                 update_status(job_root, worker_email, status="failed", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="segment failed (io_error)", last_error=repr(exc))
             except OSError:
                 pass
@@ -2265,6 +2274,7 @@ def main() -> int:
             except OSError as oserr:
                 logger.log("FAILED", "mark_failed drive write failed", error=repr(oserr))
             try:
+                reset_idle_timer("segment_failed", segment_id)
                 update_status(job_root, worker_email, status="failed", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="segment failed", last_error=repr(exc))
             except OSError:
                 pass
