@@ -77,6 +77,15 @@ from orchestrator.youtube_tts_kokoro_bridge import (
     run_youtube_tts_kokoro_colab_import,
     run_youtube_tts_kokoro_colab_export,
     run_youtube_tts_kokoro_colab_verify,
+
+from orchestrator.youtube_tts_launch_jobs import (
+    PrepareLaunchJobsOptions,
+    TtsLaunchOptions,
+    preflight_launch_jobs,
+    prepare_launch_jobs,
+    status_launch_jobs,
+)
+from orchestrator.youtube_tts_readiness_repair import RepairReadinessOptions, repair_tts_readiness
 )
 from orchestrator.youtube_video_segments import (
     YoutubeVideoPrepareSegmentsOptions,
@@ -955,6 +964,29 @@ def _parser() -> argparse.ArgumentParser:
         help="Isolated YouTube Drive root. Default: G:\\Мой диск\\ContentFactory_YouTube",
     )
     yt_tts_import.add_argument("--force", action="store_true", help="Перезаписать existing narration.mp3.")
+
+    yt_tts_launch = yt_sub.add_parser("tts", help="YouTube TTS production launch jobs for multi-worker Colab.")
+    yt_tts_launch_sub = yt_tts_launch.add_subparsers(dest="youtube_tts_cmd", required=True)
+    yt_tts_prepare = yt_tts_launch_sub.add_parser("prepare-launch-jobs", help="Create launch-scoped TTS job and worker partitions.")
+    yt_tts_prepare.add_argument("--youtube-run-id", required=True)
+    yt_tts_prepare.add_argument("--workers", type=int, default=5)
+    yt_tts_prepare.add_argument("--retry-failed", action="store_true")
+    yt_tts_prepare.add_argument("--force", action="store_true")
+    yt_tts_prepare.add_argument("--dry-run", action="store_true")
+    yt_tts_prepare.add_argument("--execute", action="store_true")
+    yt_tts_preflight = yt_tts_launch_sub.add_parser("preflight", help="Fail hard if launch TTS job contract is incomplete.")
+    yt_tts_preflight.add_argument("--youtube-run-id", required=True)
+    yt_tts_preflight.add_argument("--workers", type=int, default=5)
+    yt_tts_status = yt_tts_launch_sub.add_parser("status", help="Aggregate launch TTS job/worker status.")
+    yt_tts_status.add_argument("--youtube-run-id", required=True)
+    yt_tts_status.add_argument("--workers", type=int, default=5)
+    yt_tts_repair = yt_tts_launch_sub.add_parser(
+        "repair-readiness",
+        help="Audit, repair TTS readiness, rebuild launch job/partitions, and run preflight.",
+    )
+    yt_tts_repair.add_argument("--youtube-run-id", required=True)
+    yt_tts_repair.add_argument("--workers", type=int, default=5)
+    yt_tts_repair.add_argument("--execute", action="store_true")
 
     yt_chars = yt_sub.add_parser(
         "characters",
@@ -3791,6 +3823,58 @@ def main() -> int:
             print(f"next_action={result.get('next_action')}")
             print(f"report_path={result.get('report_path')}")
             return 0
+
+
+        if sub_cmd == "tts":
+            tts_cmd = str(getattr(args, "youtube_tts_cmd", "") or "").strip()
+            if tts_cmd == "prepare-launch-jobs":
+                result = prepare_launch_jobs(
+                    cfg,
+                    PrepareLaunchJobsOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                        retry_failed=bool(getattr(args, "retry_failed", False)),
+                        force=bool(getattr(args, "force", False)),
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                        execute=bool(getattr(args, "execute", False)),
+                    ),
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0 if result.get("ok") else 2
+            if tts_cmd == "preflight":
+                result = preflight_launch_jobs(
+                    cfg,
+                    TtsLaunchOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                    ),
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0 if result.get("ok") else 2
+            if tts_cmd == "status":
+                result = status_launch_jobs(
+                    cfg,
+                    TtsLaunchOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                    ),
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0 if result.get("ok") else 2
+            if tts_cmd == "repair-readiness":
+                result = repair_tts_readiness(
+                    cfg,
+                    RepairReadinessOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                        execute=bool(getattr(args, "execute", False)),
+                    ),
+                )
+                summary = result.get("summary") or {}
+                print(json.dumps(summary, ensure_ascii=False, indent=2))
+                return 0 if summary.get("ok") else 2
+            print("unknown youtube tts subcommand")
+            return 2
 
         if sub_cmd == "tts-kokoro-colab":
             tts_sub = str(getattr(args, "youtube_tts_kokoro_cmd", "") or "").strip()

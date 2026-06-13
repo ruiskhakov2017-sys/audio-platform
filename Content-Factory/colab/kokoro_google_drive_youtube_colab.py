@@ -1,27 +1,34 @@
-"""YouTube Kokoro Google Drive Colab worker.
+"""YouTube Kokoro Google Drive Colab worker (legacy global + launch-scoped jobs).
 
-Usage in Colab:
-1. Open a Colab notebook and mount Google Drive:
-   from google.colab import drive
-   drive.mount('/content/drive')
-2. Ensure this script is available in Colab, for example under:
-   /content/drive/MyDrive/ContentFactory_YouTube/scripts/kokoro_google_drive_youtube_colab.py
-3. Install dependencies if needed:
-   !pip install kokoro soundfile numpy
-4. Run:
-   !python /content/drive/MyDrive/ContentFactory_YouTube/scripts/kokoro_google_drive_youtube_colab.py
-5. Check:
-   /content/drive/MyDrive/ContentFactory_YouTube/audio/Becoming_A_Slut_Wife_Alma.mp3
-6. After the mp3 appears, return to local machine and run the YouTube TTS import command.
+Legacy global mode (default):
+  !python .../scripts/kokoro_google_drive_youtube_colab.py
+  Reads: ContentFactory_YouTube/jobs/youtube_tts_job.json
+  Writes: ContentFactory_YouTube/audio/<story>.mp3
 
-This script is intentionally separate from kokoro_google_drive_colab.py and uses
-ContentFactory_YouTube with plural jobs/ and audio/ directories.
+Launch-scoped sample TTS (Alma recovery):
+  !python .../scripts/kokoro_google_drive_youtube_colab.py \\
+    --launch-id YT_ALMA_RECOVERY_20260604 --job-type sample \\
+    --story-slug Becoming_A_Slut_Wife_Alma
+
+Launch-scoped full TTS:
+  !python .../scripts/kokoro_google_drive_youtube_colab.py \\
+    --launch-id YT_ALMA_RECOVERY_20260604 --job-type full \\
+    --story-slug Becoming_A_Slut_Wife_Alma
+
+Colab one-cell (set variables then run same script path on Drive):
+  LAUNCH_ID = "YT_ALMA_RECOVERY_20260604"
+  JOB_TYPE = "sample"  # or "full"
+  STORY_SLUG = "Becoming_A_Slut_Wife_Alma"
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import logging
+import os
+import re
 import subprocess
 import time
 import traceback
@@ -30,10 +37,20 @@ from inspect import signature
 from pathlib import Path
 from typing import Any
 
+CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 
 FORCE = False
+WORKER_MODE = "legacy"  # legacy | launch
+LAUNCH_ID = ""
+JOB_TYPE = ""  # sample | full
+STORY_SLUG = ""
+WORKER_INDEX = 0
+WORKER_COUNT = 1
 
-BASE_DIR = Path("/content/drive/MyDrive/ContentFactory_YouTube")
+GLOBAL_YOUTUBE_ROOT = Path("/content/drive/MyDrive/ContentFactory_YouTube")
+LAUNCHES_SUBDIR = "launches"
+
+BASE_DIR = GLOBAL_YOUTUBE_ROOT
 TEXTS_DIR = BASE_DIR / "texts"
 AUDIO_DIR = BASE_DIR / "audio"
 JOBS_DIR = BASE_DIR / "jobs"
@@ -48,7 +65,9 @@ EXPECTED_COUNT_TXT = JOBS_DIR / "EXPECTED_COUNT.txt"
 STATUS_JSON = LOGS_DIR / "COLAB_STATUS.json"
 LOG_JSONL = LOGS_DIR / "youtube_tts_colab_log.jsonl"
 DONE_TXT = DONE_DIR / "COLAB_DONE.txt"
+DONE_JSON = DONE_DIR / "COLAB_DONE.json"
 FAILED_JSONL = FAILED_DIR / "failed_items.jsonl"
+FAILED_JSON = FAILED_DIR / "COLAB_FAILED.json"
 
 DEFAULT_VOICE_LABEL = "U"
 DEFAULT_KOKORO_VOICE = "af_bella"
@@ -62,6 +81,444 @@ MIN_MP3_BYTES = 256
 
 def now_utc() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _sha256_file_bytes(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _probe_duration_sec(path: Path) -> float | None:
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if proc.returncode != 0:
+            return None
+        return float((proc.stdout or "").strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def _apply_launch_paths(launch_id: str, job_type: str) -> None:
+    """Rebind module path globals to launches/<LAUNCH_ID>/."""
+    global BASE_DIR, TEXTS_DIR, AUDIO_DIR, JOBS_DIR, LOGS_DIR, DONE_DIR, FAILED_DIR
+    global MANIFESTS_DIR, JOB_JSON, EXPECTED_FILES_TXT, EXPECTED_COUNT_TXT
+    global STATUS_JSON, LOG_JSONL, DONE_TXT, DONE_JSON, FAILED_JSONL, FAILED_JSON
+
+    BASE_DIR = GLOBAL_YOUTUBE_ROOT / LAUNCHES_SUBDIR / launch_id
+    TEXTS_DIR = BASE_DIR / "texts"
+    AUDIO_DIR = BASE_DIR / "audio"
+    JOBS_DIR = BASE_DIR / "jobs"
+    LOGS_DIR = BASE_DIR / "logs"
+    DONE_DIR = BASE_DIR / "done"
+    FAILED_DIR = BASE_DIR / "failed"
+    MANIFESTS_DIR = BASE_DIR / "manifests"
+    if job_type == "sample":
+        JOB_JSON = JOBS_DIR / "sample_tts_job.json"
+        STATUS_JSON = LOGS_DIR / "SAMPLE_TTS_STATUS.json"
+        LOG_JSONL = LOGS_DIR / "sample_tts_colab_log.jsonl"
+        DONE_JSON = DONE_DIR / "SAMPLE_TTS_DONE.json"
+        FAILED_JSON = FAILED_DIR / "SAMPLE_TTS_FAILED.json"
+    else:
+        JOB_JSON = JOBS_DIR / "full_tts_job.json"
+        STATUS_JSON = LOGS_DIR / "FULL_TTS_STATUS.json"
+        LOG_JSONL = LOGS_DIR / "full_tts_colab_log.jsonl"
+        DONE_JSON = DONE_DIR / "FULL_TTS_DONE.json"
+        FAILED_JSON = FAILED_DIR / "FULL_TTS_FAILED.json"
+    EXPECTED_FILES_TXT = JOBS_DIR / "EXPECTED_FILES.txt"
+    EXPECTED_COUNT_TXT = JOBS_DIR / "EXPECTED_COUNT.txt"
+    DONE_TXT = DONE_DIR / "COLAB_DONE.txt"
+
+
+def _path_must_be_launch_scoped(path: Path, launch_id: str) -> None:
+    resolved = path.resolve()
+    raw = str(resolved).replace("\\", "/")
+    if launch_id not in raw:
+        raise ValueError(f"path must contain launch_id={launch_id}: {path}")
+    try:
+        rel = resolved.relative_to(GLOBAL_YOUTUBE_ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"path must be under ContentFactory_YouTube: {path}") from exc
+    if not rel.parts or rel.parts[0] != LAUNCHES_SUBDIR:
+        raise ValueError(f"refusing global Drive folder in launch mode (use launches/<id>/): {path}")
+    if len(rel.parts) < 2 or rel.parts[1] != launch_id:
+        raise ValueError(f"path launch folder mismatch: {path}")
+
+
+_DRIVE_SYNC_RETRIES = 12
+_DRIVE_SYNC_WAIT_SEC = 10
+
+
+def _launch_text_audio_paths(job: dict[str, Any], job_type: str, story_slug: str) -> tuple[Path, Path]:
+    slug = str(job.get("story_slug") or story_slug).strip() or story_slug
+    launch_id = str(job.get("launch_id") or LAUNCH_ID).strip()
+    root = GLOBAL_YOUTUBE_ROOT / LAUNCHES_SUBDIR / launch_id
+    if job_type == "sample":
+        text_path = root / "texts" / "samples" / f"{slug}_sample.txt"
+        audio_path = root / "audio" / "samples" / f"{slug}_sample_60s.mp3"
+    else:
+        input_colab = str(job.get("input_text_path") or "").strip()
+        if input_colab:
+            text_path = Path(input_colab)
+        elif WORKER_MODE == "launch":
+            raise ValueError("FULL_TTS_INPUT_TEXT_PATH_MISSING_IN_JOB")
+        else:
+            text_path = root / "texts" / f"{slug}_full.txt"
+        output_colab = str(job.get("output_audio_path") or "").strip()
+        if output_colab:
+            audio_path = Path(output_colab)
+        else:
+            audio_path = root / "audio" / f"{slug}_full.mp3"
+    return text_path, audio_path
+
+
+def _validate_launch_job_preflight(
+    job: dict[str, Any],
+    *,
+    job_type: str,
+    launch_id: str,
+    story_slug: str,
+    text_path: Path,
+) -> None:
+    if str(job.get("launch_id") or "").strip() and str(job.get("launch_id")).strip() != launch_id:
+        raise ValueError(f"job launch_id mismatch: {job.get('launch_id')} != {launch_id}")
+    job_slug = str(job.get("story_slug") or "").strip()
+    if job_slug and job_slug != story_slug:
+        raise ValueError(f"job story_slug mismatch: {job_slug} != {story_slug}")
+
+    expected_lang = str(job.get("expected_language") or "en").strip().lower()
+    if not text_path.is_file():
+        raise FileNotFoundError(f"input text missing: {text_path}")
+
+    text = text_path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        raise ValueError(f"input text empty: {text_path}")
+
+    if expected_lang == "en" and CYRILLIC_RE.search(text):
+        raise ValueError("input text contains Cyrillic but expected_language=en")
+
+    hash_key = "sample_text_hash" if job_type == "sample" else "current_text_hash"
+    expected_hash = str(job.get(hash_key) or job.get("full_text_hash") or job.get("text_hash") or "").strip()
+    if expected_hash:
+        actual = _sha256_file_bytes(text_path)
+        if actual != expected_hash:
+            raise ValueError(f"text hash mismatch: expected={expected_hash[:16]}... actual={actual[:16]}...")
+
+
+def _validate_launch_job_preflight_with_drive_sync(
+    job: dict[str, Any],
+    *,
+    job_type: str,
+    launch_id: str,
+    story_slug: str,
+    text_path: Path,
+) -> None:
+    last_exc: BaseException | None = None
+    for attempt in range(_DRIVE_SYNC_RETRIES):
+        try:
+            _validate_launch_job_preflight(
+                job,
+                job_type=job_type,
+                launch_id=launch_id,
+                story_slug=story_slug,
+                text_path=text_path,
+            )
+            if attempt > 0:
+                logging.info("Drive sync preflight OK after attempt %s: %s", attempt + 1, text_path)
+            return
+        except FileNotFoundError as exc:
+            last_exc = exc
+        except ValueError as exc:
+            if "hash mismatch" not in str(exc):
+                raise
+            last_exc = exc
+        if attempt < _DRIVE_SYNC_RETRIES - 1:
+            logging.warning(
+                "Drive sync wait (%ss) before preflight retry %s/%s: %s",
+                _DRIVE_SYNC_WAIT_SEC,
+                attempt + 2,
+                _DRIVE_SYNC_RETRIES,
+                text_path,
+            )
+            time.sleep(_DRIVE_SYNC_WAIT_SEC)
+    if last_exc is not None:
+        raise last_exc
+
+
+def normalize_launch_job_item(
+    job: dict[str, Any],
+    *,
+    text_path: Path,
+    audio_path: Path,
+    story_slug: str,
+) -> dict[str, Any]:
+    voice = str(job.get("kokoro_voice") or "").strip()
+    voice_label = str(job.get("voice_label") or "").strip()
+    if not voice or voice_label not in {"M", "F", "U"}:
+        raise ValueError("YOUTUBE_TTS_JOB_VOICE_MISSING: job must contain voice_label M/F/U and kokoro_voice")
+    try:
+        speed = float(job.get("speed") if job.get("speed") is not None else DEFAULT_SPEED)
+    except (TypeError, ValueError):
+        speed = DEFAULT_SPEED
+    return {
+        "youtube_run_id": str(job.get("launch_id") or LAUNCH_ID),
+        "story_id": str(job.get("story_id") or story_slug),
+        "canonical_basename": str(job.get("story_id") or story_slug),
+        "text_name": text_path.name,
+        "audio_name": audio_path.name,
+        "text_path": str(text_path),
+        "audio_path": str(audio_path),
+        "voice_label": voice_label,
+        "kokoro_voice": voice,
+        "expected_gender": voice_label,
+        "used_gender": voice_label,
+        "used_kokoro_voice": voice,
+        "lang_code": lang_from_voice(voice),
+        "speed": speed,
+        "sample_rate": DEFAULT_SAMPLE_RATE,
+        "launch_id": LAUNCH_ID,
+        "job_type": JOB_TYPE,
+        "story_slug": story_slug,
+    }
+
+
+def _match_launch_story_slug(wanted: str, item: dict[str, Any]) -> bool:
+    wanted_raw = wanted.strip()
+    if not wanted_raw:
+        return True
+    wanted_safe = re.sub(r"[^A-Za-z0-9]+", "_", wanted_raw).strip("_").casefold()
+    candidates = {
+        str(item.get("story_slug") or "").strip(),
+        str(item.get("story_id") or "").strip(),
+        str(item.get("canonical_basename") or "").strip(),
+    }
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate == wanted_raw:
+            return True
+        candidate_safe = re.sub(r"[^A-Za-z0-9]+", "_", candidate).strip("_").casefold()
+        if candidate_safe == wanted_safe:
+            return True
+    return False
+
+
+def load_launch_job_items(launch_id: str, job_type: str, story_slug: str) -> list[dict[str, Any]]:
+    job_path = JOB_JSON
+    if not job_path.is_file() and job_type == "full":
+        batch_job = JOBS_DIR / "youtube_tts_job.json"
+        if batch_job.is_file():
+            job_path = batch_job
+    if not job_path.is_file():
+        raise FileNotFoundError(f"launch job missing: {JOB_JSON}")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    if not isinstance(job, dict):
+        raise ValueError(f"invalid job json: {job_path}")
+
+    raw_items = job.get("items") if isinstance(job.get("items"), list) else None
+    if raw_items is not None:
+        normalized: list[dict[str, Any]] = []
+        wanted = story_slug.strip()
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            item = normalize_job_item(raw_item)
+            if wanted and not _match_launch_story_slug(wanted, item):
+                continue
+            text_path = Path(str(item["text_path"]))
+            audio_path = Path(str(item["audio_path"]))
+            _path_must_be_launch_scoped(text_path, launch_id)
+            _path_must_be_launch_scoped(audio_path, launch_id)
+            _validate_launch_job_preflight_with_drive_sync(
+                {
+                    **raw_item,
+                    "current_text_hash": str(raw_item.get("source_text_hash") or raw_item.get("current_text_hash") or ""),
+                    "expected_language": str(raw_item.get("expected_language") or "en"),
+                },
+                job_type=job_type,
+                launch_id=launch_id,
+                story_slug=str(item.get("story_slug") or item.get("canonical_basename") or ""),
+                text_path=text_path,
+            )
+            item["launch_id"] = launch_id
+            item["job_type"] = job_type
+            item["story_slug"] = str(item.get("story_slug") or item.get("canonical_basename") or "")
+            normalized.append(item)
+        if normalized:
+            return normalized
+        raise ValueError(f"no matching launch job items in {job_path} for story_slug={story_slug!r}")
+
+    text_path, audio_path = _launch_text_audio_paths(job, job_type, story_slug)
+    _path_must_be_launch_scoped(text_path, launch_id)
+    _path_must_be_launch_scoped(audio_path, launch_id)
+    _validate_launch_job_preflight_with_drive_sync(
+        job,
+        job_type=job_type,
+        launch_id=launch_id,
+        story_slug=story_slug,
+        text_path=text_path,
+    )
+    return [normalize_launch_job_item(job, text_path=text_path, audio_path=audio_path, story_slug=story_slug)]
+
+
+def load_launch_partition_items(launch_id: str, worker_index: int, worker_count: int) -> list[dict[str, Any]]:
+    if worker_index < 0 or worker_index >= worker_count:
+        raise ValueError(f"--worker-index must be 0..{worker_count - 1}; got {worker_index}")
+    job_path = JOBS_DIR / "youtube_tts_job.json"
+    partition_path = JOBS_DIR / "partitions" / f"worker_{worker_index}.json"
+    if not job_path.is_file():
+        raise FileNotFoundError(f"launch job missing: {job_path}")
+    if not partition_path.is_file():
+        raise FileNotFoundError(f"launch partition missing: {partition_path}")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    part = json.loads(partition_path.read_text(encoding="utf-8"))
+    if not isinstance(job, dict) or str(job.get("kind") or "") != "youtube_tts_launch_partitioned_v1":
+        raise ValueError(f"invalid launch job kind: {job_path}")
+    if not isinstance(part, dict) or str(part.get("kind") or "") != "youtube_tts_launch_partitioned_v1_partition":
+        raise ValueError(f"invalid launch partition kind: {partition_path}")
+    if str(job.get("youtube_run_id") or "") != launch_id or str(part.get("youtube_run_id") or "") != launch_id:
+        raise ValueError(f"launch job mismatch for {launch_id}: {job_path} / {partition_path}")
+    raw_items = part.get("items") if isinstance(part.get("items"), list) else []
+    normalized: list[dict[str, Any]] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = normalize_job_item(raw_item)
+        text_path = Path(str(item["text_path"]))
+        audio_path = Path(str(item["audio_path"]))
+        _path_must_be_launch_scoped(text_path, launch_id)
+        _path_must_be_launch_scoped(audio_path, launch_id)
+        if not text_path.is_file():
+            raise FileNotFoundError(f"partition input text missing: {text_path}")
+        item["launch_id"] = launch_id
+        item["job_type"] = "full"
+        item["worker_index"] = worker_index
+        normalized.append(item)
+    return normalized
+
+
+def write_launch_done_marker(*, item: dict[str, Any], audio_path: Path, job: dict[str, Any]) -> None:
+    duration = _probe_duration_sec(audio_path)
+    payload = {
+        "status": "done",
+        "launch_id": LAUNCH_ID,
+        "job_type": JOB_TYPE,
+        "story_slug": STORY_SLUG,
+        "output_path": str(audio_path),
+        "output_size_bytes": audio_path.stat().st_size if audio_path.is_file() else 0,
+        "duration_sec": round(duration, 3) if duration is not None else None,
+        "audio_hash": _sha256_file(audio_path),
+        "input_text_hash": str(job.get("sample_text_hash") or job.get("current_text_hash") or ""),
+        "finished_at": now_utc(),
+    }
+    DONE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    DONE_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_launch_failed_marker(*, error: str, item: dict[str, Any] | None = None) -> None:
+    payload = {
+        "status": "failed",
+        "launch_id": LAUNCH_ID,
+        "job_type": JOB_TYPE,
+        "story_slug": STORY_SLUG,
+        "error": error,
+        "item": item,
+        "failed_at": now_utc(),
+    }
+    FAILED_JSON.parent.mkdir(parents=True, exist_ok=True)
+    FAILED_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def configure_worker_from_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="YouTube Kokoro Colab Drive worker")
+    parser.add_argument("--youtube-run-id", default=os.environ.get("CF_YOUTUBE_RUN_ID", ""))
+    parser.add_argument("--launch-id", default=os.environ.get("CF_LAUNCH_ID", ""))
+    parser.add_argument("--job-type", choices=["sample", "full", "legacy"], default=os.environ.get("CF_JOB_TYPE", "legacy"))
+    parser.add_argument("--story-slug", default=os.environ.get("CF_STORY_SLUG", ""))
+    parser.add_argument("--worker-index", type=int, default=int(os.environ.get("CF_WORKER_INDEX", "0") or 0))
+    parser.add_argument("--worker-count", type=int, default=int(os.environ.get("CF_WORKER_COUNT", "1") or 1))
+    parser.add_argument("--force", action="store_true", help="Re-render even if output mp3 exists")
+    return parser.parse_args(argv)
+
+
+def init_worker(argv: list[str] | None = None) -> None:
+    global WORKER_MODE, LAUNCH_ID, JOB_TYPE, STORY_SLUG, WORKER_INDEX, WORKER_COUNT, FORCE
+    args = configure_worker_from_args(argv)
+    if args.force:
+        FORCE = True
+    WORKER_COUNT = max(1, int(args.worker_count or 1))
+    WORKER_INDEX = int(args.worker_index or 0)
+    if WORKER_INDEX < 0:
+        WORKER_INDEX = 0
+    if WORKER_INDEX > 0 and WORKER_INDEX > WORKER_COUNT:
+        raise ValueError(f"--worker-index must be between 1 and --worker-count ({WORKER_COUNT}); got {WORKER_INDEX}")
+
+    launch_id = str(args.youtube_run_id or args.launch_id or os.environ.get("LAUNCH_ID", "")).strip()
+    job_type = str(args.job_type or os.environ.get("JOB_TYPE", "")).strip().lower()
+    story_slug = str(args.story_slug or os.environ.get("STORY_SLUG", "")).strip()
+
+    if args.youtube_run_id:
+        WORKER_MODE = "launch"
+        LAUNCH_ID = launch_id
+        JOB_TYPE = "full"
+        STORY_SLUG = story_slug
+        _apply_launch_paths(launch_id, "full")
+        print(
+            f"[INFO] production launch partition mode youtube_run_id={launch_id} "
+            f"worker_index={WORKER_INDEX} worker_count={WORKER_COUNT} base_dir={BASE_DIR}",
+            flush=True,
+        )
+        return
+
+    if launch_id and job_type in {"sample", "full"}:
+        if not story_slug and job_type == "sample":
+            raise ValueError("--story-slug is required for launch mode")
+        WORKER_MODE = "launch"
+        LAUNCH_ID = launch_id
+        JOB_TYPE = job_type
+        STORY_SLUG = story_slug
+        _apply_launch_paths(launch_id, job_type)
+        print(
+            f"[INFO] launch mode launch_id={launch_id} job_type={job_type} story_slug={story_slug} "
+            f"worker_index={WORKER_INDEX} worker_count={WORKER_COUNT} base_dir={BASE_DIR}",
+            flush=True,
+        )
+        return
+
+    WORKER_MODE = "legacy"
+    print(f"[INFO] legacy global mode base_dir={BASE_DIR}", flush=True)
 
 
 def ensure_dirs() -> None:
@@ -96,6 +553,12 @@ def log_stdout(message: str, **event: Any) -> None:
     if "event" not in payload:
         payload["event"] = "log"
     append_jsonl(LOG_JSONL, payload)
+
+
+def partition_items_for_worker(items: list[dict[str, Any]], *, worker_index: int, worker_count: int) -> list[dict[str, Any]]:
+    if worker_index <= 0 or worker_count <= 1:
+        return items
+    return [item for index, item in enumerate(items, start=1) if ((index - 1) % worker_count) + 1 == worker_index]
 
 
 def read_status() -> dict[str, Any]:
@@ -278,8 +741,10 @@ def normalize_job_item(item: dict[str, Any]) -> dict[str, Any]:
     canonical = str(item.get("canonical_basename") or "").strip() or "youtube_story"
     text_name = basename_from_path(item.get("drive_text_path")) or f"{canonical}.txt"
     audio_name = basename_from_path(item.get("expected_drive_audio_path")) or Path(text_name).with_suffix(".mp3").name
-    voice = str(item.get("kokoro_voice") or DEFAULT_KOKORO_VOICE).strip() or DEFAULT_KOKORO_VOICE
-    voice_label = str(item.get("voice_label") or DEFAULT_VOICE_LABEL).strip() or DEFAULT_VOICE_LABEL
+    voice = str(item.get("kokoro_voice") or "").strip()
+    voice_label = str(item.get("voice_label") or "").strip().upper()[:1]
+    if not voice or voice_label not in {"M", "F", "U"}:
+        raise ValueError("YOUTUBE_TTS_JOB_VOICE_MISSING")
     try:
         speed = float(item.get("speed") if item.get("speed") is not None else DEFAULT_SPEED)
     except (TypeError, ValueError):
@@ -305,6 +770,11 @@ def normalize_job_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_job_items() -> list[dict[str, Any]]:
+    if WORKER_MODE == "launch":
+        if WORKER_COUNT > 1:
+            return load_launch_partition_items(LAUNCH_ID, WORKER_INDEX, WORKER_COUNT)
+        return load_launch_job_items(LAUNCH_ID, JOB_TYPE, STORY_SLUG)
+
     if JOB_JSON.is_file():
         payload = json.loads(JOB_JSON.read_text(encoding="utf-8"))
         items = payload.get("items") if isinstance(payload, dict) else None
@@ -313,20 +783,11 @@ def load_job_items() -> list[dict[str, Any]]:
             return out
 
     expected_files = read_expected_files()
-    return [
-        normalize_job_item(
-            {
-                "canonical_basename": Path(audio_name).stem,
-                "drive_text_path": str(TEXTS_DIR / Path(audio_name).with_suffix(".txt").name),
-                "expected_drive_audio_path": str(AUDIO_DIR / Path(audio_name).name),
-                "voice_label": DEFAULT_VOICE_LABEL,
-                "kokoro_voice": DEFAULT_KOKORO_VOICE,
-                "speed": DEFAULT_SPEED,
-                "sample_rate": DEFAULT_SAMPLE_RATE,
-            }
+    if expected_files:
+        raise FileNotFoundError(
+            "YOUTUBE_TTS_JOB_VOICE_MISSING: legacy EXPECTED_FILES mode requires youtube_tts_job.json with voice"
         )
-        for audio_name in expected_files
-    ]
+    return []
 
 
 def mp3_valid(path: Path) -> bool:
@@ -720,7 +1181,8 @@ def render_item(
     return item["audio_name"], "done", f"written {audio_path.name}"
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    init_worker(argv)
     configure_colab_logging()
     try:
         from google.colab import drive  # type: ignore
@@ -734,16 +1196,17 @@ def main() -> int:
         DONE_TXT.unlink()
 
     device = detect_device()
-    items = load_job_items()
-    expected_files = [str(item["audio_name"]) for item in items]
+    all_items = load_job_items()
+    items = all_items if WORKER_MODE == "launch" else partition_items_for_worker(all_items, worker_index=WORKER_INDEX, worker_count=WORKER_COUNT)
+    expected_files = [str(item["audio_name"]) for item in all_items]
     expected_count = read_expected_count(expected_files)
     if expected_count <= 0:
-        expected_count = len(items)
+        expected_count = len(all_items)
     if not items:
         write_status(
-            state="failed",
-            stage="load_job",
-            total_expected=0,
+            state="finished",
+            stage="no_partition_items",
+            total_expected=expected_count,
             completed=0,
             failed=0,
             skipped_existing=0,
@@ -752,9 +1215,17 @@ def main() -> int:
             total_chunks=0,
             chunk_progress_percent=0.0,
             device=device,
-            errors=["No job items"],
+            worker_index=WORKER_INDEX,
+            worker_count=WORKER_COUNT,
+            total_loaded=len(all_items),
+            errors=[],
         )
-        raise RuntimeError(f"No job items found in {JOB_JSON} or {EXPECTED_FILES_TXT}")
+        print(
+            f"[DONE] no items assigned to worker_index={WORKER_INDEX} worker_count={WORKER_COUNT} "
+            f"loaded={len(all_items)} job={JOB_JSON}",
+            flush=True,
+        )
+        return 0
 
     write_status(
         state="starting",
@@ -768,6 +1239,10 @@ def main() -> int:
         total_chunks=0,
         chunk_progress_percent=0.0,
         device=device,
+        worker_index=WORKER_INDEX,
+        worker_count=WORKER_COUNT,
+        worker_items=len(items),
+        total_loaded=len(all_items),
         errors=[],
     )
 
@@ -799,6 +1274,10 @@ def main() -> int:
             total_chunks=0,
             chunk_progress_percent=0.0,
             device=device,
+            worker_index=WORKER_INDEX,
+            worker_count=WORKER_COUNT,
+            worker_items=len(items),
+            total_loaded=len(all_items),
             errors=[str(exc)],
         )
         raise RuntimeError("Install dependencies in Colab: `pip install kokoro soundfile numpy`; ffmpeg is also required.") from exc
@@ -938,6 +1417,10 @@ def main() -> int:
     final_status = {
         "state": state,
         "stage": "finished",
+        "mode": WORKER_MODE,
+        "launch_id": LAUNCH_ID,
+        "job_type": JOB_TYPE,
+        "story_slug": STORY_SLUG,
         "total_expected": expected_count,
         "completed": completed,
         "failed": failed,
@@ -947,13 +1430,27 @@ def main() -> int:
         "total_chunks": 0,
         "chunk_progress_percent": 100.0 if failed == 0 else 0.0,
         "device": device,
+        "worker_index": WORKER_INDEX,
+        "worker_count": WORKER_COUNT,
+        "worker_items": len(items),
+        "total_loaded": len(all_items),
         "errors": errors[-20:],
         "finished_at": now_utc(),
     }
     write_status(**final_status)
     DONE_TXT.write_text(json.dumps(final_status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if WORKER_MODE == "launch" and JOB_JSON.is_file():
+        job_payload = json.loads(JOB_JSON.read_text(encoding="utf-8"))
+        if failed == 0 and completed > 0 and items:
+            audio_path = Path(str(items[0]["audio_path"]))
+            if mp3_valid(audio_path):
+                write_launch_done_marker(item=items[0], audio_path=audio_path, job=job_payload)
+        elif failed > 0:
+            write_launch_failed_marker(error="; ".join(errors[-5:]), item=items[0] if items else None)
+
     print(
-        f"[DONE] completed={completed} skipped_existing={skipped_existing} failed={failed} "
+        f"[DONE] mode={WORKER_MODE} completed={completed} skipped_existing={skipped_existing} failed={failed} "
         f"audio_dir={AUDIO_DIR}",
         flush=True,
     )
