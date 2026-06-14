@@ -108,6 +108,7 @@ class YoutubeGeminiBatchOptions:
     stories: list[YoutubeGeminiBatchStory]
     execute: bool = False
     user_data_dir: str = ""
+    worker_label: str = ""
 
 
 def _now_iso() -> str:
@@ -978,6 +979,36 @@ def _run_director_subprocess(
     return proc
 
 
+def _run_streamed_subprocess(
+    *,
+    cmd: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    log_path: Path,
+    output_prefix: str = "",
+) -> subprocess.CompletedProcess[str]:
+    output_lines: list[str] = []
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        output_lines.append(line)
+        terminal_line = line.rstrip("\n")
+        print(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line, flush=True)
+        _append_text(log_path, line)
+    returncode = proc.wait()
+    return subprocess.CompletedProcess(cmd, returncode, stdout="".join(output_lines), stderr="")
+
+
 def _run_director_batch_subprocess(
     *,
     director_dir: Path,
@@ -1011,14 +1042,12 @@ def _run_director_batch_subprocess(
     with gemini_colab_proxy_session(root_dir) as proxy_session:
         env = apply_gemini_colab_proxy_env(env, proxy_session)
         _append_text(log_path, f"GEMINI_PROXY_SERVER={env.get('GEMINI_PROXY_SERVER', '')}\n")
-        proc = subprocess.run(
-            cmd,
-            cwd=str(director_dir),
+        proc = _run_streamed_subprocess(
+            cmd=cmd,
+            cwd=director_dir,
             env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            log_path=log_path,
+            output_prefix=f"[{module_name}] ",
         )
     _append_text(
         log_path,
@@ -2080,7 +2109,9 @@ def run_youtube_director_prompts_batch_auto_gemini(
     }
     if missing or not options.execute:
         return result
-    env_overrides = {"GEMINI_USER_DATA_DIR": str(options.user_data_dir)} if options.user_data_dir else None
+    env_overrides = {"GEMINI_USER_DATA_DIR": str(options.user_data_dir)} if options.user_data_dir else {}
+    if options.worker_label:
+        env_overrides["GEMINI_WORKER_LABEL"] = options.worker_label
     proc = _run_director_batch_subprocess(
         director_dir=director_dir,
         module_name="gemini_director",

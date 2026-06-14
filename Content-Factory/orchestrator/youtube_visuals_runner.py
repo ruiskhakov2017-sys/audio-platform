@@ -11,7 +11,7 @@ import json
 import shutil
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -325,6 +325,7 @@ def _run_prompts_worker_batch(
                 stories=stories,
                 execute=execute,
                 user_data_dir=_prompt_worker_user_data_dir(config, worker_index) if execute else "",
+                worker_label=f"worker_{worker_index}",
             ),
         )
 
@@ -1060,63 +1061,86 @@ def run_youtube_visuals_run_all(
                             )
                             future_map[future] = (worker_index, worker_jobs, time.monotonic())
                         completed = 0
-                        for future in as_completed(future_map):
-                            worker_index, worker_jobs, worker_started = future_map[future]
-                            try:
-                                batch_result = future.result()
-                            except Exception as exc:
-                                batch_result = {
-                                    "ok": False,
-                                    "status": "failed",
-                                    "next_action": repr(exc),
-                                    "blockers": [type(exc).__name__],
-                                }
-                            elapsed = _fmt_elapsed(time.monotonic() - worker_started)
-                            print(
-                                f"[worker {worker_index}/{worker_count}] DONE prompts browser | "
-                                f"status={batch_result.get('status')} | elapsed={elapsed}",
-                                flush=True,
+                        pending_futures = set(future_map)
+                        while pending_futures:
+                            done_futures, pending_futures = wait(
+                                pending_futures,
+                                timeout=30,
+                                return_when=FIRST_COMPLETED,
                             )
-                            for index, story_dir, story_id, title in worker_jobs:
-                                after = _story_visual_readiness(config, story_dir, story_id)
-                                if after["prompts_ready"]:
-                                    prompt_progress["done"] += 1
-                                    label = "DONE"
-                                    ok = True
-                                else:
-                                    prompt_progress["failed"] += 1
-                                    label = "FAILED"
-                                    ok = False
+                            if not done_futures:
+                                active = []
+                                for running_future in pending_futures:
+                                    worker_index, worker_jobs, worker_started = future_map[running_future]
+                                    active.append(
+                                        f"worker={worker_index}/{worker_count} stories={len(worker_jobs)} "
+                                        f"elapsed={_fmt_elapsed(time.monotonic() - worker_started)}"
+                                    )
                                 print(
-                                    f"[{index}/{active_queue_count}] {label} prompts: {story_id} / {title} | "
-                                    f"characters={after['characters_status']} | prompts={after['prompts_status']} | elapsed={elapsed}",
+                                    "PROMPTS ACTIVE: "
+                                    + " | ".join(active)
+                                    + f" | done={prompt_progress['done']} failed={prompt_progress['failed']} "
+                                    + f"remaining={len(prompt_jobs) - completed}",
                                     flush=True,
                                 )
-                                if label == "FAILED":
+                                continue
+                            for future in done_futures:
+                                worker_index, worker_jobs, worker_started = future_map[future]
+                                try:
+                                    batch_result = future.result()
+                                except Exception as exc:
+                                    batch_result = {
+                                        "ok": False,
+                                        "status": "failed",
+                                        "next_action": repr(exc),
+                                        "blockers": [type(exc).__name__],
+                                    }
+                                elapsed = _fmt_elapsed(time.monotonic() - worker_started)
+                                print(
+                                    f"[worker {worker_index}/{worker_count}] DONE prompts browser | "
+                                    f"status={batch_result.get('status')} | elapsed={elapsed}",
+                                    flush=True,
+                                )
+                                for index, story_dir, story_id, title in worker_jobs:
+                                    after = _story_visual_readiness(config, story_dir, story_id)
+                                    if after["prompts_ready"]:
+                                        prompt_progress["done"] += 1
+                                        label = "DONE"
+                                        ok = True
+                                    else:
+                                        prompt_progress["failed"] += 1
+                                        label = "FAILED"
+                                        ok = False
                                     print(
-                                        f"[{index}/{active_queue_count}] FAILED reason={batch_result.get('next_action') or batch_result.get('status')}",
+                                        f"[{index}/{active_queue_count}] {label} prompts: {story_id} / {title} | "
+                                        f"characters={after['characters_status']} | prompts={after['prompts_status']} | elapsed={elapsed}",
                                         flush=True,
                                     )
-                                results.append(
-                                    {
-                                        "stage": "prompts",
-                                        "story_id": story_id,
-                                        "title": title,
-                                        "status": batch_result.get("status"),
-                                        "ok": ok,
-                                        "next_action": batch_result.get("next_action"),
-                                        "blockers": batch_result.get("blockers") or batch_result.get("missing") or [],
-                                        "story_dir": str(story_dir),
-                                    }
-                                )
-                                completed += 1
-                                pending = len(prompt_jobs) - completed
-                                print(
-                                    "PROMPTS PROGRESS: "
-                                    f"done={prompt_progress['done']} failed={prompt_progress['failed']} blocked={prompt_progress['blocked']} "
-                                    f"pending={pending} remaining={pending}",
-                                    flush=True,
-                                )
+                                    if label == "FAILED":
+                                        print(
+                                            f"[{index}/{active_queue_count}] FAILED reason={batch_result.get('next_action') or batch_result.get('status')}",
+                                            flush=True,
+                                        )
+                                    results.append(
+                                        {
+                                            "stage": "prompts",
+                                            "story_id": story_id,
+                                            "title": title,
+                                            "status": batch_result.get("status"),
+                                            "ok": ok,
+                                            "next_action": batch_result.get("next_action"),
+                                            "blockers": batch_result.get("blockers") or batch_result.get("missing") or [],
+                                            "story_dir": str(story_dir),
+                                        }
+                                    )
+                                    completed += 1
+                                    pending = len(prompt_jobs) - completed
+                                    print(
+                                        "PROMPTS PROGRESS: "
+                                        f"done={prompt_progress['done']} failed={prompt_progress['failed']} blocked={prompt_progress['blocked']} "
+                                        f"pending={pending} remaining={pending}",
+                                        flush=True,
+                                    )
 
             prompts_missing = []
             frames_queue = []

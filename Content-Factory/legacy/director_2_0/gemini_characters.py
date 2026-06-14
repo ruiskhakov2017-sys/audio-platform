@@ -162,7 +162,14 @@ def _extract_characters_one_story(
 def _run_characters_batch(ctx, page_holder, gemini_url: str, pending: list[Path]) -> Path | None:
     last_out: Path | None = None
     requests_in_dialog = 0
+    done = 0
+    failed = 0
     for si, story_folder in enumerate(pending):
+        print(
+            f"[characters-batch] START {si + 1}/{len(pending)} story={story_folder.name} "
+            f"dialog_request={requests_in_dialog + 1 if requests_in_dialog < 5 else 1}/5",
+            flush=True,
+        )
         logger.info(
             "========== Story %d / %d: %s ==========",
             si + 1,
@@ -189,8 +196,24 @@ def _run_characters_batch(ctx, page_holder, gemini_url: str, pending: list[Path]
             except Exception:
                 pass
         ensure_thinking_mode(page_holder[0])
-        last_out = _extract_characters_one_story(ctx, page_holder, gemini_url, story_folder)
-        requests_in_dialog += 1
+        try:
+            last_out = _extract_characters_one_story(ctx, page_holder, gemini_url, story_folder)
+            done += 1
+            requests_in_dialog += 1
+            print(
+                f"[characters-batch] DONE {si + 1}/{len(pending)} story={story_folder.name} "
+                f"done={done} failed={failed} remaining={len(pending) - si - 1}",
+                flush=True,
+            )
+        except Exception as exc:
+            failed += 1
+            requests_in_dialog += 1
+            print(
+                f"[characters-batch] FAILED {si + 1}/{len(pending)} story={story_folder.name} "
+                f"reason={type(exc).__name__}: {exc} done={done} failed={failed} remaining={len(pending) - si - 1}",
+                flush=True,
+            )
+            logger.exception("Characters story failed (%s): %s", story_folder.name, exc)
     return last_out
 
 
