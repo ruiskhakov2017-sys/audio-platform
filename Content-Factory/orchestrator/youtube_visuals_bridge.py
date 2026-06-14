@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.gemini_colab_proxy import apply_gemini_colab_proxy_env, gemini_colab_proxy_session
 from orchestrator.youtube_language import EXPECTED_YOUTUBE_LANGUAGE, detect_path_language
 
 
@@ -90,15 +91,50 @@ class YoutubeFramesRunpodBridgeOptions:
 class YoutubeGeminiAutoStageOptions:
     story_id: str
     execute: bool = False
+    user_data_dir: str = ""
+    stories_dir: str = ""
+    batch_mode: bool = False
+
+
+@dataclass
+class YoutubeGeminiBatchStory:
+    story_id: str
+    story_dir: Path
+    stage_dir: Path
+
+
+@dataclass
+class YoutubeGeminiBatchOptions:
+    stories: list[YoutubeGeminiBatchStory]
+    execute: bool = False
+    user_data_dir: str = ""
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+def _write_json(config: OrchestratorConfig, path: Path, payload: Any) -> None:
+    from orchestrator.isolated_io import write_json as isolated_write_json
+
+    isolated_write_json(
+        config,
+        path,
+        payload,
+        module="orchestrator.youtube_visuals_bridge",
+        function="_write_json",
+    )
+
+
+def _legacy_write_path(
+    config: OrchestratorConfig,
+    story_id: str,
+    legacy_relative: str,
+    fallback: Path,
+) -> Path:
+    from orchestrator.youtube_path_resolver import resolve_bridge_legacy_write_path
+
+    return resolve_bridge_legacy_write_path(config, story_id, legacy_relative, fallback)
 
 
 def _append_text(path: Path, text: str) -> None:
@@ -112,7 +148,9 @@ def _read_json(path: Path) -> Any:
 
 
 def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
-    return (config.root_dir / "output" / "youtube" / story_id).resolve()
+    from orchestrator.youtube_path_resolver import resolve_bridge_story_dir
+
+    return resolve_bridge_story_dir(config, story_id)
 
 
 def _director_module_dir(config: OrchestratorConfig) -> Path:
@@ -146,36 +184,46 @@ def _narration_path(story_dir: Path) -> Path:
     return story_dir / "04_audio" / "narration.mp3"
 
 
-def _characters_path(story_dir: Path) -> Path:
-    return story_dir / "05_characters" / "characters.txt"
+def _characters_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(
+        config,
+        story_id,
+        "05_characters/characters.txt",
+        story_dir / "05_characters" / "characters.txt",
+    )
 
 
-def _characters_dir(story_dir: Path) -> Path:
-    return story_dir / "05_characters"
+def _characters_dir(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _characters_path(config, story_id, story_dir).parent
 
 
-def _characters_staging_dir(story_dir: Path) -> Path:
-    return _characters_dir(story_dir) / "_staging"
+def _characters_staging_dir(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _characters_dir(config, story_id, story_dir) / "_staging"
 
 
-def _prompts_dir(story_dir: Path) -> Path:
-    return story_dir / PROMPTS_PRIMARY_DIRNAME
+def _prompts_dir(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(config, story_id, "06_prompts", story_dir / PROMPTS_PRIMARY_DIRNAME)
 
 
-def _prompts_staging_dir(story_dir: Path) -> Path:
-    return _prompts_dir(story_dir) / "_staging"
+def _prompts_staging_dir(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _prompts_dir(config, story_id, story_dir) / "_staging"
 
 
-def _prompts_path(story_dir: Path) -> Path:
-    return _prompts_dir(story_dir) / "prompts_list.txt"
+def _prompts_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(
+        config,
+        story_id,
+        "06_prompts/prompts_list.txt",
+        story_dir / PROMPTS_PRIMARY_DIRNAME / "prompts_list.txt",
+    )
 
 
 def _legacy_prompts_path(story_dir: Path) -> Path:
     return story_dir / PROMPTS_LEGACY_DIRNAME / "prompts_list.txt"
 
 
-def _resolve_prompts_path(story_dir: Path) -> Path:
-    primary = _prompts_path(story_dir)
+def _resolve_prompts_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    primary = _prompts_path(config, story_id, story_dir)
     if primary.is_file():
         return primary
     legacy = _legacy_prompts_path(story_dir)
@@ -184,8 +232,8 @@ def _resolve_prompts_path(story_dir: Path) -> Path:
     return primary
 
 
-def _frames_dir(story_dir: Path) -> Path:
-    return story_dir / "07_frames"
+def _frames_dir(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(config, story_id, "07_frames", story_dir / "07_frames")
 
 
 def _logs_dir(story_dir: Path) -> Path:
@@ -194,7 +242,37 @@ def _logs_dir(story_dir: Path) -> Path:
 
 def _legacy_stage_dir(config: OrchestratorConfig, story_id: str) -> Path:
     safe = re.sub(r'[<>:"/\\|?*\r\n\t]+', "_", story_id).strip(" .") or "youtube_story"
+    from orchestrator.isolated_io import is_active_isolated
+    from orchestrator.isolated_launch_context import get_active_resolver
+
+    if is_active_isolated(config):
+        resolver = get_active_resolver()
+        if resolver is not None:
+            return (resolver.technical_gemini_staging_dir() / safe).resolve()
     return _director_module_dir(config) / "stories_from_orchestrator" / safe
+
+
+def _bridge_copy2(
+    config: OrchestratorConfig,
+    src: Path | str,
+    dst: Path | str,
+    *,
+    function: str,
+) -> Path:
+    from orchestrator.isolated_io import copy2 as iso_copy2, is_active_isolated
+
+    if is_active_isolated(config):
+        return iso_copy2(
+            config,
+            src,
+            dst,
+            module="orchestrator.youtube_visuals_bridge",
+            function=function,
+        )
+    target = Path(dst)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, target)
+    return target.resolve()
 
 
 def _legacy_workflow_path(config: OrchestratorConfig) -> Path:
@@ -372,9 +450,9 @@ def _story_basics(config: OrchestratorConfig, story_id: str) -> dict[str, Any]:
         "safe_story_path": _safe_story_path(story_dir),
         "audio_text_path": _audio_text_path(story_dir),
         "narration_path": _narration_path(story_dir),
-        "characters_path": _characters_path(story_dir),
-        "prompts_path": _resolve_prompts_path(story_dir),
-        "frames_dir": _frames_dir(story_dir),
+        "characters_path": _characters_path(config, story_key, story_dir),
+        "prompts_path": _resolve_prompts_path(config, story_key, story_dir),
+        "frames_dir": _frames_dir(config, story_key, story_dir),
         "workflow_path": _workflow_path(config),
     }
 
@@ -831,15 +909,24 @@ def _manual_command(director_dir: Path, module_name: str, function_name: str, st
     )
 
 
-def _auto_gemini_command(director_dir: Path, module_name: str, function_name: str, stage_dir: Path) -> list[str]:
+def _auto_gemini_command(director_dir: Path, module_name: str, function_name: str, stage_dir: Path | None) -> list[str]:
+    call = f"{function_name}(None)" if stage_dir is None else f"{function_name}(Path(r'''{stage_dir}'''))"
     return [
         sys.executable,
         "-c",
         (
             "from pathlib import Path; "
             f"from {module_name} import {function_name}; "
-            f"{function_name}(Path(r'''{stage_dir}'''))"
+            f"{call}"
         ),
+    ]
+
+
+def _auto_gemini_batch_command(director_dir: Path, module_name: str, function_name: str) -> list[str]:
+    return [
+        sys.executable,
+        "-c",
+        f"from {module_name} import {function_name}; {function_name}(None)",
     ]
 
 
@@ -848,7 +935,7 @@ def _run_director_subprocess(
     director_dir: Path,
     module_name: str,
     function_name: str,
-    stage_dir: Path,
+    stage_dir: Path | None,
     log_path: Path,
     env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -867,19 +954,72 @@ def _run_director_subprocess(
         + f"cwd={director_dir}\n"
         + f"module={module_name}\n"
         + f"function={function_name}\n"
-        + f"stage_dir={stage_dir}\n"
+        + f"stage_dir={stage_dir or ''}\n"
         + f"env_overrides={json.dumps(env_overrides or {}, ensure_ascii=False)}\n"
         + f"cmd={json.dumps(cmd, ensure_ascii=False)}\n\n",
     )
-    proc = subprocess.run(
-        cmd,
-        cwd=str(director_dir),
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+    root_dir = director_dir.parents[1]
+    with gemini_colab_proxy_session(root_dir) as proxy_session:
+        env = apply_gemini_colab_proxy_env(env, proxy_session)
+        _append_text(log_path, f"GEMINI_PROXY_SERVER={env.get('GEMINI_PROXY_SERVER', '')}\n")
+        proc = subprocess.run(
+            cmd,
+            cwd=str(director_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    _append_text(
+        log_path,
+        f"\nfinished_at={_now_iso()}\nreturncode={proc.returncode}\n\n[stdout]\n{proc.stdout or ''}\n\n[stderr]\n{proc.stderr or ''}\n",
     )
+    return proc
+
+
+def _run_director_batch_subprocess(
+    *,
+    director_dir: Path,
+    module_name: str,
+    function_name: str,
+    stories_dir: Path,
+    log_path: Path,
+    env_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.setdefault("GEMINI_USE_CONFIG_URL", "1")
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env["GEMINI_STORIES_DIR"] = str(stories_dir)
+    if env_overrides:
+        env.update(env_overrides)
+    cmd = _auto_gemini_batch_command(director_dir, module_name, function_name)
+    _append_text(
+        log_path,
+        "\n"
+        + "=" * 80
+        + f"\nstarted_at={_now_iso()}\n"
+        + f"cwd={director_dir}\n"
+        + f"module={module_name}\n"
+        + f"function={function_name}\n"
+        + f"stories_dir={stories_dir}\n"
+        + f"env_overrides={json.dumps(env_overrides or {}, ensure_ascii=False)}\n"
+        + f"cmd={json.dumps(cmd, ensure_ascii=False)}\n\n",
+    )
+    root_dir = director_dir.parents[1]
+    with gemini_colab_proxy_session(root_dir) as proxy_session:
+        env = apply_gemini_colab_proxy_env(env, proxy_session)
+        _append_text(log_path, f"GEMINI_PROXY_SERVER={env.get('GEMINI_PROXY_SERVER', '')}\n")
+        proc = subprocess.run(
+            cmd,
+            cwd=str(director_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
     _append_text(
         log_path,
         f"\nfinished_at={_now_iso()}\nreturncode={proc.returncode}\n\n[stdout]\n{proc.stdout or ''}\n\n[stderr]\n{proc.stderr or ''}\n",
@@ -928,7 +1068,7 @@ def _legacy_characters_prompt_source_report(
         "timestamp": _now_iso(),
     }
     report_path = _logs_dir(story_dir) / "youtube_character_prompt_source_report.json"
-    _write_json(report_path, report)
+    _write_json(config, report_path, report)
     report["report_path"] = str(report_path)
     return report
 
@@ -1043,7 +1183,7 @@ def _legacy_characters_outgoing_message_debug_report(
         "timestamp": _now_iso(),
     }
     json_path = _logs_dir(story_dir) / "youtube_character_outgoing_message_debug.json"
-    _write_json(json_path, report)
+    _write_json(config, json_path, report)
     txt_lines = [
         "# YouTube Character outgoing message debug",
         "",
@@ -1099,9 +1239,9 @@ def _base_result(config: OrchestratorConfig, story_id: str) -> tuple[dict[str, A
     return basics, missing
 
 
-def _write_bridge_report(story_dir: Path, name: str, payload: dict[str, Any]) -> Path:
+def _write_bridge_report(config: OrchestratorConfig, story_dir: Path, name: str, payload: dict[str, Any]) -> Path:
     path = _logs_dir(story_dir) / f"{name}_report.json"
-    _write_json(path, payload)
+    _write_json(config, path, payload)
     return path
 
 
@@ -1112,7 +1252,12 @@ def _is_nonempty_file(path: Path) -> bool:
         return False
 
 
-def _update_story_manifest(story_dir: Path, patch: dict[str, Any]) -> Path:
+def _update_story_manifest(
+    config: OrchestratorConfig,
+    story_id: str,
+    story_dir: Path,
+    patch: dict[str, Any],
+) -> Path:
     path = _story_manifest_path(story_dir)
     manifest = _load_story_manifest(story_dir)
     now = _now_iso()
@@ -1130,9 +1275,9 @@ def _update_story_manifest(story_dir: Path, patch: dict[str, Any]) -> Path:
     if isinstance(manifest["expected_artifacts"], dict):
         manifest["expected_artifacts"].update(
             {
-                "characters_txt": str(_characters_path(story_dir)),
-                "prompts_list_txt": str(_prompts_path(story_dir)),
-                "frames_dir": str(_frames_dir(story_dir)),
+                "characters_txt": str(_characters_path(config, story_id, story_dir)),
+                "prompts_list_txt": str(_prompts_path(config, story_id, story_dir)),
+                "frames_dir": str(_frames_dir(config, story_id, story_dir)),
             }
         )
     manifest.setdefault("actual_artifacts", {})
@@ -1149,7 +1294,7 @@ def _update_story_manifest(story_dir: Path, patch: dict[str, Any]) -> Path:
             continue
         manifest[key] = value
     manifest["updated_at"] = now
-    _write_json(path, manifest)
+    _write_json(config, path, manifest)
     return path
 
 
@@ -1167,7 +1312,7 @@ def run_youtube_characters_export(
     source_text = _safe_story_path(story_dir)
     if not source_text.is_file():
         missing.append(str(source_text))
-    staging_dir = _characters_staging_dir(story_dir)
+    staging_dir = _characters_staging_dir(config, basics["story_id"], story_dir)
     result: dict[str, Any] = {
         "ok": not missing,
         "status": "missing_inputs" if missing else ("exported" if options.execute else "dry_run"),
@@ -1181,14 +1326,14 @@ def run_youtube_characters_export(
         "staging_story_txt": str(staging_dir / "story.txt"),
         "staging_readme": str(staging_dir / "README.md"),
         "expected_output_filename": "characters.txt",
-        "target_characters_path": str(_characters_path(story_dir)),
+        "target_characters_path": str(basics["characters_path"]),
         "missing": missing,
         "note": "Gemini is not launched. Use staging/story.txt manually and import resulting characters.txt.",
     }
     if missing or not options.execute:
         return result
     staging_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_text, staging_dir / "story.txt")
+    _bridge_copy2(config, source_text, staging_dir / "story.txt", function="run_youtube_characters_export")
     _write_staging_readme(
         staging_dir / "README.md",
         [
@@ -1206,7 +1351,7 @@ def run_youtube_characters_export(
             f'python -m orchestrator youtube characters-import --story-id "{basics["canonical_basename"]}" --source "PATH_TO_CHARACTERS_TXT" --execute',
         ],
     )
-    report_path = _write_bridge_report(story_dir, "youtube_characters_export", {**result, "written_at": _now_iso()})
+    report_path = _write_bridge_report(config, story_dir, "youtube_characters_export", {**result, "written_at": _now_iso()})
     result["report_path"] = str(report_path)
     return result
 
@@ -1219,7 +1364,7 @@ def run_youtube_characters_import(
     basics, missing = _base_result(config, options.story_id)
     story_dir = Path(basics["story_dir"])
     source = Path(options.source).resolve()
-    target = _characters_path(story_dir)
+    target = Path(basics["characters_path"])
     if not _is_nonempty_file(source):
         missing.append(str(source))
     result: dict[str, Any] = {
@@ -1237,9 +1382,11 @@ def run_youtube_characters_import(
     if missing or not options.execute:
         return result
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    _bridge_copy2(config, source, target, function="run_youtube_characters_import")
     imported_at = _now_iso()
     manifest_path = _update_story_manifest(
+        config,
+        basics["story_id"],
         story_dir,
         {
             "actual_artifacts": {"characters_txt": str(target)},
@@ -1253,7 +1400,7 @@ def run_youtube_characters_import(
             },
         },
     )
-    report_path = _write_bridge_report(story_dir, "youtube_characters_import", {**result, "imported_at": imported_at})
+    report_path = _write_bridge_report(config, story_dir, "youtube_characters_import", {**result, "imported_at": imported_at})
     result["manifest_path"] = str(manifest_path)
     result["report_path"] = str(report_path)
     result["target_size"] = target.stat().st_size
@@ -1286,7 +1433,7 @@ def run_youtube_director_prompts_export(
     source_text = _source_text_for_director(story_dir)
     source_text_language = detect_path_language(source_text)
     audio_path = _narration_path(story_dir)
-    characters_path = _characters_path(story_dir)
+    characters_path = Path(basics["characters_path"])
     if not source_text.is_file():
         missing.append(str(source_text))
     if not audio_path.is_file():
@@ -1294,7 +1441,7 @@ def run_youtube_director_prompts_export(
     if not characters_path.is_file():
         missing.append(str(characters_path))
     duration, frame_duration_sec, estimated_prompts = _director_export_estimates(config, story_dir, audio_path)
-    staging_dir = _prompts_staging_dir(story_dir)
+    staging_dir = _prompts_staging_dir(config, basics["story_id"], story_dir)
     result: dict[str, Any] = {
         "ok": not missing,
         "status": "missing_inputs" if missing else ("exported" if options.execute else "dry_run"),
@@ -1317,7 +1464,7 @@ def run_youtube_director_prompts_export(
         "staging_narration_path_txt": str(staging_dir / "narration_path.txt"),
         "staging_readme": str(staging_dir / "README.md"),
         "expected_output_filename": "prompts_list.txt",
-        "target_prompts_path": str(_prompts_path(story_dir)),
+        "target_prompts_path": str(basics["prompts_path"]),
         "missing": missing,
         "note": "Gemini is not launched. Use staging files manually and import resulting prompts_list.txt.",
     }
@@ -1334,8 +1481,8 @@ def run_youtube_director_prompts_export(
     if missing or not options.execute:
         return result
     staging_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_text, staging_dir / "story.txt")
-    shutil.copy2(characters_path, staging_dir / "characters.txt")
+    _bridge_copy2(config, source_text, staging_dir / "story.txt", function="run_youtube_director_prompts_export")
+    _bridge_copy2(config, characters_path, staging_dir / "characters.txt", function="run_youtube_director_prompts_export")
     (staging_dir / "narration_path.txt").write_text(str(audio_path) + "\n", encoding="utf-8")
     _write_staging_readme(
         staging_dir / "README.md",
@@ -1359,7 +1506,7 @@ def run_youtube_director_prompts_export(
             f'python -m orchestrator youtube director-prompts-import --story-id "{basics["canonical_basename"]}" --source "PATH_TO_PROMPTS_LIST_TXT" --execute',
         ],
     )
-    report_path = _write_bridge_report(story_dir, "youtube_director_prompts_export", {**result, "written_at": _now_iso()})
+    report_path = _write_bridge_report(config, story_dir, "youtube_director_prompts_export", {**result, "written_at": _now_iso()})
     result["report_path"] = str(report_path)
     return result
 
@@ -1372,7 +1519,7 @@ def run_youtube_director_prompts_import(
     basics, missing = _base_result(config, options.story_id)
     story_dir = Path(basics["story_dir"])
     source = Path(options.source).resolve()
-    target = _prompts_path(story_dir)
+    target = Path(basics["prompts_path"])
     if not _is_nonempty_file(source):
         missing.append(str(source))
     prompts = _load_prompts(source)
@@ -1394,9 +1541,11 @@ def run_youtube_director_prompts_import(
     if missing or not options.execute:
         return result
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    _bridge_copy2(config, source, target, function="run_youtube_director_prompts_import")
     imported_at = _now_iso()
     manifest_path = _update_story_manifest(
+        config,
+        basics["story_id"],
         story_dir,
         {
             "actual_artifacts": {"prompts_list_txt": str(target)},
@@ -1418,7 +1567,7 @@ def run_youtube_director_prompts_import(
             },
         },
     )
-    report_path = _write_bridge_report(story_dir, "youtube_director_prompts_import", {**result, "imported_at": imported_at})
+    report_path = _write_bridge_report(config, story_dir, "youtube_director_prompts_import", {**result, "imported_at": imported_at})
     result["manifest_path"] = str(manifest_path)
     result["report_path"] = str(report_path)
     result["target_size"] = target.stat().st_size
@@ -1463,10 +1612,10 @@ def run_youtube_characters_bridge(
     if options.execute:
         stage_dir.mkdir(parents=True, exist_ok=True)
         characters_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_text, stage_dir / "story.txt")
+        _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_characters_bridge")
         if characters_path.is_file():
-            shutil.copy2(characters_path, stage_dir / "characters.txt")
-        report_path = _write_bridge_report(story_dir, "youtube_characters_bridge", {**result, "written_at": _now_iso()})
+            _bridge_copy2(config, characters_path, stage_dir / "characters.txt", function="run_youtube_characters_bridge")
+        report_path = _write_bridge_report(config, story_dir, "youtube_characters_bridge", {**result, "written_at": _now_iso()})
         result["report_path"] = str(report_path)
     return result
 
@@ -1535,13 +1684,13 @@ def run_youtube_director_prompts_bridge(
     if options.execute:
         stage_dir.mkdir(parents=True, exist_ok=True)
         prompts_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_text, stage_dir / "story.txt")
-        shutil.copy2(audio_path, stage_dir / "narration.mp3")
+        _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_director_prompts_bridge")
+        _bridge_copy2(config, audio_path, stage_dir / "narration.mp3", function="run_youtube_director_prompts_bridge")
         if characters_path.is_file():
-            shutil.copy2(characters_path, stage_dir / "characters.txt")
+            _bridge_copy2(config, characters_path, stage_dir / "characters.txt", function="run_youtube_director_prompts_bridge")
         if prompts_path.is_file():
-            shutil.copy2(prompts_path, stage_dir / "prompts_list.txt")
-        report_path = _write_bridge_report(story_dir, "youtube_director_prompts_bridge", {**result, "written_at": _now_iso()})
+            _bridge_copy2(config, prompts_path, stage_dir / "prompts_list.txt", function="run_youtube_director_prompts_bridge")
+        report_path = _write_bridge_report(config, story_dir, "youtube_director_prompts_bridge", {**result, "written_at": _now_iso()})
         result["report_path"] = str(report_path)
     return result
 
@@ -1557,7 +1706,7 @@ def run_youtube_characters_auto_gemini(
     director_dir = Path(basics["director_module_dir"])
     stage_dir = Path(basics["legacy_stage_dir"])
     stage_output = stage_dir / "characters.txt"
-    target = _characters_path(story_dir)
+    target = Path(basics["characters_path"])
     log_path = _logs_dir(story_dir) / "youtube_gemini_characters_auto.log"
     prompt_source_report = _legacy_characters_prompt_source_report(
         config=config,
@@ -1598,7 +1747,7 @@ def run_youtube_characters_auto_gemini(
         return result
 
     stage_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_text, stage_dir / "story.txt")
+    _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_characters_auto_gemini")
     outgoing_debug_report = _legacy_characters_outgoing_message_debug_report(
         config=config,
         story_id=basics["story_id"],
@@ -1635,13 +1784,16 @@ def run_youtube_characters_auto_gemini(
     if _is_nonempty_file(stage_output):
         proc_returncode = 0
     else:
+        env_overrides = {"GEMINI_MAX_TRANSIENT_ROUNDS": "2"}
+        if options.user_data_dir:
+            env_overrides["GEMINI_USER_DATA_DIR"] = str(options.user_data_dir)
         proc = _run_director_subprocess(
             director_dir=director_dir,
             module_name="gemini_characters",
             function_name="run_characters",
             stage_dir=stage_dir,
             log_path=log_path,
-            env_overrides={"GEMINI_MAX_TRANSIENT_ROUNDS": "2"},
+            env_overrides=env_overrides,
         )
         proc_returncode = proc.returncode
         result["subprocess_returncode"] = proc.returncode
@@ -1655,7 +1807,7 @@ def run_youtube_characters_auto_gemini(
             else:
                 result["status"] = "failed"
                 result["error"] = f"legacy gemini characters subprocess failed: {proc.returncode}"
-            report_path = _write_bridge_report(story_dir, "youtube_gemini_characters_auto", {**result, "written_at": _now_iso()})
+            report_path = _write_bridge_report(config, story_dir, "youtube_gemini_characters_auto", {**result, "written_at": _now_iso()})
             result["report_path"] = str(report_path)
             return result
 
@@ -1664,7 +1816,7 @@ def run_youtube_characters_auto_gemini(
         result["status"] = "failed"
         result["subprocess_returncode"] = proc_returncode
         result["error"] = f"legacy characters output missing or empty: {stage_output}"
-        report_path = _write_bridge_report(story_dir, "youtube_gemini_characters_auto", {**result, "written_at": _now_iso()})
+        report_path = _write_bridge_report(config, story_dir, "youtube_gemini_characters_auto", {**result, "written_at": _now_iso()})
         result["report_path"] = str(report_path)
         return result
 
@@ -1681,8 +1833,80 @@ def run_youtube_characters_auto_gemini(
             "target_size": imported.get("target_size"),
         }
     )
-    report_path = _write_bridge_report(story_dir, "youtube_gemini_characters_auto", {**result, "written_at": _now_iso()})
+    report_path = _write_bridge_report(config, story_dir, "youtube_gemini_characters_auto", {**result, "written_at": _now_iso()})
     result["report_path"] = str(report_path)
+    return result
+
+
+def run_youtube_characters_batch_auto_gemini(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubeGeminiBatchOptions,
+) -> dict[str, Any]:
+    director_dir = _director_module_dir(config)
+    stories_dir = Path(options.stories[0].stage_dir).parent if options.stories else director_dir / "stories_from_orchestrator"
+    log_path = director_dir / "logs" / "youtube_gemini_characters_batch_auto.log"
+    rows: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for item in options.stories:
+        story_dir = Path(item.story_dir)
+        stage_dir = Path(item.stage_dir)
+        source_text = _source_text_for_characters(story_dir)
+        if not source_text.is_file():
+            missing.append(str(source_text))
+            continue
+        if options.execute:
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_characters_batch_auto_gemini")
+        rows.append(
+            {
+                "story_id": item.story_id,
+                "story_dir": str(story_dir),
+                "stage_dir": str(stage_dir),
+                "stage_output": str(stage_dir / "characters.txt"),
+                "source_text": str(source_text),
+            }
+        )
+    result: dict[str, Any] = {
+        "ok": not missing,
+        "status": "missing_inputs" if missing else ("would_run" if not options.execute else "needs_gemini"),
+        "execute": bool(options.execute),
+        "stage": "characters",
+        "stories_dir": str(stories_dir),
+        "stories_count": len(rows),
+        "rows": rows,
+        "missing": missing,
+        "legacy_log_path": str(log_path),
+        "note": "Batch mode opens one Characters browser and processes all staged folders; legacy reloads after each 5 requests.",
+    }
+    if missing or not options.execute:
+        return result
+    proc = _run_director_batch_subprocess(
+        director_dir=director_dir,
+        module_name="gemini_characters",
+        function_name="run_characters",
+        stories_dir=stories_dir,
+        log_path=log_path,
+        env_overrides={"GEMINI_MAX_TRANSIENT_ROUNDS": "2"},
+    )
+    result["subprocess_returncode"] = proc.returncode
+    imported_rows: list[dict[str, Any]] = []
+    failed_rows: list[dict[str, Any]] = []
+    for item in options.stories:
+        stage_output = Path(item.stage_dir) / "characters.txt"
+        imp = run_youtube_characters_import(
+            config=config,
+            options=YoutubeCharactersImportOptions(story_id=item.story_id, source=stage_output, execute=True),
+        )
+        (imported_rows if imp.get("ok") else failed_rows).append(imp)
+    result.update(
+        {
+            "ok": proc.returncode == 0 and not failed_rows,
+            "status": "done" if proc.returncode == 0 and not failed_rows else "failed",
+            "imported": imported_rows,
+            "failed": failed_rows,
+        }
+    )
     return result
 
 
@@ -1695,8 +1919,8 @@ def run_youtube_director_prompts_auto_gemini(
     story_dir = Path(basics["story_dir"])
     source_text = _source_text_for_director(story_dir)
     audio_path = Path(basics["narration_path"])
-    characters_path = _characters_path(story_dir)
-    prompts_path = _prompts_path(story_dir)
+    characters_path = Path(basics["characters_path"])
+    prompts_path = Path(basics["prompts_path"])
     director_dir = Path(basics["director_module_dir"])
     stage_dir = Path(basics["legacy_stage_dir"])
     stage_output = stage_dir / "prompts_list.txt"
@@ -1750,18 +1974,20 @@ def run_youtube_director_prompts_auto_gemini(
         return result
 
     stage_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_text, stage_dir / "story.txt")
-    shutil.copy2(audio_path, stage_dir / "narration.mp3")
-    shutil.copy2(characters_path, stage_dir / "characters.txt")
+    _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_director_auto_gemini")
+    _bridge_copy2(config, audio_path, stage_dir / "narration.mp3", function="run_youtube_director_auto_gemini")
+    _bridge_copy2(config, characters_path, stage_dir / "characters.txt", function="run_youtube_director_auto_gemini")
     if _load_prompts(stage_output):
         proc_returncode = 0
     else:
+        env_overrides = {"GEMINI_USER_DATA_DIR": str(options.user_data_dir)} if options.user_data_dir else None
         proc = _run_director_subprocess(
             director_dir=director_dir,
             module_name="gemini_director",
             function_name="run_director",
             stage_dir=stage_dir,
             log_path=log_path,
+            env_overrides=env_overrides,
         )
         proc_returncode = proc.returncode
         result["subprocess_returncode"] = proc.returncode
@@ -1769,7 +1995,7 @@ def run_youtube_director_prompts_auto_gemini(
             result["ok"] = False
             result["status"] = "failed"
             result["error"] = f"legacy gemini director subprocess failed: {proc.returncode}"
-            report_path = _write_bridge_report(story_dir, "youtube_gemini_director_auto", {**result, "written_at": _now_iso()})
+            report_path = _write_bridge_report(config, story_dir, "youtube_gemini_director_auto", {**result, "written_at": _now_iso()})
             result["report_path"] = str(report_path)
             return result
 
@@ -1779,7 +2005,7 @@ def run_youtube_director_prompts_auto_gemini(
         result["status"] = "failed"
         result["subprocess_returncode"] = proc_returncode
         result["error"] = f"legacy prompts output missing or empty: {stage_output}"
-        report_path = _write_bridge_report(story_dir, "youtube_gemini_director_auto", {**result, "written_at": _now_iso()})
+        report_path = _write_bridge_report(config, story_dir, "youtube_gemini_director_auto", {**result, "written_at": _now_iso()})
         result["report_path"] = str(report_path)
         return result
 
@@ -1797,8 +2023,90 @@ def run_youtube_director_prompts_auto_gemini(
             "target_size": imported.get("target_size"),
         }
     )
-    report_path = _write_bridge_report(story_dir, "youtube_gemini_director_auto", {**result, "written_at": _now_iso()})
+    report_path = _write_bridge_report(config, story_dir, "youtube_gemini_director_auto", {**result, "written_at": _now_iso()})
     result["report_path"] = str(report_path)
+    return result
+
+
+def run_youtube_director_prompts_batch_auto_gemini(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubeGeminiBatchOptions,
+) -> dict[str, Any]:
+    director_dir = _director_module_dir(config)
+    stories_dir = Path(options.stories[0].stage_dir).parent if options.stories else director_dir / "stories_from_orchestrator"
+    log_path = director_dir / "logs" / f"youtube_gemini_director_batch_auto_{abs(hash(str(stories_dir))) % 100000}.log"
+    rows: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for item in options.stories:
+        story_dir = Path(item.story_dir)
+        stage_dir = Path(item.stage_dir)
+        source_text = _source_text_for_director(story_dir)
+        audio_path = _narration_path(story_dir)
+        characters_path = _characters_path(config, item.story_id, story_dir)
+        for required in (source_text, audio_path, characters_path):
+            if not required.is_file():
+                missing.append(str(required))
+        if options.execute:
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            if source_text.is_file():
+                _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_director_prompts_batch_auto_gemini")
+            if audio_path.is_file():
+                _bridge_copy2(config, audio_path, stage_dir / "narration.mp3", function="run_youtube_director_prompts_batch_auto_gemini")
+            if characters_path.is_file():
+                _bridge_copy2(config, characters_path, stage_dir / "characters.txt", function="run_youtube_director_prompts_batch_auto_gemini")
+        rows.append(
+            {
+                "story_id": item.story_id,
+                "story_dir": str(story_dir),
+                "stage_dir": str(stage_dir),
+                "stage_output": str(stage_dir / "prompts_list.txt"),
+                "source_text": str(source_text),
+                "audio_path": str(audio_path),
+                "characters_path": str(characters_path),
+            }
+        )
+    result: dict[str, Any] = {
+        "ok": not missing,
+        "status": "missing_inputs" if missing else ("would_run" if not options.execute else "needs_gemini"),
+        "execute": bool(options.execute),
+        "stage": "prompts",
+        "stories_dir": str(stories_dir),
+        "stories_count": len(rows),
+        "rows": rows,
+        "missing": missing,
+        "legacy_log_path": str(log_path),
+        "note": "Batch mode opens one Director browser per worker and processes assigned stories sequentially; browser is reused across stories.",
+    }
+    if missing or not options.execute:
+        return result
+    env_overrides = {"GEMINI_USER_DATA_DIR": str(options.user_data_dir)} if options.user_data_dir else None
+    proc = _run_director_batch_subprocess(
+        director_dir=director_dir,
+        module_name="gemini_director",
+        function_name="run_director",
+        stories_dir=stories_dir,
+        log_path=log_path,
+        env_overrides=env_overrides,
+    )
+    result["subprocess_returncode"] = proc.returncode
+    imported_rows: list[dict[str, Any]] = []
+    failed_rows: list[dict[str, Any]] = []
+    for item in options.stories:
+        stage_output = Path(item.stage_dir) / "prompts_list.txt"
+        imp = run_youtube_director_prompts_import(
+            config=config,
+            options=YoutubeDirectorPromptsImportOptions(story_id=item.story_id, source=stage_output, execute=True),
+        )
+        (imported_rows if imp.get("ok") else failed_rows).append(imp)
+    result.update(
+        {
+            "ok": proc.returncode == 0 and not failed_rows,
+            "status": "done" if proc.returncode == 0 and not failed_rows else "failed",
+            "imported": imported_rows,
+            "failed": failed_rows,
+        }
+    )
     return result
 
 
@@ -1890,6 +2198,7 @@ def run_youtube_frames_runpod_bridge(
         current_status = _frame_status(frames_dir, prompts)
         frames_dir.mkdir(parents=True, exist_ok=True)
         _write_json(
+            config,
             frame_jobs_path,
             {
                 "schema_version": 1,
@@ -1907,7 +2216,7 @@ def run_youtube_frames_runpod_bridge(
             },
         )
         failed = failed_records or []
-        _write_json(failed_frames_path, {"updated_at": _now_iso(), "failed": failed})
+        _write_json(config, failed_frames_path, {"updated_at": _now_iso(), "failed": failed})
         report_payload = {
             **result,
             "status": status_value,
@@ -1927,7 +2236,7 @@ def run_youtube_frames_runpod_bridge(
             "first_10_missing": current_status["first_10_pending"],
             "first_10_failed": failed[:10],
         }
-        _write_json(report_path, report_payload)
+        _write_json(config, report_path, report_payload)
 
     if options.prepare_only:
         write_jobs_and_report("prepared", [])
@@ -2027,6 +2336,8 @@ def run_youtube_frames_runpod_bridge(
     write_jobs_and_report(final_state, failed_records)
     if final_state == "done":
         manifest_path = _update_story_manifest(
+            config,
+            basics["story_id"],
             story_dir,
             {
                 "actual_artifacts": {"frames_dir": str(frames_dir)},

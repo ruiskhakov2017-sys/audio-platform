@@ -8,14 +8,17 @@ the existing frames bridge when both --execute and --runpod-url are provided.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.launch_contract import build_launch_context
 from orchestrator.youtube_video_segments import (
     YoutubeVideoPrepareSegmentsOptions,
     run_youtube_video_prepare_segments,
@@ -34,6 +37,8 @@ from orchestrator.youtube_visuals_bridge import (
     YoutubeDirectorPromptsExportOptions,
     YoutubeDirectorPromptsImportOptions,
     YoutubeFramesRunpodBridgeOptions,
+    YoutubeGeminiBatchOptions,
+    YoutubeGeminiBatchStory,
     YoutubeGeminiAutoStageOptions,
     _audio_text_path,
     _characters_path,
@@ -51,7 +56,9 @@ from orchestrator.youtube_visuals_bridge import (
     run_youtube_director_prompts_export,
     run_youtube_director_prompts_import,
     run_youtube_characters_auto_gemini,
+    run_youtube_characters_batch_auto_gemini,
     run_youtube_director_prompts_auto_gemini,
+    run_youtube_director_prompts_batch_auto_gemini,
     run_youtube_frames_runpod_bridge,
 )
 from orchestrator.youtube_characters_anchor_audit import (
@@ -71,6 +78,7 @@ from orchestrator.youtube_gemini_registry import sync_youtube_gemini_legacy_file
 @dataclass
 class YoutubeVisualsRunOptions:
     story_id: str
+    youtube_run_id: str = ""
     runpod_url: str = ""
     workflow: str = ""
     execute: bool = False
@@ -82,19 +90,47 @@ class YoutubeVisualsRunOptions:
     segment_sec: float = 180.0
     watch_interval_sec: int = 5
     watch_timeout_sec: int = 0
+    accept_known_promo_issues: bool = False
 
 
 @dataclass
 class YoutubeVisualsStatusOptions:
-    story_id: str
+    story_id: str = ""
+    youtube_run_id: str = ""
+    accept_known_promo_issues: bool = False
+
+
+@dataclass
+class YoutubeVisualsRunAllOptions:
+    youtube_run_id: str
+    story_id: str = ""
+    runpod_url: str = ""
+    workflow: str = ""
+    workers: int = 1
+    limit: int = 0
+    execute: bool = False
+    auto_gemini: bool = False
+    allow_gemini: bool = False
+    accept_known_promo_issues: bool = False
+    segment_sec: float = 180.0
+    prompt_runpod_url: bool = False
+
+
+@dataclass
+class YoutubeStageSetOptions:
+    youtube_run_id: str
+    stage: str
+    execute: bool = False
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
-    return (config.root_dir / "output" / "youtube" / story_id).resolve()
+def _story_dir(config: OrchestratorConfig, story_id: str, *, youtube_run_id: str | None = None) -> Path:
+    from orchestrator.youtube_path_resolver import resolve_youtube_technical_story_dir
+
+    return resolve_youtube_technical_story_dir(config, story_id, launch_id=youtube_run_id)
 
 
 def _logs_dir(story_dir: Path) -> Path:
@@ -163,6 +199,212 @@ def _load_manifest(story_dir: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _is_excluded_from_video(manifest: dict[str, Any]) -> bool:
+    return bool(manifest.get("excluded_from_video") or manifest.get("drop_from_video_queue"))
+
+
+def _launch_policy_accepts_promo_issues(manifest: dict[str, Any], *, explicit: bool = False) -> bool:
+    policy = str(
+        manifest.get("current_launch_policy")
+        or manifest.get("launch_policy")
+        or manifest.get("video_launch_policy")
+        or ""
+    ).strip()
+    return bool(explicit or policy == "ACCEPTED_WITH_KNOWN_PROMO_ISSUES")
+
+
+def _audio_ready_for_video(story_dir: Path, manifest: dict[str, Any]) -> bool:
+    if _is_excluded_from_video(manifest):
+        return False
+    audio = manifest.get("audio") if isinstance(manifest.get("audio"), dict) else {}
+    if audio.get("valid_for_video") is False:
+        return False
+    return _narration_path(story_dir).is_file()
+
+
+def _iter_launch_story_dirs(config: OrchestratorConfig, launch_id: str) -> list[Path]:
+    ctx = build_launch_context(config, launch_id=launch_id)
+    if not ctx.youtube_root.is_dir():
+        return []
+    return sorted(
+        p
+        for p in ctx.youtube_root.iterdir()
+        if p.is_dir() and (p / "youtube_story_manifest.json").is_file()
+    )
+
+
+def _story_identity(story_dir: Path, manifest: dict[str, Any]) -> tuple[str, str]:
+    story_id = str(manifest.get("story_id") or story_dir.name).strip() or story_dir.name
+    title = str(manifest.get("title") or manifest.get("canonical_basename") or story_id).strip() or story_id
+    return story_id, title
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _story_visual_readiness(config: OrchestratorConfig, story_dir: Path, story_id: str) -> dict[str, Any]:
+    characters = _characters_path(config, story_id, story_dir)
+    prompts_path = _prompts_path(config, story_id, story_dir)
+    prompts = _load_prompts(prompts_path)
+    frames = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
+    characters_ready = _is_nonempty(characters)
+    prompts_ready = _is_nonempty(prompts_path)
+    images_ready = (
+        int(frames.get("expected") or 0) > 0
+        and int(frames.get("pending") or 0) == 0
+        and int(frames.get("failed") or 0) == 0
+    )
+    return {
+        "characters_ready": characters_ready,
+        "prompts_ready": prompts_ready,
+        "images_ready": images_ready,
+        "frames_expected": int(frames.get("expected") or 0),
+        "frames_valid": int(frames.get("generated") or 0),
+        "characters_status": "ok" if characters_ready else "missing",
+        "prompts_status": "ok" if prompts_ready else "missing",
+        "images_status": "ok" if images_ready else "skip",
+    }
+
+
+def _prompt_worker_user_data_dir(config: OrchestratorConfig, worker_index: int) -> str:
+    if worker_index <= 1:
+        return ""
+    director_dir = (config.root_dir / config.legacy_modules.get("director_2_0", "legacy/director_2_0")).resolve()
+    worker_root = director_dir / "worker_profiles" / f"prompts_worker_{worker_index}"
+    target = worker_root / "user_data"
+    source = director_dir / "user_data"
+    if target.exists():
+        return str(target)
+    if source.is_dir():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        return str(target)
+    target.mkdir(parents=True, exist_ok=True)
+    return str(target)
+
+
+def _run_prompts_worker_story(
+    *,
+    config: OrchestratorConfig,
+    launch_id: str,
+    story_id: str,
+    execute: bool,
+    worker_index: int,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import isolated_session
+
+    with isolated_session(None, batch_launch_id=launch_id, config=config):
+        return run_youtube_director_prompts_auto_gemini(
+            config=config,
+            options=YoutubeGeminiAutoStageOptions(
+                story_id=story_id,
+                execute=execute,
+                user_data_dir=_prompt_worker_user_data_dir(config, worker_index) if execute else "",
+            ),
+        )
+
+
+def _run_prompts_worker_batch(
+    *,
+    config: OrchestratorConfig,
+    launch_id: str,
+    stories: list[YoutubeGeminiBatchStory],
+    execute: bool,
+    worker_index: int,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import isolated_session
+
+    with isolated_session(None, batch_launch_id=launch_id, config=config):
+        return run_youtube_director_prompts_batch_auto_gemini(
+            config=config,
+            options=YoutubeGeminiBatchOptions(
+                stories=stories,
+                execute=execute,
+                user_data_dir=_prompt_worker_user_data_dir(config, worker_index) if execute else "",
+            ),
+        )
+
+
+def set_launch_stage(
+    config: OrchestratorConfig,
+    *,
+    launch_id: str,
+    stage: str,
+    execute: bool,
+    reason: str = "",
+) -> dict[str, Any]:
+    ctx = build_launch_context(config, launch_id=launch_id)
+    status_path = ctx.launch_root / "queue" / "stage_status.json"
+    current = _read_json(status_path) if status_path.is_file() else {}
+    if not isinstance(current, dict):
+        current = {}
+    updated = {
+        **current,
+        "updated_at": _now_iso(),
+        "youtube_run_id": ctx.launch_id,
+        "current_stage": str(stage).strip(),
+    }
+    if reason:
+        updated["stage_change_reason"] = reason
+    if execute:
+        _write_json(status_path, updated)
+    return {
+        "ok": True,
+        "execute": bool(execute),
+        "youtube_run_id": ctx.launch_id,
+        "stage": str(stage).strip(),
+        "stage_status_path": str(status_path),
+        "changed": bool(execute),
+    }
+
+
+def mark_story_excluded_from_video(
+    config: OrchestratorConfig,
+    *,
+    launch_id: str,
+    story_id: str,
+    reason: str,
+    execute: bool,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import isolated_session
+
+    with isolated_session(None, batch_launch_id=launch_id, config=config):
+        story_dir = _story_dir(config, story_id, youtube_run_id=launch_id)
+        manifest_path = _story_manifest_path(story_dir)
+        manifest = _load_manifest(story_dir)
+        if not manifest:
+            return {"ok": False, "message": f"manifest missing: {manifest_path}", "execute": bool(execute)}
+        story_key, title = _story_identity(story_dir, manifest)
+        manifest.update(
+            {
+                "excluded_from_video": True,
+                "exclude_reason": reason,
+                "current_launch_action": "drop_from_video_queue",
+                "excluded_from_video_at": _now_iso(),
+            }
+        )
+        status = dict(manifest.get("pipeline_stage_status") or {})
+        for stage in ("visuals", "frames", "video", "assemble", "publish"):
+            status[stage] = "excluded"
+        manifest["pipeline_stage_status"] = status
+        if execute:
+            _write_json(manifest_path, manifest)
+        return {
+            "ok": True,
+            "execute": bool(execute),
+            "story_id": story_key,
+            "title": title,
+            "story_dir": str(story_dir),
+            "manifest_path": str(manifest_path),
+            "excluded_from_video": True,
+            "exclude_reason": reason,
+        }
+
+
 def _ensure_manifest(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
     path = _story_manifest_path(story_dir)
     manifest = _load_manifest(story_dir)
@@ -189,9 +431,9 @@ def _ensure_manifest(config: OrchestratorConfig, story_id: str, story_dir: Path)
                 "safe_story": str(_safe_story_path(story_dir)),
                 "promo_text_ready_for_audio": str(_audio_text_path(story_dir)),
                 "audio_mp3": str(_narration_path(story_dir)),
-                "characters_txt": str(_characters_path(story_dir)),
-                "prompts_list_txt": str(_prompts_path(story_dir)),
-                "frames_dir": str(_frames_dir(story_dir)),
+                "characters_txt": str(_characters_path(config, story_id, story_dir)),
+                "prompts_list_txt": str(_prompts_path(config, story_id, story_dir)),
+                "frames_dir": str(_frames_dir(config, story_id, story_dir)),
                 "video_timeline": str(_video_timeline_path(story_dir)),
                 "segment_jobs": str(_segment_jobs_path(story_dir)),
             }
@@ -280,20 +522,35 @@ def run_youtube_visuals_status(
     config: OrchestratorConfig,
     options: YoutubeVisualsStatusOptions,
 ) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id, isolated_session
+
     story_id = str(options.story_id).strip()
-    story_dir = _story_dir(config, story_id)
+    launch_id = str(options.youtube_run_id or get_batch_launch_id() or "").strip()
+    active_launch_id = str(get_batch_launch_id() or "").strip()
+    if launch_id and active_launch_id != launch_id:
+        with isolated_session(None, batch_launch_id=launch_id, config=config):
+            return run_youtube_visuals_status(config=config, options=options)
+    story_dir = _story_dir(config, story_id, youtube_run_id=launch_id)
     manifest = _load_manifest(story_dir)
+    excluded_from_video = _is_excluded_from_video(manifest)
+    promo_issues_accepted = _launch_policy_accepts_promo_issues(
+        manifest,
+        explicit=bool(options.accept_known_promo_issues),
+    )
     safe_story = _safe_story_path(story_dir)
     audio_text = _audio_text_path(story_dir)
     narration = _narration_path(story_dir)
-    characters = _characters_path(story_dir)
-    prompts_path = _prompts_path(story_dir)
+    characters = _characters_path(config, story_id, story_dir)
+    prompts_path = _prompts_path(config, story_id, story_dir)
     prompts = _load_prompts(prompts_path)
-    frames_dir = _frames_dir(story_dir)
+    frames_dir = _frames_dir(config, story_id, story_dir)
     frame_status = _frame_status(frames_dir, prompts)
     video_segments = _video_segments_status(story_dir)
     audio_duration = _duration_sec(narration)
-    promo_status = run_youtube_promo_status(config=config, options=YoutubePromoStatusOptions(story_id=story_id))
+    promo_status = run_youtube_promo_status(
+        config=config,
+        options=YoutubePromoStatusOptions(story_id=story_id, youtube_run_id=launch_id),
+    )
     language_status = build_youtube_safe_status(config=config, story_id=story_id, expected_language=EXPECTED_YOUTUBE_LANGUAGE)
     anchor_audit = run_youtube_characters_anchor_audit(config=config, options=YoutubeCharactersAnchorAuditOptions(story_id=story_id))
     characters_validation = validate_visual_characters_file(characters)
@@ -303,7 +560,10 @@ def run_youtube_visuals_status(
 
     current_blocker = ""
     next_action = "visuals pipeline ready"
-    if not story_dir.is_dir():
+    if excluded_from_video:
+        current_blocker = "excluded_from_video"
+        next_action = "story is intentionally dropped from video queue"
+    elif not story_dir.is_dir():
         current_blocker = "missing story folder"
         next_action = "check --story-id"
     elif not safe_story.is_file():
@@ -312,13 +572,13 @@ def run_youtube_visuals_status(
     elif language_status.get("safe_story_status") == "wrong_language":
         current_blocker = "youtube_safe_story_wrong_language"
         next_action = "run youtube safe-regenerate"
-    elif promo_status.get("status") != "done":
+    elif promo_status.get("status") != "done" and not promo_issues_accepted:
         current_blocker = str(promo_status.get("current_blocker") or "promo_not_done")
         next_action = str(promo_status.get("next_action") or "run youtube promo-run --execute first")
     elif not narration.is_file():
         current_blocker = "missing 04_audio/narration.mp3"
         next_action = "run YouTube TTS from 03_promo/text_ready_for_audio.txt first"
-    elif promo_audio.get("stale"):
+    elif promo_audio.get("stale") and not promo_issues_accepted:
         current_blocker = "youtube_audio_stale_after_promo_change"
         next_action = "rerun YouTube TTS from updated 03_promo/text_ready_for_audio.txt"
     elif not characters.is_file():
@@ -353,6 +613,9 @@ def run_youtube_visuals_status(
         "ok": True,
         "story_id": story_id,
         "story_dir": str(story_dir),
+        "excluded_from_video": excluded_from_video,
+        "exclude_reason": str(manifest.get("exclude_reason") or ""),
+        "promo_issues_accepted": promo_issues_accepted,
         "safe_story": "exists" if safe_story.is_file() else "missing",
         "language": language_status,
         "promo": promo_status,
@@ -361,12 +624,13 @@ def run_youtube_visuals_status(
             "status": promo_audio.get("status") or ("exists" if narration.is_file() else "missing"),
             "path": str(narration),
             "duration_sec": audio_duration,
-            "stale": bool(promo_audio.get("stale")),
+            "stale": bool(promo_audio.get("stale")) and not promo_issues_accepted,
+            "stale_accepted": bool(promo_audio.get("stale")) and promo_issues_accepted,
         },
         "characters": {
             "status": "done" if _is_nonempty(characters) and characters_validation.get("ok") else ("stale_or_invalid" if _is_nonempty(characters) else "missing"),
             "path": str(characters),
-            "staging_path": str(_characters_staging_dir(story_dir)),
+            "staging_path": str(_characters_staging_dir(config, story_id, story_dir)),
             "drop_path": str(_characters_drop_dir(story_dir)),
             "anchor_audit": anchor_audit,
             "validation": characters_validation,
@@ -376,7 +640,7 @@ def run_youtube_visuals_status(
             "path": str(prompts_path),
             "prompts_count": len(prompts),
             "estimated_prompts": _prompt_estimate(story_dir),
-            "staging_path": str(_prompts_staging_dir(story_dir)),
+            "staging_path": str(_prompts_staging_dir(config, story_id, story_dir)),
             "drop_path": str(_prompts_drop_dir(story_dir)),
             "prompt_mode_available": {"raw_exists": prompts_path.is_file()},
             "available_prompt_modes": ["raw"],
@@ -408,6 +672,620 @@ def run_youtube_visuals_status(
     }
     _write_json(_logs_dir(story_dir) / "youtube_visuals_status.json", report)
     return report
+
+
+def run_youtube_visuals_launch_status(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubeVisualsStatusOptions,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import isolated_session
+
+    launch_id = str(options.youtube_run_id or "").strip()
+    if not launch_id:
+        return {"ok": False, "message": "--youtube-run-id is required for launch visuals status"}
+
+    rows: list[dict[str, Any]] = []
+    with isolated_session(None, batch_launch_id=launch_id, config=config):
+        for story_dir in _iter_launch_story_dirs(config, launch_id):
+            manifest = _load_manifest(story_dir)
+            story_id, title = _story_identity(story_dir, manifest)
+            excluded = _is_excluded_from_video(manifest)
+            promo_accepted = _launch_policy_accepts_promo_issues(
+                manifest,
+                explicit=bool(options.accept_known_promo_issues),
+            )
+            narration = _narration_path(story_dir)
+            characters = _characters_path(config, story_id, story_dir)
+            prompts_path = _prompts_path(config, story_id, story_dir)
+            prompts = _load_prompts(prompts_path)
+            frames = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
+            audio_ready = _audio_ready_for_video(story_dir, manifest)
+            visual_prompt_ready = _is_nonempty(prompts_path)
+            images_ready = int(frames.get("expected") or 0) > 0 and int(frames.get("pending") or 0) == 0 and int(frames.get("failed") or 0) == 0
+            if excluded:
+                blocker = "excluded_from_video"
+                next_action = "story is intentionally dropped from video queue"
+            elif not audio_ready:
+                blocker = "missing 04_audio/narration.mp3"
+                next_action = "run/import YouTube TTS first"
+            elif not _is_nonempty(characters):
+                blocker = "missing 05_characters/characters.txt"
+                next_action = "run visuals-run --execute --auto-gemini to generate characters automatically"
+            elif not visual_prompt_ready:
+                blocker = "missing 06_prompts/prompts_list.txt"
+                next_action = "run visuals-run --execute --auto-gemini to generate director prompts automatically"
+            elif not images_ready:
+                blocker = "ready_for_runpod"
+                next_action = "start RunPod, run visuals-run --execute --auto-gemini, then paste URL"
+            else:
+                blocker = ""
+                next_action = "visuals pipeline ready"
+            audio = manifest.get("audio") if isinstance(manifest.get("audio"), dict) else {}
+            row = {
+                "story_id": story_id,
+                "title": title,
+                "story_dir": str(story_dir),
+                "excluded_from_video": excluded,
+                "exclude_reason": str(manifest.get("exclude_reason") or ""),
+                "promo_issues_accepted": promo_accepted,
+                "audio_ready": audio_ready,
+                "visual_prompt_ready": visual_prompt_ready,
+                "images_ready": images_ready,
+                "frames_expected": int(frames.get("expected") or 0),
+                "frames_valid": int(frames.get("generated") or 0),
+                "audio_duration_sec": audio.get("duration_sec"),
+                "blocker": blocker,
+                "next_action": next_action,
+            }
+            rows.append(row)
+
+    active_rows = [row for row in rows if not row["excluded_from_video"]]
+    summary = {
+        "total_stories": len(rows),
+        "total_tts_imported": sum(1 for row in rows if row["audio_ready"] or row["excluded_from_video"]),
+        "excluded_from_video": sum(1 for row in rows if row["excluded_from_video"]),
+        "ready_for_video": sum(1 for row in active_rows if row["audio_ready"]),
+        "audio_ready": sum(1 for row in active_rows if row["audio_ready"]),
+        "visual_prompts_ready": sum(1 for row in active_rows if row["visual_prompt_ready"]),
+        "images_ready": sum(1 for row in active_rows if row["images_ready"]),
+        "blocked": sum(1 for row in active_rows if row["blocker"] and row["blocker"] != "ready_for_runpod"),
+        "pending": sum(1 for row in active_rows if row["audio_ready"] and not row["visual_prompt_ready"]),
+        "ready_for_frames": sum(1 for row in active_rows if row["visual_prompt_ready"] and not row["images_ready"]),
+        "known_promo_issues_accepted": any(row["promo_issues_accepted"] for row in rows),
+    }
+    ctx = build_launch_context(config, launch_id=launch_id)
+    report = {
+        "ok": True,
+        "launch_id": ctx.launch_id,
+        "generated_at": _now_iso(),
+        "summary": summary,
+        "stories": rows,
+    }
+    report_path = ctx.launch_root / "07_reports" / "YOUTUBE_VISUALS_STATUS.json"
+    _write_json(report_path, report)
+    report["report_path"] = str(report_path)
+    return report
+
+
+def run_youtube_visuals_run_all(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubeVisualsRunAllOptions,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import isolated_session
+
+    launch_id = str(options.youtube_run_id or "").strip()
+    if not launch_id:
+        return {"ok": False, "message": "--youtube-run-id is required"}
+    ctx = build_launch_context(config, launch_id=launch_id)
+    selected: list[Path] = []
+    eligible: list[Path] = []
+    skipped: list[dict[str, Any]] = []
+    started_at = time.monotonic()
+    with isolated_session(None, batch_launch_id=launch_id, config=config):
+        all_story_dirs = _iter_launch_story_dirs(config, launch_id)
+        for story_dir in all_story_dirs:
+            manifest = _load_manifest(story_dir)
+            story_id, title = _story_identity(story_dir, manifest)
+            if options.story_id and story_id.casefold() != options.story_id.casefold() and story_dir.name.casefold() != options.story_id.casefold():
+                continue
+            if _is_excluded_from_video(manifest):
+                skipped.append(
+                    {
+                        "story_id": story_id,
+                        "title": title,
+                        "reason": "excluded_from_video",
+                        "exclude_reason": str(manifest.get("exclude_reason") or ""),
+                    }
+                )
+                continue
+            if not _audio_ready_for_video(story_dir, manifest):
+                skipped.append({"story_id": story_id, "title": title, "reason": "audio_not_ready"})
+                continue
+            eligible.append(story_dir)
+        selected = eligible[: int(options.limit)] if options.limit else eligible
+
+        excluded_count = sum(1 for row in skipped if row.get("reason") == "excluded_from_video")
+        active_queue_count = len(selected)
+        print("================ YOUTUBE VISUALS RUN ALL ================", flush=True)
+        print(f"launch_id: {ctx.launch_id}", flush=True)
+        print(f"total stories:        {len(all_story_dirs)}", flush=True)
+        print(f"excluded_from_video:  {excluded_count}", flush=True)
+        print(f"active queue:         {active_queue_count}", flush=True)
+        print(f"auto_gemini:          {str(bool(options.auto_gemini or options.allow_gemini)).lower()}", flush=True)
+        print(f"accept_promo_issues:  {str(bool(options.accept_known_promo_issues)).lower()}", flush=True)
+        if options.limit:
+            print(f"limit:                {int(options.limit)}", flush=True)
+        print("==========================================================", flush=True)
+
+        if options.execute and selected:
+            set_launch_stage(
+                config,
+                launch_id=launch_id,
+                stage="visuals",
+                execute=True,
+                reason="visuals-run-all started",
+            )
+
+        results: list[dict[str, Any]] = []
+        progress = {"done": 0, "failed": 0, "blocked": 0, "skipped": 0}
+        print("================ PHASE 1: CHARACTERS ====================", flush=True)
+        character_jobs: list[tuple[int, Path, str, str]] = []
+        for index, story_dir in enumerate(selected, start=1):
+            manifest = _load_manifest(story_dir)
+            story_id, title = _story_identity(story_dir, manifest)
+            before = _story_visual_readiness(config, story_dir, story_id)
+            if before["characters_ready"]:
+                progress["done"] += 1
+                progress["skipped"] += 1
+                run_result = {
+                    "ok": True,
+                    "status": "characters_already_ready",
+                    "next_action": "already_has_characters",
+                    "story_dir": str(story_dir),
+                    "blockers": [],
+                }
+                print(
+                    f"[{index}/{active_queue_count}] SKIP characters: {story_id} / {title} | reason=already_has_characters | elapsed=00:00:00",
+                    flush=True,
+                )
+                results.append(
+                    {
+                        "stage": "characters",
+                        "story_id": story_id,
+                        "title": title,
+                        "status": run_result.get("status"),
+                        "ok": bool(run_result.get("ok")),
+                        "next_action": run_result.get("next_action"),
+                        "blockers": run_result.get("blockers") or [],
+                        "story_dir": run_result.get("story_dir"),
+                    }
+                )
+            else:
+                character_jobs.append((index, story_dir, story_id, title))
+
+        if character_jobs:
+            print(
+                "CHARACTERS BROWSER: opening 1 browser; max 5 story requests per dialog before reload/new dialog.",
+                flush=True,
+            )
+            for index, _story_dir, story_id, title in character_jobs:
+                print(f"[{index}/{active_queue_count}] QUEUE characters: {story_id} / {title}", flush=True)
+            batch_started = time.monotonic()
+            batch_root = ctx.launch_root / "10_Временные_файлы" / "visuals_gemini_batch" / "characters"
+            batch_stories = [
+                YoutubeGeminiBatchStory(story_id=story_id, story_dir=story_dir, stage_dir=batch_root / story_id)
+                for _index, story_dir, story_id, _title in character_jobs
+            ]
+            try:
+                batch_result = run_youtube_characters_batch_auto_gemini(
+                    config=config,
+                    options=YoutubeGeminiBatchOptions(stories=batch_stories, execute=bool(options.execute)),
+                )
+            except Exception as exc:
+                batch_result = {"ok": False, "status": "failed", "next_action": repr(exc), "blockers": [type(exc).__name__]}
+            for index, story_dir, story_id, title in character_jobs:
+                after = _story_visual_readiness(config, story_dir, story_id)
+                elapsed = _fmt_elapsed(time.monotonic() - batch_started)
+                status = str(batch_result.get("status") or "")
+                if after["characters_ready"]:
+                    progress["done"] += 1
+                    label = "DONE"
+                    ok = True
+                elif status == "would_run":
+                    progress["done"] += 1
+                    label = "DRY-RUN"
+                    ok = True
+                else:
+                    progress["failed"] += 1
+                    label = "FAILED"
+                    ok = False
+                print(
+                    f"[{index}/{active_queue_count}] {label} characters: {story_id} / {title} | "
+                    f"characters={after['characters_status']} | elapsed={elapsed}",
+                    flush=True,
+                )
+                if label == "FAILED":
+                    print(f"[{index}/{active_queue_count}] FAILED reason={batch_result.get('next_action') or batch_result.get('status')}", flush=True)
+                results.append(
+                    {
+                        "stage": "characters",
+                        "story_id": story_id,
+                        "title": title,
+                        "status": batch_result.get("status"),
+                        "ok": ok,
+                        "next_action": batch_result.get("next_action"),
+                        "blockers": batch_result.get("blockers") or batch_result.get("missing") or [],
+                        "story_dir": str(story_dir),
+                    }
+                )
+                processed = progress["done"] + progress["failed"] + progress["blocked"]
+                pending = active_queue_count - processed
+                print(
+                    "PROGRESS: "
+                    f"done={progress['done']} failed={progress['failed']} blocked={progress['blocked']} "
+                    f"pending={max(0, pending)} remaining={max(0, pending)}",
+                    flush=True,
+                )
+
+        characters_missing = []
+        for story_dir in selected:
+            manifest = _load_manifest(story_dir)
+            story_id, title = _story_identity(story_dir, manifest)
+            readiness = _story_visual_readiness(config, story_dir, story_id)
+            if not readiness["characters_ready"]:
+                characters_missing.append({"story_id": story_id, "title": title})
+
+        if characters_missing:
+            print("================ PHASE 2: PROMPTS SKIPPED ===============", flush=True)
+            print(
+                f"reason=characters_not_ready missing_characters={len(characters_missing)}",
+                flush=True,
+            )
+            for row in characters_missing:
+                print(f"- {row.get('story_id')} / {row.get('title')} -> missing characters", flush=True)
+        else:
+            print("================ PHASE 2: PROMPTS =======================", flush=True)
+            prompt_workers = max(1, int(options.workers or 1))
+            print(f"prompt_workers:       {prompt_workers}", flush=True)
+            prompt_progress = {"done": 0, "failed": 0, "blocked": 0, "skipped": 0}
+            prompt_jobs: list[tuple[int, Path, str, str]] = []
+            for index, story_dir in enumerate(selected, start=1):
+                manifest = _load_manifest(story_dir)
+                story_id, title = _story_identity(story_dir, manifest)
+                before = _story_visual_readiness(config, story_dir, story_id)
+                story_started = time.monotonic()
+                if before["prompts_ready"]:
+                    prompt_progress["done"] += 1
+                    prompt_progress["skipped"] += 1
+                    run_result = {
+                        "ok": True,
+                        "status": "prompts_already_ready",
+                        "next_action": "already_has_prompts",
+                        "story_dir": str(story_dir),
+                        "blockers": [],
+                    }
+                    elapsed = _fmt_elapsed(time.monotonic() - story_started)
+                    print(
+                        f"[{index}/{active_queue_count}] SKIP prompts: {story_id} / {title} | reason=already_has_prompts | elapsed={elapsed}",
+                        flush=True,
+                    )
+                    results.append(
+                        {
+                            "stage": "prompts",
+                            "story_id": story_id,
+                            "title": title,
+                            "status": run_result.get("status"),
+                            "ok": bool(run_result.get("ok")),
+                            "next_action": run_result.get("next_action"),
+                            "blockers": run_result.get("blockers") or [],
+                            "story_dir": run_result.get("story_dir"),
+                        }
+                    )
+                    print(
+                        "PROMPTS PROGRESS: "
+                        f"done={prompt_progress['done']} failed={prompt_progress['failed']} blocked={prompt_progress['blocked']} "
+                        f"pending={active_queue_count - index} remaining={active_queue_count - index}",
+                        flush=True,
+                    )
+                else:
+                    prompt_jobs.append((index, story_dir, story_id, title))
+
+            if prompt_jobs:
+                if not options.execute:
+                    for job_number, (index, story_dir, story_id, title) in enumerate(prompt_jobs, start=1):
+                        prompt_progress["done"] += 1
+                        print(
+                            f"[{index}/{active_queue_count}] DRY-RUN prompts: {story_id} / {title} | "
+                            f"bot=gemini_director | worker={(job_number - 1) % prompt_workers + 1}/{prompt_workers} | prompts=missing",
+                            flush=True,
+                        )
+                        results.append(
+                            {
+                                "stage": "prompts",
+                                "story_id": story_id,
+                                "title": title,
+                                "status": "would_run",
+                                "ok": True,
+                                "next_action": None,
+                                "blockers": [],
+                                "story_dir": str(story_dir),
+                            }
+                        )
+                        pending = len(prompt_jobs) - job_number
+                        print(
+                            "PROMPTS PROGRESS: "
+                            f"done={prompt_progress['done']} failed={prompt_progress['failed']} blocked={prompt_progress['blocked']} "
+                            f"pending={pending} remaining={pending}",
+                            flush=True,
+                        )
+                else:
+                    worker_count = min(prompt_workers, len(prompt_jobs))
+                    worker_batches: list[list[tuple[int, Path, str, str]]] = [[] for _ in range(worker_count)]
+                    for job_number, job in enumerate(prompt_jobs):
+                        worker_batches[job_number % worker_count].append(job)
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=prompt_workers) as executor:
+                        for worker_index, worker_jobs in enumerate(worker_batches, start=1):
+                            if not worker_jobs:
+                                continue
+                            print(
+                                f"[worker {worker_index}/{worker_count}] START prompts browser | stories={len(worker_jobs)} | "
+                                "one story per dialog, browser reused between stories",
+                                flush=True,
+                            )
+                            worker_root = (
+                                ctx.launch_root
+                                / "10_Временные_файлы"
+                                / "visuals_gemini_batch"
+                                / "prompts"
+                                / f"worker_{worker_index}"
+                            )
+                            batch_stories = [
+                                YoutubeGeminiBatchStory(
+                                    story_id=story_id,
+                                    story_dir=story_dir,
+                                    stage_dir=worker_root / story_id,
+                                )
+                                for _index, story_dir, story_id, _title in worker_jobs
+                            ]
+                            future = executor.submit(
+                                _run_prompts_worker_batch,
+                                config=config,
+                                launch_id=launch_id,
+                                stories=batch_stories,
+                                execute=bool(options.execute),
+                                worker_index=worker_index,
+                            )
+                            future_map[future] = (worker_index, worker_jobs, time.monotonic())
+                        completed = 0
+                        for future in as_completed(future_map):
+                            worker_index, worker_jobs, worker_started = future_map[future]
+                            try:
+                                batch_result = future.result()
+                            except Exception as exc:
+                                batch_result = {
+                                    "ok": False,
+                                    "status": "failed",
+                                    "next_action": repr(exc),
+                                    "blockers": [type(exc).__name__],
+                                }
+                            elapsed = _fmt_elapsed(time.monotonic() - worker_started)
+                            print(
+                                f"[worker {worker_index}/{worker_count}] DONE prompts browser | "
+                                f"status={batch_result.get('status')} | elapsed={elapsed}",
+                                flush=True,
+                            )
+                            for index, story_dir, story_id, title in worker_jobs:
+                                after = _story_visual_readiness(config, story_dir, story_id)
+                                if after["prompts_ready"]:
+                                    prompt_progress["done"] += 1
+                                    label = "DONE"
+                                    ok = True
+                                else:
+                                    prompt_progress["failed"] += 1
+                                    label = "FAILED"
+                                    ok = False
+                                print(
+                                    f"[{index}/{active_queue_count}] {label} prompts: {story_id} / {title} | "
+                                    f"characters={after['characters_status']} | prompts={after['prompts_status']} | elapsed={elapsed}",
+                                    flush=True,
+                                )
+                                if label == "FAILED":
+                                    print(
+                                        f"[{index}/{active_queue_count}] FAILED reason={batch_result.get('next_action') or batch_result.get('status')}",
+                                        flush=True,
+                                    )
+                                results.append(
+                                    {
+                                        "stage": "prompts",
+                                        "story_id": story_id,
+                                        "title": title,
+                                        "status": batch_result.get("status"),
+                                        "ok": ok,
+                                        "next_action": batch_result.get("next_action"),
+                                        "blockers": batch_result.get("blockers") or batch_result.get("missing") or [],
+                                        "story_dir": str(story_dir),
+                                    }
+                                )
+                                completed += 1
+                                pending = len(prompt_jobs) - completed
+                                print(
+                                    "PROMPTS PROGRESS: "
+                                    f"done={prompt_progress['done']} failed={prompt_progress['failed']} blocked={prompt_progress['blocked']} "
+                                    f"pending={pending} remaining={pending}",
+                                    flush=True,
+                                )
+
+            prompts_missing = []
+            frames_queue = []
+            for story_dir in selected:
+                manifest = _load_manifest(story_dir)
+                story_id, title = _story_identity(story_dir, manifest)
+                readiness = _story_visual_readiness(config, story_dir, story_id)
+                if not readiness["prompts_ready"]:
+                    prompts_missing.append({"story_id": story_id, "title": title})
+                else:
+                    frames_queue.append((story_dir, story_id, title))
+
+            if prompts_missing:
+                print("================ PHASE 3: RUNPOD SKIPPED ================", flush=True)
+                print(f"reason=prompts_not_ready missing_prompts={len(prompts_missing)}", flush=True)
+                for row in prompts_missing:
+                    print(f"- {row.get('story_id')} / {row.get('title')} -> missing prompts", flush=True)
+            else:
+                print("================ PHASE 3: RUNPOD / FRAMES ===============", flush=True)
+                runpod_url = str(options.runpod_url or "").strip()
+                if options.execute and not runpod_url and options.prompt_runpod_url and sys.stdin.isatty():
+                    first_story_dir, first_story_id, _first_title = frames_queue[0]
+                    first_prompts = _load_prompts(_prompts_path(config, first_story_id, first_story_dir))
+                    first_frame_status = _frame_status(_frames_dir(config, first_story_id, first_story_dir), first_prompts)
+                    runpod_url = _ask_runpod_url_at_checkpoint(story_id="ALL_STORIES", frame_status=first_frame_status)
+                if options.execute and not runpod_url:
+                    print("RUNPOD WAIT: --runpod-url is missing; prepared frame jobs only, no image generation.", flush=True)
+                frame_progress = {"done": 0, "failed": 0, "blocked": 0, "skipped": 0}
+                for index, (story_dir, story_id, title) in enumerate(frames_queue, start=1):
+                    story_started = time.monotonic()
+                    readiness = _story_visual_readiness(config, story_dir, story_id)
+                    if readiness["images_ready"]:
+                        frame_progress["done"] += 1
+                        frame_progress["skipped"] += 1
+                        run_result = {
+                            "ok": True,
+                            "status": "frames_already_ready",
+                            "next_action": "already_has_images",
+                            "story_dir": str(story_dir),
+                            "blockers": [],
+                        }
+                        elapsed = _fmt_elapsed(time.monotonic() - story_started)
+                        print(f"[{index}/{len(frames_queue)}] SKIP frames: {story_id} / {title} | reason=already_has_images | elapsed={elapsed}", flush=True)
+                    else:
+                        mode = "generate" if options.execute and runpod_url else "prepare_only"
+                        print(f"[{index}/{len(frames_queue)}] START frames: {story_id} / {title} | mode={mode}", flush=True)
+                        try:
+                            run_result = run_youtube_frames_runpod_bridge(
+                                config=config,
+                                options=YoutubeFramesRunpodBridgeOptions(
+                                    story_id=story_id,
+                                    runpod_url=runpod_url,
+                                    execute=bool(options.execute and runpod_url),
+                                    prepare_only=not bool(options.execute and runpod_url),
+                                    workflow=options.workflow,
+                                ),
+                            )
+                        except Exception as exc:
+                            run_result = {
+                                "ok": False,
+                                "status": "failed",
+                                "next_action": repr(exc),
+                                "story_dir": str(story_dir),
+                                "blockers": [type(exc).__name__],
+                            }
+                        after = _story_visual_readiness(config, story_dir, story_id)
+                        elapsed = _fmt_elapsed(time.monotonic() - story_started)
+                        status_value = str(run_result.get("status") or "")
+                        if after["images_ready"] or status_value == "prepared":
+                            frame_progress["done"] += 1
+                            label = "DONE" if after["images_ready"] else "PREPARED"
+                        else:
+                            frame_progress["failed"] += 1
+                            label = "FAILED"
+                        print(
+                            f"[{index}/{len(frames_queue)}] {label} frames: {story_id} / {title} | "
+                            f"images={after['images_status']} | elapsed={elapsed}",
+                            flush=True,
+                        )
+                        if label == "FAILED":
+                            print(f"[{index}/{len(frames_queue)}] FAILED reason={run_result.get('next_action') or run_result.get('status')}", flush=True)
+                    results.append(
+                        {
+                            "stage": "frames",
+                            "story_id": story_id,
+                            "title": title,
+                            "status": run_result.get("status"),
+                            "ok": bool(run_result.get("ok")) or str(run_result.get("status") or "") == "prepared",
+                            "next_action": run_result.get("next_action"),
+                            "blockers": run_result.get("blockers") or run_result.get("missing") or [],
+                            "story_dir": run_result.get("story_dir"),
+                        }
+                    )
+                    pending = len(frames_queue) - index
+                    print(
+                        "FRAMES PROGRESS: "
+                        f"done={frame_progress['done']} failed={frame_progress['failed']} blocked={frame_progress['blocked']} "
+                        f"pending={pending} remaining={pending}",
+                        flush=True,
+                    )
+
+    status = run_youtube_visuals_launch_status(
+        config=config,
+        options=YoutubeVisualsStatusOptions(
+            youtube_run_id=launch_id,
+            accept_known_promo_issues=bool(options.accept_known_promo_issues),
+        ),
+    )
+    summary = status.get("summary") if isinstance(status.get("summary"), dict) else {}
+    failed_rows = [
+        row
+        for row in results
+        if not row.get("ok") and str(row.get("status") or "") not in {"ready_for_runpod", "blocked"}
+    ]
+    blocked_rows = [
+        row
+        for row in results
+        if str(row.get("status") or "") in {"ready_for_runpod", "blocked"} and not row.get("ok")
+    ]
+    print("================ YOUTUBE VISUALS SUMMARY ================", flush=True)
+    print(f"launch_id: {ctx.launch_id}", flush=True)
+    print(f"total stories:        {len(_iter_launch_story_dirs(config, launch_id))}", flush=True)
+    print(f"excluded_from_video:  {sum(1 for row in skipped if row.get('reason') == 'excluded_from_video')}", flush=True)
+    print(f"active queue:         {active_queue_count}", flush=True)
+    print(f"done:                 {sum(1 for row in results if row.get('ok'))}", flush=True)
+    print(f"failed:               {len(failed_rows)}", flush=True)
+    print(f"blocked:              {len(blocked_rows)}", flush=True)
+    print(f"pending:              {summary.get('pending', 0)}", flush=True)
+    print(f"ready_for_frames:     {summary.get('ready_for_frames', 0)}", flush=True)
+    print("excluded:", flush=True)
+    excluded_rows = [row for row in skipped if row.get("reason") == "excluded_from_video"]
+    if excluded_rows:
+        for row in excluded_rows:
+            print(f"- {row.get('story_id')} -> {row.get('exclude_reason')}", flush=True)
+    else:
+        print("- none", flush=True)
+    print("failed:", flush=True)
+    if failed_rows:
+        for row in failed_rows:
+            print(f"- {row.get('story_id')} -> {row.get('next_action')}", flush=True)
+    else:
+        print("- none", flush=True)
+    print(f"next_stage_allowed: {str(bool(summary.get('ready_for_frames') or summary.get('images_ready'))).lower()}", flush=True)
+    print("==========================================================", flush=True)
+    payload = {
+        "ok": all(
+            bool(row.get("ok"))
+            or row.get("status") in {"ready_for_runpod", "blocked", "dry_run", "already_ready"}
+            for row in results
+        )
+        if results
+        else True,
+        "execute": bool(options.execute),
+        "launch_id": ctx.launch_id,
+        "selected_count": len(selected),
+        "processed_count": len(results),
+        "skipped_count": len(skipped),
+        "promo_issues_accepted": bool(options.accept_known_promo_issues),
+        "stage_status_path": str(ctx.launch_root / "queue" / "stage_status.json"),
+        "skipped": skipped,
+        "stories": results,
+        "status": status,
+        "elapsed_sec": round(time.monotonic() - started_at, 3),
+        "generated_at": _now_iso(),
+    }
+    report_path = ctx.launch_root / "07_reports" / "YOUTUBE_VISUALS_RUN_ALL.json"
+    _write_json(report_path, payload)
+    payload["report_path"] = str(report_path)
+    return payload
 
 
 def _stage_row(name: str, status: str, message: str = "", **extra: Any) -> dict[str, Any]:
@@ -463,9 +1341,16 @@ def run_youtube_visuals_run(
     config: OrchestratorConfig,
     options: YoutubeVisualsRunOptions,
 ) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id, isolated_session
+
     started_at = _now_iso()
     story_id = str(options.story_id).strip()
-    story_dir = _story_dir(config, story_id)
+    launch_id = str(options.youtube_run_id or get_batch_launch_id() or "").strip()
+    active_launch_id = str(get_batch_launch_id() or "").strip()
+    if launch_id and active_launch_id != launch_id:
+        with isolated_session(None, batch_launch_id=launch_id, config=config):
+            return run_youtube_visuals_run(config=config, options=options)
+    story_dir = _story_dir(config, story_id, youtube_run_id=launch_id)
     changed_files: list[str] = []
     stages: list[dict[str, Any]] = []
     blockers: list[str] = []
@@ -474,7 +1359,10 @@ def run_youtube_visuals_run(
     auto_gemini_enabled = bool(options.auto_gemini or options.allow_gemini)
 
     def finish(status: str, next_action: str) -> dict[str, Any]:
-        status_report = run_youtube_visuals_status(config=config, options=YoutubeVisualsStatusOptions(story_id=story_id))
+        status_report = run_youtube_visuals_status(
+            config=config,
+            options=YoutubeVisualsStatusOptions(story_id=story_id, youtube_run_id=launch_id),
+        )
         if options.execute or options.watch:
             manifest_path = _update_manifest_visuals(story_dir, _visuals_manifest_from_status(status_report))
             changed_files.append(str(manifest_path))
@@ -508,12 +1396,28 @@ def run_youtube_visuals_run(
     safe_story = _safe_story_path(story_dir)
     narration = _narration_path(story_dir)
     manifest_path = _story_manifest_path(story_dir)
+    manifest = _load_manifest(story_dir)
+    if _is_excluded_from_video(manifest):
+        stages.append(
+            _stage_row(
+                "preflight",
+                "excluded",
+                "story is intentionally excluded from visuals/video queue",
+                exclude_reason=str(manifest.get("exclude_reason") or ""),
+            )
+        )
+        blockers.append("excluded_from_video")
+        return finish("excluded", "story is intentionally dropped from video queue")
+    promo_issues_accepted = _launch_policy_accepts_promo_issues(
+        manifest,
+        explicit=bool(options.accept_known_promo_issues),
+    )
 
     missing_preflight: list[str] = []
     if not story_dir.is_dir():
         missing_preflight.append(str(story_dir))
-    if not _source_cleaned_path(story_dir).is_file():
-        missing_preflight.append(str(_source_cleaned_path(story_dir)))
+    if not _source_text_path(story_dir).is_file():
+        missing_preflight.append(str(_source_text_path(story_dir)))
     if missing_preflight:
         stages.append(_stage_row("preflight", "blocked", "missing required inputs", missing=missing_preflight))
         blockers.append("missing preflight inputs")
@@ -619,7 +1523,10 @@ def run_youtube_visuals_run(
         )
     )
 
-    promo_status = run_youtube_promo_status(config=config, options=YoutubePromoStatusOptions(story_id=story_id))
+    promo_status = run_youtube_promo_status(
+        config=config,
+        options=YoutubePromoStatusOptions(story_id=story_id, youtube_run_id=launch_id),
+    )
     if promo_status.get("status") == "done":
         stages.append(
             _stage_row(
@@ -630,11 +1537,27 @@ def run_youtube_visuals_run(
                 climax_snippet_path=promo_status.get("climax_snippet_path"),
             )
         )
+    elif promo_issues_accepted:
+        stages.append(
+            _stage_row(
+                "promo_check",
+                "accepted_with_known_issues",
+                "current launch is explicitly accepted with known promo issues",
+                status_report=promo_status,
+                promo_issues_accepted=True,
+            )
+        )
     else:
         if options.execute:
             promo_result = run_youtube_promo_run(
                 config=config,
-                options=YoutubePromoRunOptions(story_id=story_id, execute=True, fresh_gemini_session=True, account_index=0),
+                options=YoutubePromoRunOptions(
+                    story_id=story_id,
+                    execute=True,
+                    fresh_gemini_session=True,
+                    account_index=0,
+                    youtube_run_id=launch_id,
+                ),
             )
             changed_files.extend(str(p) for p in (promo_result.get("changed_files") or []) if p)
             stages.append(
@@ -645,7 +1568,10 @@ def run_youtube_visuals_run(
                     result=promo_result,
                 )
             )
-            promo_status = run_youtube_promo_status(config=config, options=YoutubePromoStatusOptions(story_id=story_id))
+            promo_status = run_youtube_promo_status(
+                config=config,
+                options=YoutubePromoStatusOptions(story_id=story_id, youtube_run_id=launch_id),
+            )
             if promo_status.get("status") != "done":
                 blockers.append("promo_not_done")
                 return finish("blocked", "fix legacy promo insertion and rerun visuals-run --execute")
@@ -666,7 +1592,7 @@ def run_youtube_visuals_run(
         stages.append(_stage_row("audio_check", "blocked", "missing 04_audio/narration.mp3", path=str(narration)))
         blockers.append("missing 04_audio/narration.mp3; run YouTube TTS from 03_promo/text_ready_for_audio.txt first")
         return finish("blocked", "run YouTube TTS from 03_promo/text_ready_for_audio.txt first")
-    if promo_audio.get("stale"):
+    if promo_audio.get("stale") and not promo_issues_accepted:
         stages.append(
             _stage_row(
                 "audio_check",
@@ -678,9 +1604,17 @@ def run_youtube_visuals_run(
         )
         blockers.append("youtube_audio_stale_after_promo_change")
         return finish("blocked", "rerun YouTube TTS from updated 03_promo/text_ready_for_audio.txt")
-    stages.append(_stage_row("audio_check", "done", "narration.mp3 matches current promo text", path=str(narration)))
+    stages.append(
+        _stage_row(
+            "audio_check",
+            "done",
+            "narration.mp3 ready for accepted launch policy" if promo_issues_accepted else "narration.mp3 matches current promo text",
+            path=str(narration),
+            promo_issues_accepted=promo_issues_accepted,
+        )
+    )
 
-    characters = _characters_path(story_dir)
+    characters = _characters_path(config, story_id, story_dir)
     if _is_nonempty(characters):
         characters_validation = validate_visual_characters_file(characters)
         if not characters_validation.get("ok", False):
@@ -756,7 +1690,7 @@ def run_youtube_visuals_run(
                     for k in ("staging_story_txt", "staging_readme", "report_path")
                     if export_result.get(k)
                 )
-                staging_expected_file = _expected_output_path_file(_characters_staging_dir(story_dir))
+                staging_expected_file = _expected_output_path_file(_characters_staging_dir(config, story_id, story_dir))
                 _write_expected_path(staging_expected_file, characters)
                 changed_files.append(str(staging_expected_file))
                 drop_dir.mkdir(parents=True, exist_ok=True)
@@ -791,7 +1725,7 @@ def run_youtube_visuals_run(
                         "characters",
                         "blocked_waiting_for_characters",
                         "characters.txt is missing; automatic mode requires --execute --auto-gemini",
-                        staging_path=str(_characters_staging_dir(story_dir)),
+                        staging_path=str(_characters_staging_dir(config, story_id, story_dir)),
                         drop_path=str(drop_dir),
                     )
                 )
@@ -812,7 +1746,7 @@ def run_youtube_visuals_run(
         blockers.append("youtube_visuals_characters_stale_or_invalid")
         return finish("blocked", "run youtube visuals-clean --execute, then regenerate characters with clean Characters prompt")
 
-    prompts_path = _prompts_path(story_dir)
+    prompts_path = _prompts_path(config, story_id, story_dir)
     if _is_nonempty(prompts_path):
         prompts_validation = validate_visual_prompts_file(prompts_path)
         legacy_stale_scan = scan_legacy_visual_stale_sources(config, story_id)
@@ -893,7 +1827,7 @@ def run_youtube_visuals_run(
                     for k in ("staging_story_txt", "staging_characters_txt", "staging_narration_path_txt", "staging_readme", "report_path")
                     if export_result.get(k)
                 )
-                narration_info = _prompts_staging_dir(story_dir) / "narration_info.json"
+                narration_info = _prompts_staging_dir(config, story_id, story_dir) / "narration_info.json"
                 _write_json(
                     narration_info,
                     {
@@ -903,7 +1837,7 @@ def run_youtube_visuals_run(
                     },
                 )
                 changed_files.append(str(narration_info))
-                staging_expected_file = _expected_output_path_file(_prompts_staging_dir(story_dir))
+                staging_expected_file = _expected_output_path_file(_prompts_staging_dir(config, story_id, story_dir))
                 _write_expected_path(staging_expected_file, prompts_path)
                 changed_files.append(str(staging_expected_file))
                 drop_dir.mkdir(parents=True, exist_ok=True)
@@ -938,7 +1872,7 @@ def run_youtube_visuals_run(
                         "director_prompts",
                         "blocked_waiting_for_prompts",
                         "prompts_list.txt is missing; automatic mode requires --execute --auto-gemini",
-                        staging_path=str(_prompts_staging_dir(story_dir)),
+                        staging_path=str(_prompts_staging_dir(config, story_id, story_dir)),
                         drop_path=str(drop_dir),
                     )
                 )
@@ -970,7 +1904,7 @@ def run_youtube_visuals_run(
         blockers.append("blocked_missing_prompts")
         return finish("blocked", "import prompts_list.txt first")
 
-    frames_status = _frame_status(_frames_dir(story_dir), prompts)
+    frames_status = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
 
     if frames_status["not_done"] > 0:
         prep = run_youtube_frames_runpod_bridge(

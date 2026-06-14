@@ -77,7 +77,7 @@ from orchestrator.youtube_tts_kokoro_bridge import (
     run_youtube_tts_kokoro_colab_import,
     run_youtube_tts_kokoro_colab_export,
     run_youtube_tts_kokoro_colab_verify,
-
+)
 from orchestrator.youtube_tts_launch_jobs import (
     PrepareLaunchJobsOptions,
     TtsLaunchOptions,
@@ -86,6 +86,16 @@ from orchestrator.youtube_tts_launch_jobs import (
     status_launch_jobs,
 )
 from orchestrator.youtube_tts_readiness_repair import RepairReadinessOptions, repair_tts_readiness
+from orchestrator.youtube_tts_identity_audit import IdentityAuditOptions, run_identity_audit
+from orchestrator.youtube_tts_voice_plan import VoicePlanOptions, print_voice_plan_terminal, run_voice_plan
+from orchestrator.youtube_tts_promo_forensic_audit import PromoForensicAuditOptions, run_youtube_tts_promo_forensic_audit
+from orchestrator.youtube_tts_launch_wait_import import (
+    ImportFromDriveOptions,
+    LaunchWaitImportOptions,
+    print_final_summary,
+    print_import_summary,
+    run_import_from_drive,
+    run_launch_wait_import,
 )
 from orchestrator.youtube_video_segments import (
     YoutubeVideoPrepareSegmentsOptions,
@@ -148,10 +158,16 @@ from orchestrator.youtube_visuals_bridge import (
     run_youtube_frames_runpod_bridge,
 )
 from orchestrator.youtube_visuals_runner import (
+    YoutubeStageSetOptions,
+    YoutubeVisualsRunAllOptions,
     YoutubeVisualsRunOptions,
     YoutubeVisualsStatusOptions,
+    mark_story_excluded_from_video,
+    run_youtube_visuals_launch_status,
     run_youtube_visuals_run,
+    run_youtube_visuals_run_all,
     run_youtube_visuals_status,
+    set_launch_stage,
 )
 from orchestrator.youtube_visual_prompts_audit import (
     YoutubeVisualPromptsAuditOptions,
@@ -987,6 +1003,48 @@ def _parser() -> argparse.ArgumentParser:
     yt_tts_repair.add_argument("--youtube-run-id", required=True)
     yt_tts_repair.add_argument("--workers", type=int, default=5)
     yt_tts_repair.add_argument("--execute", action="store_true")
+    yt_tts_identity = yt_tts_launch_sub.add_parser(
+        "identity-audit",
+        help="Audit already_done TTS identity/voice; optionally quarantine bad audio and rebuild job.",
+    )
+    yt_tts_identity.add_argument("--youtube-run-id", required=True)
+    yt_tts_identity.add_argument("--workers", type=int, default=5)
+    yt_tts_identity.add_argument("--execute", action="store_true")
+    yt_tts_voice_plan = yt_tts_launch_sub.add_parser(
+        "voice-plan",
+        help="Build human-readable Colab TTS voice plan report (audit-only, no repair).",
+    )
+    yt_tts_voice_plan.add_argument("--youtube-run-id", required=True)
+    yt_tts_voice_plan.add_argument("--workers", type=int, default=5)
+    yt_tts_promo_forensic = yt_tts_launch_sub.add_parser(
+        "promo-forensic-audit",
+        help="Forensic audit of promo/TTS text inputs for a launch (read-only; writes reports).",
+    )
+    yt_tts_promo_forensic.add_argument("--youtube-run-id", required=True)
+    yt_tts_promo_forensic.add_argument("--drive-root", type=Path, default=None)
+    yt_tts_import_drive = yt_tts_launch_sub.add_parser(
+        "import-from-drive",
+        help="Import launch-scoped YouTube TTS mp3 files from Google Drive and optionally cleanup Drive temp files.",
+    )
+    yt_tts_import_drive.add_argument("--youtube-run-id", required=True)
+    yt_tts_import_drive.add_argument("--drive-root", type=Path, default=DEFAULT_YOUTUBE_DRIVE_ROOT)
+    yt_tts_import_drive.add_argument("--cleanup-drive-after-import", action="store_true")
+    yt_tts_import_drive.add_argument("--execute", action="store_true")
+    yt_tts_launch_wait_import = yt_tts_launch_sub.add_parser(
+        "launch-wait-import",
+        help="Run readiness, start Colab browser workers, wait for terminal TTS states, then import audio.",
+    )
+    yt_tts_launch_wait_import.add_argument("--youtube-run-id", required=True)
+    yt_tts_launch_wait_import.add_argument("--workers", type=int, default=5)
+    yt_tts_launch_wait_import.add_argument("--poll-minutes", type=float, default=30.0)
+    yt_tts_launch_wait_import.add_argument("--max-hours", type=float, default=1000.0)
+    yt_tts_launch_wait_import.add_argument("--execute", action="store_true")
+    yt_tts_launch_wait_import.add_argument("--start-browser", dest="start_browser", action="store_true", default=True)
+    yt_tts_launch_wait_import.add_argument("--no-start-browser", dest="start_browser", action="store_false")
+    yt_tts_launch_wait_import.add_argument("--start-cmd", default=".\\START_YOUTUBE_TTS_YANDEX_5TABS_PROFILE_PROXY.bat")
+    yt_tts_launch_wait_import.add_argument("--continue-next-stage", action="store_true")
+    yt_tts_launch_wait_import.add_argument("--drive-root", type=Path, default=DEFAULT_YOUTUBE_DRIVE_ROOT)
+    yt_tts_launch_wait_import.add_argument("--cleanup-drive-after-import", action="store_true")
 
     yt_chars = yt_sub.add_parser(
         "characters",
@@ -1063,6 +1121,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Run single-story YouTube visuals state machine through characters/prompts/frames/segment prep.",
     )
     yt_visuals_run.add_argument("--story-id", required=True)
+    yt_visuals_run.add_argument("--youtube-run-id", default="")
     yt_visuals_run.add_argument("--runpod-url", default="", help="Optional. If omitted, visuals-run asks for it at READY_FOR_RUNPOD after Gemini prompts are ready.")
     yt_visuals_run.add_argument("--workflow", default="", help="ComfyUI workflow preset file/name used only at the frames stage.")
     yt_visuals_run.add_argument("--segment-sec", type=float, default=180.0)
@@ -1072,14 +1131,48 @@ def _parser() -> argparse.ArgumentParser:
     yt_visuals_run.add_argument("--allow-gemini", action="store_true", help="Alias for --auto-gemini.")
     yt_visuals_run.add_argument("--fresh-visuals", action="store_true", help="Quarantine existing visual artifacts before regenerating characters/prompts.")
     yt_visuals_run.add_argument("--no-runpod-prompt", action="store_true", help="Do not ask for RunPod URL at READY_FOR_RUNPOD; stop after preparing frame jobs.")
+    yt_visuals_run.add_argument("--accept-known-promo-issues", action="store_true")
     yt_visuals_run.add_argument("--watch-interval-sec", type=int, default=5)
     yt_visuals_run.add_argument("--watch-timeout-sec", type=int, default=0)
+
+    yt_visuals_run_all = yt_sub.add_parser(
+        "visuals-run-all",
+        help="Run launch-scoped visuals state machine for all audio-ready stories.",
+    )
+    yt_visuals_run_all.add_argument("--youtube-run-id", required=True)
+    yt_visuals_run_all.add_argument("--story-id", default="")
+    yt_visuals_run_all.add_argument("--runpod-url", default="")
+    yt_visuals_run_all.add_argument("--workflow", default="")
+    yt_visuals_run_all.add_argument("--workers", type=int, default=1)
+    yt_visuals_run_all.add_argument("--limit", type=int, default=0)
+    yt_visuals_run_all.add_argument("--execute", action="store_true")
+    yt_visuals_run_all.add_argument("--dry-run", action="store_true")
+    yt_visuals_run_all.add_argument("--auto-gemini", action="store_true")
+    yt_visuals_run_all.add_argument("--allow-gemini", action="store_true")
+    yt_visuals_run_all.add_argument("--accept-known-promo-issues", action="store_true")
+    yt_visuals_run_all.add_argument("--segment-sec", type=float, default=180.0)
+    yt_visuals_run_all.add_argument("--no-runpod-prompt", action="store_true")
 
     yt_visuals_status = yt_sub.add_parser(
         "visuals-status",
         help="Show single-story YouTube visuals state and current blocker.",
     )
-    yt_visuals_status.add_argument("--story-id", required=True)
+    yt_visuals_status.add_argument("--story-id", default="")
+    yt_visuals_status.add_argument("--youtube-run-id", default="")
+    yt_visuals_status.add_argument("--accept-known-promo-issues", action="store_true")
+
+    yt_stage = yt_sub.add_parser("stage", help="Launch stage utilities.")
+    yt_stage_sub = yt_stage.add_subparsers(dest="youtube_stage_cmd", required=True)
+    yt_stage_set = yt_stage_sub.add_parser("set", help="Set launch current_stage in queue/stage_status.json.")
+    yt_stage_set.add_argument("--youtube-run-id", required=True)
+    yt_stage_set.add_argument("--stage", required=True)
+    yt_stage_set.add_argument("--execute", action="store_true")
+
+    yt_exclude_video = yt_sub.add_parser("exclude-from-video", help="Exclude one launch story from visuals/video/publish queues.")
+    yt_exclude_video.add_argument("--youtube-run-id", required=True)
+    yt_exclude_video.add_argument("--story-id", required=True)
+    yt_exclude_video.add_argument("--reason", default="too_short_story_user_rejected")
+    yt_exclude_video.add_argument("--execute", action="store_true")
 
     yt_visuals_clean = yt_sub.add_parser(
         "visuals-clean",
@@ -3873,6 +3966,68 @@ def main() -> int:
                 summary = result.get("summary") or {}
                 print(json.dumps(summary, ensure_ascii=False, indent=2))
                 return 0 if summary.get("ok") else 2
+            if tts_cmd == "identity-audit":
+                result = run_identity_audit(
+                    cfg,
+                    IdentityAuditOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                        execute=bool(getattr(args, "execute", False)),
+                    ),
+                )
+                print(json.dumps(result.get("summary") or result, ensure_ascii=False, indent=2))
+                return 0 if (result.get("summary") or {}).get("identity_mismatch", 1) == 0 else 2
+            if tts_cmd == "voice-plan":
+                result = run_voice_plan(
+                    cfg,
+                    VoicePlanOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                    ),
+                )
+                print_voice_plan_terminal(result)
+                return 0 if result.get("voice_plan_ready") else 2
+            if tts_cmd == "promo-forensic-audit":
+                drive_root = getattr(args, "drive_root", None)
+                result = run_youtube_tts_promo_forensic_audit(
+                    config=cfg,
+                    options=PromoForensicAuditOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        drive_root=drive_root,
+                    ),
+                )
+                print(json.dumps({k: result[k] for k in result if k != "stories"}, ensure_ascii=False, indent=2))
+                return 0
+            if tts_cmd == "import-from-drive":
+                result = run_import_from_drive(
+                    cfg,
+                    ImportFromDriveOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        execute=bool(getattr(args, "execute", False)),
+                        cleanup_drive_after_import=bool(getattr(args, "cleanup_drive_after_import", False)),
+                        drive_root=getattr(args, "drive_root", None),
+                    ),
+                )
+                print_import_summary(result)
+                return 0 if result.get("import_complete") else 2
+            if tts_cmd == "launch-wait-import":
+                result = run_launch_wait_import(
+                    cfg,
+                    LaunchWaitImportOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        workers=int(getattr(args, "workers", 5) or 5),
+                        poll_minutes=float(getattr(args, "poll_minutes", 30.0) or 30.0),
+                        max_hours=float(getattr(args, "max_hours", 1000.0) or 1000.0),
+                        execute=bool(getattr(args, "execute", False)),
+                        start_browser=bool(getattr(args, "start_browser", True)),
+                        start_cmd=str(getattr(args, "start_cmd", "") or ".\\START_YOUTUBE_TTS_YANDEX_5TABS_PROFILE_PROXY.bat"),
+                        continue_next_stage=bool(getattr(args, "continue_next_stage", False)),
+                        drive_root=getattr(args, "drive_root", None),
+                        cleanup_drive_after_import=bool(getattr(args, "cleanup_drive_after_import", False)),
+                    ),
+                )
+                print_final_summary(result)
+                return 0 if (result.get("summary") or {}).get("TTS_STAGE_COMPLETE") else 2
             print("unknown youtube tts subcommand")
             return 2
 
@@ -4223,6 +4378,7 @@ def main() -> int:
                 config=cfg,
                 options=YoutubeVisualsRunOptions(
                     story_id=str(args.story_id).strip(),
+                    youtube_run_id=str(getattr(args, "youtube_run_id", "") or "").strip(),
                     runpod_url=str(getattr(args, "runpod_url", "") or "").strip(),
                     workflow=str(getattr(args, "workflow", "") or "").strip(),
                     execute=bool(args.execute),
@@ -4234,6 +4390,7 @@ def main() -> int:
                     segment_sec=float(getattr(args, "segment_sec", 180.0) or 180.0),
                     watch_interval_sec=int(getattr(args, "watch_interval_sec", 5) or 5),
                     watch_timeout_sec=int(getattr(args, "watch_timeout_sec", 0) or 0),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
                 ),
             )
             print(f"status={result.get('status')}")
@@ -4256,6 +4413,43 @@ def main() -> int:
                 print(f"run_report={reports.get('run_report')}")
             if reports.get("status_report"):
                 print(f"status_report={reports.get('status_report')}")
+            return 0 if result.get("ok") else 2
+
+        if sub_cmd == "visuals-run-all":
+            result = run_youtube_visuals_run_all(
+                config=cfg,
+                options=YoutubeVisualsRunAllOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    story_id=str(getattr(args, "story_id", "") or "").strip(),
+                    runpod_url=str(getattr(args, "runpod_url", "") or "").strip(),
+                    workflow=str(getattr(args, "workflow", "") or "").strip(),
+                    workers=int(getattr(args, "workers", 1) or 1),
+                    limit=int(getattr(args, "limit", 0) or 0),
+                    execute=bool(getattr(args, "execute", False)) and not bool(getattr(args, "dry_run", False)),
+                    auto_gemini=bool(getattr(args, "auto_gemini", False)),
+                    allow_gemini=bool(getattr(args, "allow_gemini", False)),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                    segment_sec=float(getattr(args, "segment_sec", 180.0) or 180.0),
+                    prompt_runpod_url=not bool(getattr(args, "no_runpod_prompt", False)),
+                ),
+            )
+            print("YOUTUBE_VISUALS_RUN_ALL", flush=True)
+            print(f"launch_id: {result.get('launch_id')}", flush=True)
+            print(f"execute: {result.get('execute')}", flush=True)
+            print(f"selected: {result.get('selected_count')}", flush=True)
+            print(f"processed: {result.get('processed_count')}", flush=True)
+            print(f"skipped: {result.get('skipped_count')}", flush=True)
+            print(f"promo_issues_accepted: {str(bool(result.get('promo_issues_accepted'))).lower()}", flush=True)
+            print(f"stage_status_path: {result.get('stage_status_path')}", flush=True)
+            for row in result.get("skipped", []) or []:
+                print(f"skipped: {row.get('story_id')} -> {row.get('reason')} {row.get('exclude_reason') or ''}".rstrip(), flush=True)
+            for row in result.get("stories", []) or []:
+                print(
+                    f"story: {row.get('story_id')} stage={row.get('stage')} "
+                    f"status={row.get('status')} ok={row.get('ok')} next={row.get('next_action')}",
+                    flush=True,
+                )
+            print(f"report_path: {result.get('report_path')}", flush=True)
             return 0 if result.get("ok") else 2
 
         if sub_cmd == "visual-prompts-audit":
@@ -4385,9 +4579,46 @@ def main() -> int:
             return 0 if result.get("ok") else 2
 
         if sub_cmd == "visuals-status":
+            if str(getattr(args, "youtube_run_id", "") or "").strip() and not str(getattr(args, "story_id", "") or "").strip():
+                result = run_youtube_visuals_launch_status(
+                    config=cfg,
+                    options=YoutubeVisualsStatusOptions(
+                        youtube_run_id=str(args.youtube_run_id).strip(),
+                        accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                    ),
+                )
+                summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+                print("YOUTUBE_VISUALS_STATUS")
+                print(f"launch_id: {result.get('launch_id')}")
+                print(f"total stories: {summary.get('total_stories', 0)}")
+                print(f"total_tts_imported: {summary.get('total_tts_imported', 0)}")
+                print(f"excluded_from_video: {summary.get('excluded_from_video', 0)}")
+                print(f"ready_for_video: {summary.get('ready_for_video', 0)}")
+                print(f"audio ready: {summary.get('audio_ready', 0)}")
+                print(f"visual prompts ready: {summary.get('visual_prompts_ready', 0)}")
+                print(f"images ready: {summary.get('images_ready', 0)}")
+                print(f"blocked: {summary.get('blocked', 0)}")
+                print(f"pending: {summary.get('pending', 0)}")
+                print(f"ready_for_frames: {summary.get('ready_for_frames', 0)}")
+                print(f"known promo issues accepted: {str(bool(summary.get('known_promo_issues_accepted'))).lower()}")
+                print("stories:")
+                for row in result.get("stories", []) or []:
+                    print(
+                        f"- {row.get('story_id')} | audio={row.get('audio_ready')} "
+                        f"prompts={row.get('visual_prompt_ready')} images={row.get('images_ready')} "
+                        f"excluded={row.get('excluded_from_video')} blocker={row.get('blocker')} "
+                        f"next={row.get('next_action')}"
+                    )
+                print(f"report_path: {result.get('report_path')}")
+                return 0 if result.get("ok") else 2
+
             result = run_youtube_visuals_status(
                 config=cfg,
-                options=YoutubeVisualsStatusOptions(story_id=str(args.story_id).strip()),
+                options=YoutubeVisualsStatusOptions(
+                    story_id=str(args.story_id).strip(),
+                    youtube_run_id=str(getattr(args, "youtube_run_id", "") or "").strip(),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                ),
             )
             print(f"story_id={result.get('story_id')}")
             print(f"safe_story={result.get('safe_story')}")
@@ -4441,6 +4672,39 @@ def main() -> int:
             print(f"run_report={reports.get('run_report')}")
             print(f"frames_report={reports.get('frames_report')}")
             return 0
+
+        if sub_cmd == "stage":
+            stage_cmd = str(getattr(args, "youtube_stage_cmd", "") or "").strip()
+            if stage_cmd == "set":
+                result = set_launch_stage(
+                    cfg,
+                    launch_id=str(args.youtube_run_id).strip(),
+                    stage=str(args.stage).strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                    reason="manual stage set via CLI",
+                )
+                print(f"ok={result.get('ok')}")
+                print(f"execute={result.get('execute')}")
+                print(f"youtube_run_id={result.get('youtube_run_id')}")
+                print(f"stage={result.get('stage')}")
+                print(f"stage_status_path={result.get('stage_status_path')}")
+                return 0 if result.get("ok") else 2
+
+        if sub_cmd == "exclude-from-video":
+            result = mark_story_excluded_from_video(
+                cfg,
+                launch_id=str(args.youtube_run_id).strip(),
+                story_id=str(args.story_id).strip(),
+                reason=str(getattr(args, "reason", "") or "too_short_story_user_rejected").strip(),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            print(f"ok={result.get('ok')}")
+            print(f"execute={result.get('execute')}")
+            print(f"story_id={result.get('story_id')}")
+            print(f"excluded_from_video={result.get('excluded_from_video')}")
+            print(f"exclude_reason={result.get('exclude_reason')}")
+            print(f"manifest_path={result.get('manifest_path')}")
+            return 0 if result.get("ok") else 2
 
         if sub_cmd == "video":
             video_sub = str(getattr(args, "youtube_video_cmd", "") or "").strip()
