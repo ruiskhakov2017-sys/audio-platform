@@ -158,11 +158,18 @@ from orchestrator.youtube_visuals_bridge import (
     run_youtube_frames_runpod_bridge,
 )
 from orchestrator.youtube_visuals_runner import (
+    YoutubeGeminiWorkersOptions,
+    YoutubePromptsProgressStatusOptions,
+    YoutubePromptsResumeAuditOptions,
     YoutubeStageSetOptions,
     YoutubeVisualsRunAllOptions,
     YoutubeVisualsRunOptions,
     YoutubeVisualsStatusOptions,
     mark_story_excluded_from_video,
+    run_youtube_gemini_workers_setup,
+    run_youtube_gemini_workers_status,
+    run_youtube_prompts_progress_status,
+    run_youtube_prompts_resume_audit,
     run_youtube_visuals_launch_status,
     run_youtube_visuals_run,
     run_youtube_visuals_run_all,
@@ -1143,7 +1150,7 @@ def _parser() -> argparse.ArgumentParser:
     yt_visuals_run_all.add_argument("--story-id", default="")
     yt_visuals_run_all.add_argument("--runpod-url", default="")
     yt_visuals_run_all.add_argument("--workflow", default="")
-    yt_visuals_run_all.add_argument("--workers", type=int, default=1)
+    yt_visuals_run_all.add_argument("--workers", type=int, default=3)
     yt_visuals_run_all.add_argument("--limit", type=int, default=0)
     yt_visuals_run_all.add_argument("--execute", action="store_true")
     yt_visuals_run_all.add_argument("--dry-run", action="store_true")
@@ -1152,6 +1159,20 @@ def _parser() -> argparse.ArgumentParser:
     yt_visuals_run_all.add_argument("--accept-known-promo-issues", action="store_true")
     yt_visuals_run_all.add_argument("--segment-sec", type=float, default=180.0)
     yt_visuals_run_all.add_argument("--no-runpod-prompt", action="store_true")
+    yt_visuals_run_all.add_argument("--prompts-only", action="store_true", help="Stop after prompts/director readiness; do not prepare frames or RunPod jobs.")
+
+    yt_gemini_workers_status = yt_sub.add_parser(
+        "gemini-workers-status",
+        help="Show Gemini prompt worker profile/account/bot readiness.",
+    )
+    yt_gemini_workers_status.add_argument("--workers", type=int, default=3)
+
+    yt_gemini_workers_setup = yt_sub.add_parser(
+        "gemini-workers-setup",
+        help="Create Gemini prompt worker profile dirs and mapping files from registry.",
+    )
+    yt_gemini_workers_setup.add_argument("--workers", type=int, default=3)
+    yt_gemini_workers_setup.add_argument("--execute", action="store_true")
 
     yt_visuals_status = yt_sub.add_parser(
         "visuals-status",
@@ -1160,6 +1181,21 @@ def _parser() -> argparse.ArgumentParser:
     yt_visuals_status.add_argument("--story-id", default="")
     yt_visuals_status.add_argument("--youtube-run-id", default="")
     yt_visuals_status.add_argument("--accept-known-promo-issues", action="store_true")
+
+    yt_prompts_resume_audit = yt_sub.add_parser(
+        "prompts-resume-audit",
+        help="Read-only audit for YouTube visual prompts resume/checkpoint and RunPod readiness.",
+    )
+    yt_prompts_resume_audit.add_argument("--youtube-run-id", required=True)
+    yt_prompts_resume_audit.add_argument("--accept-known-promo-issues", action="store_true")
+
+    yt_prompts_progress_status = yt_sub.add_parser(
+        "prompts-progress-status",
+        help="Show current launch-level Gemini prompts progress ledger reconciled with filesystem.",
+    )
+    yt_prompts_progress_status.add_argument("--youtube-run-id", required=True)
+    yt_prompts_progress_status.add_argument("--run-session-id", default="")
+    yt_prompts_progress_status.add_argument("--accept-known-promo-issues", action="store_true")
 
     yt_stage = yt_sub.add_parser("stage", help="Launch stage utilities.")
     yt_stage_sub = yt_stage.add_subparsers(dest="youtube_stage_cmd", required=True)
@@ -4423,7 +4459,7 @@ def main() -> int:
                     story_id=str(getattr(args, "story_id", "") or "").strip(),
                     runpod_url=str(getattr(args, "runpod_url", "") or "").strip(),
                     workflow=str(getattr(args, "workflow", "") or "").strip(),
-                    workers=int(getattr(args, "workers", 1) or 1),
+                    workers=int(getattr(args, "workers", 3) or 3),
                     limit=int(getattr(args, "limit", 0) or 0),
                     execute=bool(getattr(args, "execute", False)) and not bool(getattr(args, "dry_run", False)),
                     auto_gemini=bool(getattr(args, "auto_gemini", False)),
@@ -4431,6 +4467,7 @@ def main() -> int:
                     accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
                     segment_sec=float(getattr(args, "segment_sec", 180.0) or 180.0),
                     prompt_runpod_url=not bool(getattr(args, "no_runpod_prompt", False)),
+                    prompts_only=bool(getattr(args, "prompts_only", False)),
                 ),
             )
             print("YOUTUBE_VISUALS_RUN_ALL", flush=True)
@@ -4450,6 +4487,46 @@ def main() -> int:
                     flush=True,
                 )
             print(f"report_path: {result.get('report_path')}", flush=True)
+            return 0 if result.get("ok") else 2
+
+        if sub_cmd in {"gemini-workers-status", "gemini-workers-setup"}:
+            options = YoutubeGeminiWorkersOptions(
+                workers=int(getattr(args, "workers", 3) or 3),
+                execute=bool(getattr(args, "execute", False)),
+            )
+            result = (
+                run_youtube_gemini_workers_setup(config=cfg, options=options)
+                if sub_cmd == "gemini-workers-setup"
+                else run_youtube_gemini_workers_status(config=cfg, options=options)
+            )
+            print("FOUND_WORKER_CONFIGS:", flush=True)
+            for row in result.get("found_worker_configs") or []:
+                print(f"- path: {row.get('path')}", flush=True)
+                print(f"  contains_emails: {str(bool(row.get('contains_emails'))).lower()}", flush=True)
+                print(f"  contains_bots: {str(bool(row.get('contains_bots'))).lower()}", flush=True)
+                print(f"  contains_worker_mapping: {str(bool(row.get('contains_worker_mapping'))).lower()}", flush=True)
+                print(f"  selected_as_source_of_truth: {str(bool(row.get('selected_as_source_of_truth'))).lower()}", flush=True)
+            print("GEMINI_WORKERS_STATUS", flush=True)
+            print(f"source_of_truth: {result.get('source_of_truth')}", flush=True)
+            print(f"execute: {str(bool(result.get('execute'))).lower()}", flush=True)
+            for row in result.get("rows") or []:
+                print(f"worker_{row.get('worker_id')}:", flush=True)
+                print(f"  profile_dir: {row.get('profile_dir')}", flush=True)
+                print(f"  expected_email: {row.get('expected_email')}", flush=True)
+                print(f"  actual_email_marker: {row.get('actual_email_marker')}", flush=True)
+                print(f"  bot_url: {row.get('bot_url')}", flush=True)
+                print(f"  cloned_profile: {str(bool(row.get('cloned_profile'))).lower()}", flush=True)
+                print(f"  ready: {str(bool(row.get('ready'))).lower()}", flush=True)
+                print(f"  blocker: {row.get('blocker')}", flush=True)
+            print(f"GEMINI_WORKERS_READY = {str(bool(result.get('ready'))).lower()}", flush=True)
+            blockers = result.get("blockers") or result.get("setup_blockers") or []
+            if blockers:
+                print("BLOCKERS:", flush=True)
+                for blocker in blockers:
+                    print(f"- {blocker}", flush=True)
+            changed = result.get("changed_files") or []
+            if changed:
+                print(f"changed_files={json.dumps(changed, ensure_ascii=True)}", flush=True)
             return 0 if result.get("ok") else 2
 
         if sub_cmd == "visual-prompts-audit":
@@ -4596,18 +4673,24 @@ def main() -> int:
                 print(f"ready_for_video: {summary.get('ready_for_video', 0)}")
                 print(f"audio ready: {summary.get('audio_ready', 0)}")
                 print(f"visual prompts ready: {summary.get('visual_prompts_ready', 0)}")
+                prompts_summary = summary.get("prompts") if isinstance(summary.get("prompts"), dict) else {}
+                if prompts_summary:
+                    print("prompts:")
+                    for key in ("done", "partial", "failed", "pending", "in_progress", "ready_for_runpod"):
+                        print(f"  {key}: {prompts_summary.get(key, 0)}")
                 print(f"images ready: {summary.get('images_ready', 0)}")
                 print(f"blocked: {summary.get('blocked', 0)}")
                 print(f"pending: {summary.get('pending', 0)}")
                 print(f"ready_for_frames: {summary.get('ready_for_frames', 0)}")
                 print(f"known promo issues accepted: {str(bool(summary.get('known_promo_issues_accepted'))).lower()}")
                 print("stories:")
+                print("story_id | title | characters | prompts_status | expected | actual | validation | blocker | next_action")
                 for row in result.get("stories", []) or []:
                     print(
-                        f"- {row.get('story_id')} | audio={row.get('audio_ready')} "
-                        f"prompts={row.get('visual_prompt_ready')} images={row.get('images_ready')} "
-                        f"excluded={row.get('excluded_from_video')} blocker={row.get('blocker')} "
-                        f"next={row.get('next_action')}"
+                        f"{row.get('story_id')} | {row.get('title')} | {row.get('characters_status', '')} | "
+                        f"{row.get('prompts_status', '')} | {row.get('expected_prompts', '')} | "
+                        f"{row.get('actual_prompts', '')} | {row.get('prompts_validation', '')} | "
+                        f"{row.get('blocker', '')} | {row.get('next_action', '')}"
                     )
                 print(f"report_path: {result.get('report_path')}")
                 return 0 if result.get("ok") else 2
@@ -4671,6 +4754,66 @@ def main() -> int:
             print(f"status_report={reports.get('status_report')}")
             print(f"run_report={reports.get('run_report')}")
             print(f"frames_report={reports.get('frames_report')}")
+            return 0
+
+        if sub_cmd == "prompts-resume-audit":
+            result = run_youtube_prompts_resume_audit(
+                config=cfg,
+                options=YoutubePromptsResumeAuditOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                ),
+            )
+            if not result.get("ok", False):
+                print(result.get("message", "prompts resume audit failed"))
+                return 2
+            print("PROMPTS_RESUME_AUDIT")
+            print(f"total active stories: {result.get('total_active_stories')}")
+            print(f"prompts done valid: {result.get('prompts_done_valid')}")
+            print(f"prompts partial: {result.get('prompts_partial')}")
+            print(f"prompts missing: {result.get('prompts_missing')}")
+            print(f"prompts invalid: {result.get('prompts_invalid')}")
+            print(f"ready_for_runpod: {result.get('ready_for_runpod')}")
+            print(f"resume_safe: {str(bool(result.get('resume_safe'))).lower()}")
+            print(f"runpod_safe: {str(bool(result.get('runpod_safe'))).lower()}")
+            reports = result.get("reports") if isinstance(result.get("reports"), dict) else {}
+            print(f"json_report={reports.get('json')}")
+            print(f"md_report={reports.get('md')}")
+            return 0
+
+        if sub_cmd == "prompts-progress-status":
+            result = run_youtube_prompts_progress_status(
+                config=cfg,
+                options=YoutubePromptsProgressStatusOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    run_session_id=str(getattr(args, "run_session_id", "") or "").strip(),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                ),
+            )
+            if not result.get("ok", False):
+                print(result.get("message", "prompts progress status failed"))
+                return 2
+            print("PROMPTS_PROGRESS_STATUS")
+            print(f"launch_id: {result.get('launch_id')}")
+            print(f"session: {result.get('run_session_id')}")
+            print(f"active_queue: {result.get('active_queue', 0)}")
+            print(f"done_valid: {result.get('done', 0)}")
+            print(f"partial: {result.get('partial', 0)}")
+            print(f"in_progress_fresh: {result.get('in_progress', 0)}")
+            print(f"stale_in_progress: 0")
+            print(f"failed: {result.get('failed', 0)}")
+            print(f"pending: {result.get('pending', 0)}")
+            print(f"remaining: {result.get('remaining', 0)}")
+            print(f"ready_for_runpod: {result.get('ready_for_runpod', 0)}")
+            print(f"not_ready_for_runpod: {result.get('not_ready_for_runpod', 0)}")
+            print("story_id | title | worker | status | chunk | prompts | validation | blocker | next_action")
+            for row in result.get("stories_list", []) or []:
+                print(
+                    f"{row.get('story_id')} | {row.get('title')} | {row.get('assigned_worker', '')} | "
+                    f"{row.get('status')} | {row.get('current_chunk', 0)}/{row.get('total_chunks', 0)} | "
+                    f"{row.get('actual_prompts', 0)}/{row.get('expected_prompts', 0)} | "
+                    f"{row.get('validation', '')} | {row.get('blocker', '')} | {row.get('next_action', '')}"
+                )
             return 0
 
         if sub_cmd == "stage":

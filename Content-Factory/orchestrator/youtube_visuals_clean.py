@@ -33,6 +33,18 @@ VISUAL_STALE_TOKENS = (
     "girlish",
 )
 
+PROMPT_REFUSAL_TOKENS = (
+    "todo",
+    "error",
+    "i can't",
+    "i cannot",
+    "as an ai",
+    "cannot comply",
+    "i’m sorry",
+    "i am sorry",
+    "sorry, but",
+)
+
 _CACHE_KEYWORDS = ("character", "characters", "prompt", "prompts", "director", "scene", "frame", "frames", "runpod")
 _CACHE_EXTS = {".txt", ".json", ".jsonl", ".log"}
 _SCAN_EXTS = {".txt", ".json", ".jsonl", ".log"}
@@ -292,11 +304,37 @@ def scan_visual_stale_tokens(
 def validate_visual_prompts_file(path: Path) -> dict[str, Any]:
     missing = not path.is_file()
     findings = [] if missing else _line_findings(path)
+    partial_path = path.with_name("prompts_list.partial.txt")
+    checkpoint_path = path.with_name("director_checkpoint.json")
+    prompts: list[str] = []
+    prompt_findings: list[dict[str, Any]] = []
+    if not missing:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            raw = ""
+        prompts = [item.strip() for item in re.split(r"\n\s*\n+", raw) if item.strip()]
+        for idx, prompt in enumerate(prompts, start=1):
+            lowered = prompt.lower()
+            if not prompt:
+                prompt_findings.append({"index": idx, "reason": "empty_prompt"})
+            if any(token in lowered for token in PROMPT_REFUSAL_TOKENS):
+                prompt_findings.append({"index": idx, "reason": "refusal_or_placeholder_text", "text": prompt[:300]})
+            if prompt.endswith(("...", "…")):
+                prompt_findings.append({"index": idx, "reason": "truncated_prompt", "text": prompt[:300]})
+    partial_exists = partial_path.is_file() or checkpoint_path.is_file()
+    status = "missing" if missing else ("partial" if partial_exists else ("stale_or_invalid" if findings or prompt_findings or not prompts else "ok"))
     return {
-        "ok": not missing and not findings,
-        "status": "missing" if missing else ("stale_or_invalid" if findings else "ok"),
+        "ok": not missing and not partial_exists and not findings and not prompt_findings and bool(prompts),
+        "status": status,
         "path": str(path),
+        "prompts_count": len(prompts),
+        "partial_path": str(partial_path),
+        "partial_exists": partial_path.is_file(),
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_exists": checkpoint_path.is_file(),
         "findings": findings,
+        "prompt_findings": prompt_findings,
         "forbidden_terms_total": sum(len(item["terms"]) for item in findings),
     }
 

@@ -12,11 +12,13 @@ import ast
 import json
 import hashlib
 import os
+import queue
 import random
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,6 +29,7 @@ from urllib.parse import urlsplit
 from orchestrator.config import OrchestratorConfig
 from orchestrator.gemini_colab_proxy import apply_gemini_colab_proxy_env, gemini_colab_proxy_session
 from orchestrator.youtube_language import EXPECTED_YOUTUBE_LANGUAGE, detect_path_language
+from orchestrator.youtube_visuals_clean import validate_visual_prompts_file
 
 
 PROMPTS_PRIMARY_DIRNAME = "06_prompts"
@@ -109,6 +112,8 @@ class YoutubeGeminiBatchOptions:
     execute: bool = False
     user_data_dir: str = ""
     worker_label: str = ""
+    start_url: str = ""
+    account_email: str = ""
 
 
 def _now_iso() -> str:
@@ -986,6 +991,8 @@ def _run_streamed_subprocess(
     env: dict[str, str],
     log_path: Path,
     output_prefix: str = "",
+    timeout_sec: int = 0,
+    idle_timeout_sec: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     output_lines: list[str] = []
     proc = subprocess.Popen(
@@ -1000,12 +1007,61 @@ def _run_streamed_subprocess(
         bufsize=1,
     )
     assert proc.stdout is not None
-    for line in proc.stdout:
-        output_lines.append(line)
-        terminal_line = line.rstrip("\n")
-        print(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line, flush=True)
-        _append_text(log_path, line)
+    lines: queue.Queue[str | None] = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            for item in proc.stdout:
+                lines.put(item)
+        finally:
+            lines.put(None)
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+    started = time.monotonic()
+    last_output = started
+    stream_done = False
+    killed_reason = ""
+    while not stream_done or proc.poll() is None:
+        try:
+            line = lines.get(timeout=1)
+        except queue.Empty:
+            line = None
+        if line is None:
+            stream_done = proc.poll() is not None
+        else:
+            output_lines.append(line)
+            last_output = time.monotonic()
+            terminal_line = line.rstrip("\n")
+            print(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line, flush=True)
+            _append_text(log_path, line)
+            continue
+        now = time.monotonic()
+        if timeout_sec > 0 and now - started > timeout_sec and proc.poll() is None:
+            killed_reason = f"timeout_sec={timeout_sec}"
+            proc.kill()
+            break
+        if idle_timeout_sec > 0 and now - last_output > idle_timeout_sec and proc.poll() is None:
+            killed_reason = f"idle_timeout_sec={idle_timeout_sec}"
+            proc.kill()
+            break
+    while True:
+        try:
+            line = lines.get_nowait()
+        except queue.Empty:
+            break
+        if line:
+            output_lines.append(line)
+            terminal_line = line.rstrip("\n")
+            print(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line, flush=True)
+            _append_text(log_path, line)
     returncode = proc.wait()
+    if killed_reason:
+        msg = f"\n[subprocess killed: {killed_reason}]\n"
+        output_lines.append(msg)
+        _append_text(log_path, msg)
+        if returncode == 0:
+            returncode = 124
     return subprocess.CompletedProcess(cmd, returncode, stdout="".join(output_lines), stderr="")
 
 
@@ -1017,6 +1073,8 @@ def _run_director_batch_subprocess(
     stories_dir: Path,
     log_path: Path,
     env_overrides: dict[str, str] | None = None,
+    timeout_sec: int = 0,
+    idle_timeout_sec: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("GEMINI_USE_CONFIG_URL", "1")
@@ -1048,6 +1106,8 @@ def _run_director_batch_subprocess(
             env=env,
             log_path=log_path,
             output_prefix=f"[{module_name}] ",
+            timeout_sec=timeout_sec,
+            idle_timeout_sec=idle_timeout_sec,
         )
     _append_text(
         log_path,
@@ -1279,6 +1339,15 @@ def _is_nonempty_file(path: Path) -> bool:
         return path.is_file() and path.stat().st_size > 0 and bool(path.read_text(encoding="utf-8", errors="replace").strip())
     except OSError:
         return False
+
+
+def _atomic_copy(config: OrchestratorConfig, src: Path, dst: Path, *, function: str) -> Path:
+    tmp = dst.with_name(f"{dst.name}.tmp")
+    if tmp.exists():
+        tmp.unlink()
+    copied = _bridge_copy2(config, src, tmp, function=function)
+    copied.replace(dst)
+    return dst.resolve()
 
 
 def _update_story_manifest(
@@ -1570,8 +1639,14 @@ def run_youtube_director_prompts_import(
     if missing or not options.execute:
         return result
     target.parent.mkdir(parents=True, exist_ok=True)
-    _bridge_copy2(config, source, target, function="run_youtube_director_prompts_import")
+    _atomic_copy(config, source, target, function="run_youtube_director_prompts_import")
     imported_at = _now_iso()
+    validation = validate_visual_prompts_file(target)
+    if not validation.get("ok", False):
+        result["ok"] = False
+        result["status"] = str(validation.get("status") or "invalid")
+        result["validation"] = validation
+        return result
     manifest_path = _update_story_manifest(
         config,
         basics["story_id"],
@@ -1580,11 +1655,26 @@ def run_youtube_director_prompts_import(
             "actual_artifacts": {"prompts_list_txt": str(target)},
             "status": {"director_done": True},
             "pipeline_stage_status": {"scenes_prompts": "done", "director_prompts": "done"},
+            "visual_prompts": {
+                "status": "done",
+                "started_at": None,
+                "updated_at": imported_at,
+                "completed_at": imported_at,
+                "attempts": 1,
+                "worker_id": None,
+                "expected_prompts": len(prompts),
+                "actual_prompts": len(prompts),
+                "validation": "ok",
+                "error": None,
+                "path": str(target),
+                "source": str(source),
+            },
             "scenes_prompts": {
                 "status": "done",
                 "path": str(target),
                 "source": str(source),
                 "prompts_count": len(prompts),
+                "validation": "ok",
                 "imported_at": imported_at,
             },
             "director_prompts": {
@@ -1592,11 +1682,12 @@ def run_youtube_director_prompts_import(
                 "path": str(target),
                 "source": str(source),
                 "prompts_count": len(prompts),
+                "validation": "ok",
                 "imported_at": imported_at,
             },
         },
     )
-    report_path = _write_bridge_report(config, story_dir, "youtube_director_prompts_import", {**result, "imported_at": imported_at})
+    report_path = _write_bridge_report(config, story_dir, "youtube_director_prompts_import", {**result, "imported_at": imported_at, "validation": validation})
     result["manifest_path"] = str(manifest_path)
     result["report_path"] = str(report_path)
     result["target_size"] = target.stat().st_size
@@ -2109,9 +2200,21 @@ def run_youtube_director_prompts_batch_auto_gemini(
     }
     if missing or not options.execute:
         return result
-    env_overrides = {"GEMINI_USER_DATA_DIR": str(options.user_data_dir)} if options.user_data_dir else {}
+    env_overrides: dict[str, str] = {
+        "GEMINI_POST_RESPONSE_PAUSE_SEC": "0",
+        "GEMINI_MAX_TRANSIENT_ROUNDS": "3",
+        "GEMINI_MAX_ATTACH_FAIL_RETRIES": "2",
+        "GEMINI_WAIT_TIMEOUT_MS": "90000",
+        "GEMINI_TIMEOUTS_BEFORE_ROTATE": "2",
+    }
+    if options.user_data_dir:
+        env_overrides["GEMINI_USER_DATA_DIR"] = str(options.user_data_dir)
     if options.worker_label:
         env_overrides["GEMINI_WORKER_LABEL"] = options.worker_label
+    if options.start_url:
+        env_overrides["GEMINI_START_URL"] = str(options.start_url)
+    if options.account_email:
+        env_overrides["GEMINI_ACCOUNT_EMAIL"] = str(options.account_email)
     proc = _run_director_batch_subprocess(
         director_dir=director_dir,
         module_name="gemini_director",
@@ -2119,6 +2222,8 @@ def run_youtube_director_prompts_batch_auto_gemini(
         stories_dir=stories_dir,
         log_path=log_path,
         env_overrides=env_overrides,
+        timeout_sec=max(1800, 900 * max(1, len(options.stories))),
+        idle_timeout_sec=900,
     )
     result["subprocess_returncode"] = proc.returncode
     imported_rows: list[dict[str, Any]] = []

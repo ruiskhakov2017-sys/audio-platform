@@ -72,7 +72,7 @@ from orchestrator.youtube_visuals_clean import (
     validate_visual_characters_file,
     validate_visual_prompts_file,
 )
-from orchestrator.youtube_gemini_registry import sync_youtube_gemini_legacy_files
+from orchestrator.youtube_gemini_registry import resolve_youtube_gemini_bots, sync_youtube_gemini_legacy_files
 
 
 @dataclass
@@ -106,7 +106,7 @@ class YoutubeVisualsRunAllOptions:
     story_id: str = ""
     runpod_url: str = ""
     workflow: str = ""
-    workers: int = 1
+    workers: int = 3
     limit: int = 0
     execute: bool = False
     auto_gemini: bool = False
@@ -114,6 +114,7 @@ class YoutubeVisualsRunAllOptions:
     accept_known_promo_issues: bool = False
     segment_sec: float = 180.0
     prompt_runpod_url: bool = False
+    prompts_only: bool = False
 
 
 @dataclass
@@ -123,8 +124,39 @@ class YoutubeStageSetOptions:
     execute: bool = False
 
 
+@dataclass
+class YoutubeGeminiWorkersOptions:
+    workers: int = 3
+    execute: bool = False
+
+
+@dataclass
+class YoutubePromptsResumeAuditOptions:
+    youtube_run_id: str
+    accept_known_promo_issues: bool = False
+
+
+@dataclass
+class YoutubePromptsProgressStatusOptions:
+    youtube_run_id: str
+    run_session_id: str = ""
+    accept_known_promo_issues: bool = False
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _terminal_safe(value: Any) -> str:
+    text = str(value or "")
+    normalized = (
+        text.replace("\u2192", "->")
+        .replace("\u2190", "<-")
+        .replace("\u2014", "-")
+        .replace("\u2013", "-")
+        .replace("\u2026", "...")
+    )
+    return normalized.encode("ascii", errors="backslashreplace").decode("ascii")
 
 
 def _story_dir(config: OrchestratorConfig, story_id: str, *, youtube_run_id: str | None = None) -> Path:
@@ -151,6 +183,18 @@ def _is_nonempty(path: Path) -> bool:
         return path.is_file() and path.stat().st_size > 0 and bool(path.read_text(encoding="utf-8", errors="replace").strip())
     except OSError:
         return False
+
+
+def _update_manifest_dict(story_dir: Path, patch: dict[str, Any]) -> None:
+    manifest_path = _story_manifest_path(story_dir)
+    manifest = _load_manifest(story_dir)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(manifest.get(key), dict):
+            manifest[key].update(value)
+        else:
+            manifest[key] = value
+    manifest["updated_at"] = _now_iso()
+    _write_json(manifest_path, manifest)
 
 
 def _source_text_path(story_dir: Path) -> Path:
@@ -247,12 +291,32 @@ def _fmt_elapsed(seconds: float) -> str:
 
 
 def _story_visual_readiness(config: OrchestratorConfig, story_dir: Path, story_id: str) -> dict[str, Any]:
+    manifest = _load_manifest(story_dir)
     characters = _characters_path(config, story_id, story_dir)
     prompts_path = _prompts_path(config, story_id, story_dir)
     prompts = _load_prompts(prompts_path)
+    prompts_validation = validate_visual_prompts_file(prompts_path)
+    visual_prompts_meta = manifest.get("visual_prompts") if isinstance(manifest.get("visual_prompts"), dict) else {}
     frames = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
     characters_ready = _is_nonempty(characters)
-    prompts_ready = _is_nonempty(prompts_path)
+    manifest_prompts_done = (
+        str(visual_prompts_meta.get("status") or "").strip() == "done"
+        and str(visual_prompts_meta.get("validation") or "").strip() == "ok"
+    )
+    expected_prompts = visual_prompts_meta.get("expected_prompts") or _prompt_estimate(story_dir)
+    actual_prompts = int(prompts_validation.get("prompts_count") or len(prompts) or 0)
+    prompt_count_matches = True
+    prompts_file_exists = _is_nonempty(prompts_path)
+    if prompts_file_exists and expected_prompts is not None:
+        try:
+            prompt_count_matches = int(expected_prompts) == actual_prompts
+        except (TypeError, ValueError):
+            prompt_count_matches = False
+    legacy_prompts_done = (
+        not visual_prompts_meta
+        and str((manifest.get("director_prompts") or {}).get("status") if isinstance(manifest.get("director_prompts"), dict) else "").strip() == "done"
+    )
+    prompts_ready = bool(prompts_file_exists and prompts_validation.get("ok") and prompt_count_matches and (manifest_prompts_done or legacy_prompts_done))
     images_ready = (
         int(frames.get("expected") or 0) > 0
         and int(frames.get("pending") or 0) == 0
@@ -265,26 +329,211 @@ def _story_visual_readiness(config: OrchestratorConfig, story_dir: Path, story_i
         "frames_expected": int(frames.get("expected") or 0),
         "frames_valid": int(frames.get("generated") or 0),
         "characters_status": "ok" if characters_ready else "missing",
-        "prompts_status": "ok" if prompts_ready else "missing",
+        "prompts_status": "ok" if prompts_ready else ("count_mismatch" if not prompt_count_matches else str(prompts_validation.get("status") or "missing")),
+        "prompts_validation": prompts_validation,
+        "visual_prompts": visual_prompts_meta,
         "images_status": "ok" if images_ready else "skip",
     }
 
 
-def _prompt_worker_user_data_dir(config: OrchestratorConfig, worker_index: int) -> str:
-    if worker_index <= 1:
-        return ""
+def _director_module_dir_for_visuals(config: OrchestratorConfig) -> Path:
     director_dir = (config.root_dir / config.legacy_modules.get("director_2_0", "legacy/director_2_0")).resolve()
-    worker_root = director_dir / "worker_profiles" / f"prompts_worker_{worker_index}"
-    target = worker_root / "user_data"
-    source = director_dir / "user_data"
-    if target.exists():
-        return str(target)
-    if source.is_dir():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target, dirs_exist_ok=True)
-        return str(target)
-    target.mkdir(parents=True, exist_ok=True)
-    return str(target)
+    return director_dir
+
+
+def _prompt_worker_profile_dir(config: OrchestratorConfig, worker_index: int) -> Path:
+    director_dir = _director_module_dir_for_visuals(config)
+    return director_dir / "worker_profiles" / f"prompts_worker_{worker_index}" / "user_data"
+
+
+def _scan_worker_config_candidates(config: OrchestratorConfig) -> list[dict[str, Any]]:
+    candidates = [
+        config.root_dir / "configs" / "gemini_bots_registry.yaml",
+        config.root_dir / "configs" / "gemini_bots_registry.example.yaml",
+        _director_module_dir_for_visuals(config) / "gemini_bots.json",
+        config.root_dir / "configs" / "youtube_video_colab_workers.yaml",
+        config.root_dir / "configs" / "youtube_tts_colab_workers.yaml",
+        config.root_dir / "configs" / "youtube_video_render.yaml",
+    ]
+    selected = str((config.root_dir / "configs" / "gemini_bots_registry.yaml").resolve())
+    rows: list[dict[str, Any]] = []
+    for path in candidates:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            continue
+        text = resolved.read_text(encoding="utf-8", errors="replace")
+        contains_emails = "@" in text or "gmail.com" in text
+        contains_bots = any(token in text.lower() for token in ("gemini", "aistudio", "makersuite", "bot"))
+        contains_worker_mapping = "worker" in text.lower() or "account_index" in text.lower()
+        rows.append(
+            {
+                "path": str(resolved),
+                "contains_emails": contains_emails,
+                "contains_bots": contains_bots,
+                "contains_worker_mapping": contains_worker_mapping,
+                "selected_as_source_of_truth": str(resolved) == selected,
+            }
+        )
+    return rows
+
+
+def _prompt_worker_mappings(config: OrchestratorConfig, worker_count: int) -> tuple[str, list[dict[str, Any]], list[str]]:
+    resolved = resolve_youtube_gemini_bots(config)
+    source = str(resolved.get("registry_path") or (config.root_dir / "configs" / "gemini_bots_registry.yaml"))
+    chain = resolved.get("selected_director_chain") if isinstance(resolved.get("selected_director_chain"), list) else []
+    blockers = [str(item) for item in (resolved.get("warnings") or []) if item]
+    if len(chain) < worker_count:
+        blockers.append(f"not enough Gemini prompt bots in source: required={worker_count} found={len(chain)}")
+    seen_emails: set[str] = set()
+    seen_urls: set[str] = set()
+    mappings: list[dict[str, Any]] = []
+    for worker_index in range(1, worker_count + 1):
+        item = chain[worker_index - 1] if worker_index - 1 < len(chain) and isinstance(chain[worker_index - 1], dict) else {}
+        email = str(item.get("email") or "").strip()
+        url = str(item.get("gem_url") or item.get("url") or "").strip()
+        account_index = item.get("account_index", worker_index - 1)
+        worker_root = _prompt_worker_profile_dir(config, worker_index).parent
+        profile_dir = worker_root / "user_data"
+        if not email:
+            blockers.append(f"worker_{worker_index} expected email missing")
+        if not url:
+            blockers.append(f"worker_{worker_index} bot URL missing")
+        if email and email.lower() in seen_emails:
+            blockers.append(f"duplicate Gemini worker email: {email}")
+        if url and url in seen_urls:
+            blockers.append(f"duplicate Gemini worker bot URL: {url}")
+        seen_emails.add(email.lower())
+        seen_urls.add(url)
+        mappings.append(
+            {
+                "worker_id": worker_index,
+                "profile_dir": str(profile_dir),
+                "worker_root": str(worker_root),
+                "expected_email": email,
+                "bot_url": url,
+                "bot_name": "youtube_scene_prompts",
+                "account_index": account_index,
+                "source_of_truth": source,
+            }
+        )
+    return source, mappings, blockers
+
+
+def _worker_status_row(mapping: dict[str, Any]) -> dict[str, Any]:
+    worker_root = Path(str(mapping.get("worker_root") or ""))
+    profile_dir = Path(str(mapping.get("profile_dir") or ""))
+    account_marker = worker_root / ".account_email"
+    mapping_path = worker_root / "worker_mapping.json"
+    cloned_marker = worker_root / ".orchestrator_clone_from_base"
+    actual_email = account_marker.read_text(encoding="utf-8", errors="replace").strip() if account_marker.is_file() else ""
+    expected_email = str(mapping.get("expected_email") or "").strip()
+    blockers: list[str] = []
+    if cloned_marker.exists() and actual_email.lower() != expected_email.lower():
+        blockers.append("profile is cloned from base and has no matching unique identity")
+    if not profile_dir.is_dir():
+        blockers.append("profile directory missing; run gemini-workers-setup --execute, then login if browser asks")
+    if not actual_email:
+        blockers.append("actual email marker missing; run gemini-workers-setup --execute")
+    elif expected_email and actual_email.lower() != expected_email.lower():
+        blockers.append(f"actual email marker mismatch: actual={actual_email} expected={expected_email}")
+    if not str(mapping.get("bot_url") or "").strip():
+        blockers.append("bot URL missing")
+    return {
+        **mapping,
+        "actual_email_marker": actual_email,
+        "mapping_path": str(mapping_path),
+        "cloned_profile": cloned_marker.exists(),
+        "ready": not blockers,
+        "blocker": "none" if not blockers else "; ".join(blockers),
+        "blockers": blockers,
+    }
+
+
+def run_youtube_gemini_workers_status(config: OrchestratorConfig, options: YoutubeGeminiWorkersOptions) -> dict[str, Any]:
+    workers = max(1, int(options.workers or 1))
+    source, mappings, blockers = _prompt_worker_mappings(config, workers)
+    rows = [_worker_status_row(mapping) for mapping in mappings]
+    all_blockers = list(blockers)
+    for row in rows:
+        all_blockers.extend(row.get("blockers") or [])
+    return {
+        "ok": not all_blockers,
+        "ready": not all_blockers,
+        "workers": workers,
+        "source_of_truth": source,
+        "found_worker_configs": _scan_worker_config_candidates(config),
+        "rows": rows,
+        "blockers": all_blockers,
+    }
+
+
+def run_youtube_gemini_workers_setup(config: OrchestratorConfig, options: YoutubeGeminiWorkersOptions) -> dict[str, Any]:
+    workers = max(1, int(options.workers or 1))
+    source, mappings, blockers = _prompt_worker_mappings(config, workers)
+    changed: list[str] = []
+    for mapping in mappings:
+        worker_root = Path(str(mapping["worker_root"]))
+        profile_dir = Path(str(mapping["profile_dir"]))
+        account_marker = worker_root / ".account_email"
+        mapping_path = worker_root / "worker_mapping.json"
+        if options.execute:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            account_marker.write_text(str(mapping.get("expected_email") or "") + "\n", encoding="utf-8")
+            mapping_path.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            changed.extend([str(account_marker), str(mapping_path)])
+    status = run_youtube_gemini_workers_status(config, YoutubeGeminiWorkersOptions(workers=workers, execute=False))
+    return {
+        **status,
+        "ok": not blockers and (status.get("ready") if options.execute else True),
+        "execute": bool(options.execute),
+        "source_of_truth": source,
+        "changed_files": changed,
+        "setup_blockers": blockers,
+    }
+
+
+def _print_gemini_workers_preflight(result: dict[str, Any]) -> None:
+    print("================ GEMINI WORKERS PREFLIGHT ================", flush=True)
+    print(f"workers: {result.get('workers')}", flush=True)
+    print(f"source_of_truth: {result.get('source_of_truth')}", flush=True)
+    for row in result.get("rows") or []:
+        print(f"worker_{row.get('worker_id')}:", flush=True)
+        print(f"  expected_email: {row.get('expected_email')}", flush=True)
+        print(f"  actual_email_marker: {row.get('actual_email_marker')}", flush=True)
+        print(f"  bot_url: {row.get('bot_url')}", flush=True)
+        print(f"  profile: {row.get('profile_dir')}", flush=True)
+        print(f"  cloned_profile: {str(bool(row.get('cloned_profile'))).lower()}", flush=True)
+        print(f"  status: {'OK' if row.get('ready') else 'BLOCKED'}", flush=True)
+        if not row.get("ready"):
+            print(f"  blocker: {row.get('blocker')}", flush=True)
+    print(f"GEMINI_WORKERS_READY = {str(bool(result.get('ready'))).lower()}", flush=True)
+    blockers = result.get("blockers") or []
+    if blockers:
+        print("BLOCKERS:", flush=True)
+        for blocker in blockers:
+            print(f"- {blocker}", flush=True)
+    print("===========================================================", flush=True)
+
+
+def _prepare_prompt_worker_profiles(config: OrchestratorConfig, worker_count: int) -> None:
+    status = run_youtube_gemini_workers_status(config, YoutubeGeminiWorkersOptions(workers=worker_count))
+    _print_gemini_workers_preflight(status)
+    if not status.get("ready"):
+        raise RuntimeError("Gemini workers preflight failed")
+
+
+def _mapping_for_worker(config: OrchestratorConfig, worker_index: int) -> dict[str, Any]:
+    _source, mappings, _blockers = _prompt_worker_mappings(config, worker_index)
+    return mappings[worker_index - 1]
+
+
+def _load_prompt_worker_bot(config: OrchestratorConfig, worker_index: int) -> dict[str, str]:
+    mapping = _mapping_for_worker(config, worker_index)
+    return {"url": str(mapping.get("bot_url") or ""), "email": str(mapping.get("expected_email") or "")}
+
+
+def _prompt_worker_user_data_dir(config: OrchestratorConfig, worker_index: int) -> str:
+    return str(_prompt_worker_profile_dir(config, worker_index))
 
 
 def _run_prompts_worker_story(
@@ -318,14 +567,23 @@ def _run_prompts_worker_batch(
 ) -> dict[str, Any]:
     from orchestrator.isolated_launch_context import isolated_session
 
+    user_data_dir = _prompt_worker_user_data_dir(config, worker_index) if execute else ""
+    bot = _load_prompt_worker_bot(config, worker_index) if execute else {"url": "", "email": ""}
+    if execute:
+        print(
+            f"[worker {worker_index}] prompts user_data_dir={user_data_dir} account={bot.get('email') or 'unknown'} url={bot.get('url')}",
+            flush=True,
+        )
     with isolated_session(None, batch_launch_id=launch_id, config=config):
         return run_youtube_director_prompts_batch_auto_gemini(
             config=config,
             options=YoutubeGeminiBatchOptions(
                 stories=stories,
                 execute=execute,
-                user_data_dir=_prompt_worker_user_data_dir(config, worker_index) if execute else "",
+                user_data_dir=user_data_dir,
                 worker_label=f"worker_{worker_index}",
+                start_url=bot.get("url", ""),
+                account_email=bot.get("email", ""),
             ),
         )
 
@@ -496,6 +754,538 @@ def _prompt_estimate(story_dir: Path) -> int | None:
     if not duration:
         return None
     return max(1, round(duration / 25))
+
+
+def _recover_temp_prompts_output(
+    *,
+    config: OrchestratorConfig,
+    ctx: Any,
+    story_id: str,
+    story_dir: Path,
+    execute: bool,
+) -> dict[str, Any]:
+    temp_root = ctx.launch_root / "10_Временные_файлы" / "visuals_gemini_batch" / "prompts"
+    if not execute or not temp_root.is_dir():
+        return {"ok": False, "status": "not_attempted"}
+    candidates = [
+        path
+        for path in temp_root.rglob("prompts_list.txt")
+        if path.is_file() and path.parent.name.casefold() == story_id.casefold()
+    ]
+    candidates.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+    attempts: list[dict[str, Any]] = []
+    for candidate in candidates[:5]:
+        validation = validate_visual_prompts_file(candidate)
+        attempts.append({"path": str(candidate), "validation": validation})
+        if not validation.get("ok", False):
+            continue
+        imp = run_youtube_director_prompts_import(
+            config=config,
+            options=YoutubeDirectorPromptsImportOptions(story_id=story_id, source=candidate, execute=True),
+        )
+        if imp.get("ok"):
+            return {"ok": True, "status": "imported_temp_prompts", "source": str(candidate), "import": imp, "attempts": attempts}
+    return {"ok": False, "status": "no_valid_temp_prompts", "attempts": attempts}
+
+
+def _visual_prompts_status_row(config: OrchestratorConfig, story_dir: Path, *, accept_known_promo_issues: bool = False) -> dict[str, Any]:
+    manifest = _load_manifest(story_dir)
+    story_id, title = _story_identity(story_dir, manifest)
+    excluded = _is_excluded_from_video(manifest)
+    characters = _characters_path(config, story_id, story_dir)
+    prompts_path = _prompts_path(config, story_id, story_dir)
+    prompts = _load_prompts(prompts_path)
+    characters_validation = validate_visual_characters_file(characters)
+    prompts_validation = validate_visual_prompts_file(prompts_path)
+    visual_prompts = manifest.get("visual_prompts") if isinstance(manifest.get("visual_prompts"), dict) else {}
+    expected = visual_prompts.get("expected_prompts") or _prompt_estimate(story_dir)
+    actual = int(prompts_validation.get("prompts_count") or len(prompts) or 0)
+    validation_status = "ok" if prompts_validation.get("ok") else str(prompts_validation.get("status") or "failed")
+    manifest_done = str(visual_prompts.get("status") or "").strip() == "done" and str(visual_prompts.get("validation") or "").strip() == "ok"
+    legacy_done = not visual_prompts and isinstance(manifest.get("director_prompts"), dict) and str(manifest["director_prompts"].get("status") or "") == "done"
+    count_matches = True
+    if expected is not None and actual:
+        try:
+            count_matches = int(expected) == actual
+        except (TypeError, ValueError):
+            count_matches = False
+    if validation_status == "ok" and not count_matches:
+        validation_status = "count_mismatch"
+    prompts_ready = bool(prompts_validation.get("ok") and count_matches and (manifest_done or legacy_done))
+    audio_ready = _audio_ready_for_video(story_dir, manifest)
+    characters_ready = bool(_is_nonempty(characters) and characters_validation.get("ok"))
+
+    if excluded:
+        status = "excluded"
+        blocker = "excluded_from_video"
+        next_action = "story is intentionally dropped from video queue"
+    elif not audio_ready:
+        status = "blocked"
+        blocker = "missing_audio"
+        next_action = "import/generate narration.mp3"
+    elif not characters_ready:
+        status = "blocked"
+        blocker = "missing_or_invalid_characters"
+        next_action = "regenerate characters"
+    elif str(visual_prompts.get("status") or "").strip() == "in_progress":
+        status = "in_progress"
+        blocker = "stale_or_active_prompts_in_progress"
+        next_action = "rerun visuals-run-all; incomplete story will be regenerated from story start"
+    elif prompts_ready:
+        status = "done"
+        blocker = "none"
+        next_action = "ready_for_runpod"
+    elif prompts_validation.get("status") == "partial":
+        status = "partial"
+        blocker = "partial_prompt_checkpoint"
+        next_action = "regenerate prompts for this story from story start"
+    elif not count_matches:
+        status = "failed"
+        blocker = "prompt_count_mismatch"
+        next_action = "regenerate prompts for this story"
+    elif prompts_path.is_file():
+        status = "failed"
+        blocker = "invalid_prompts"
+        next_action = "regenerate/repair prompts"
+    else:
+        status = "pending"
+        blocker = "missing_prompts"
+        next_action = "generate prompts"
+
+    return {
+        "story_id": story_id,
+        "title": title,
+        "story_dir": str(story_dir),
+        "excluded_from_video": excluded,
+        "audio_ready": audio_ready,
+        "characters_status": "done" if characters_ready else ("invalid" if characters.is_file() else "missing"),
+        "prompts_status": status,
+        "expected": expected,
+        "actual": actual,
+        "validation": validation_status,
+        "ready_for_runpod": bool(prompts_ready and audio_ready and characters_ready and not excluded),
+        "blocker": blocker,
+        "next_action": next_action,
+        "prompts_path": str(prompts_path),
+        "visual_prompts": visual_prompts,
+        "prompts_validation": prompts_validation,
+    }
+
+
+def _write_prompts_resume_audit_reports(config: OrchestratorConfig, launch_id: str, report: dict[str, Any]) -> dict[str, str]:
+    ctx = build_launch_context(config, launch_id=launch_id)
+    reports_dir = ctx.launch_root / "07_reports" / "gemini_execution"
+    json_path = reports_dir / "YOUTUBE_PROMPTS_RESUME_AUDIT.json"
+    md_path = reports_dir / "YOUTUBE_PROMPTS_RESUME_AUDIT.md"
+    _write_json(json_path, report)
+    lines = [
+        "# YOUTUBE_PROMPTS_RESUME_AUDIT",
+        "",
+        f"launch_id: {launch_id}",
+        f"generated_at: {report.get('generated_at')}",
+        f"total active stories: {report.get('total_active_stories')}",
+        f"prompts done valid: {report.get('prompts_done_valid')}",
+        f"prompts partial: {report.get('prompts_partial')}",
+        f"prompts missing: {report.get('prompts_missing')}",
+        f"prompts invalid: {report.get('prompts_invalid')}",
+        f"ready_for_runpod: {report.get('ready_for_runpod')}",
+        f"resume_safe: {str(bool(report.get('resume_safe'))).lower()}",
+        f"runpod_safe: {str(bool(report.get('runpod_safe'))).lower()}",
+        "",
+        "| story_id | title | characters | prompts_status | expected | actual | validation | blocker | next_action |",
+        "|---|---|---|---:|---:|---:|---|---|---|",
+    ]
+    for row in report.get("stories", []):
+        lines.append(
+            "| "
+            + " | ".join(
+                str(row.get(key, "")).replace("|", "\\|")
+                for key in ("story_id", "title", "characters_status", "prompts_status", "expected", "actual", "validation", "blocker", "next_action")
+            )
+            + " |"
+        )
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"json": str(json_path), "md": str(md_path)}
+
+
+def run_youtube_prompts_resume_audit(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubePromptsResumeAuditOptions,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import isolated_session
+
+    launch_id = str(options.youtube_run_id or "").strip()
+    if not launch_id:
+        return {"ok": False, "message": "--youtube-run-id is required"}
+    with isolated_session(None, batch_launch_id=launch_id, config=config):
+        stories = [
+            _visual_prompts_status_row(config, story_dir, accept_known_promo_issues=bool(options.accept_known_promo_issues))
+            for story_dir in _iter_launch_story_dirs(config, launch_id)
+        ]
+    active = [row for row in stories if not row["excluded_from_video"]]
+    report: dict[str, Any] = {
+        "ok": True,
+        "launch_id": launch_id,
+        "generated_at": _now_iso(),
+        "total_active_stories": len(active),
+        "prompts_done_valid": sum(1 for row in active if row["prompts_status"] == "done" and row["validation"] == "ok"),
+        "prompts_partial": sum(1 for row in active if row["prompts_status"] == "partial"),
+        "prompts_missing": sum(1 for row in active if row["prompts_status"] == "pending"),
+        "prompts_invalid": sum(1 for row in active if row["prompts_status"] == "failed"),
+        "ready_for_runpod": sum(1 for row in active if row["ready_for_runpod"]),
+        "stories": stories,
+    }
+    report["resume_safe"] = bool(report["prompts_partial"] == 0 and report["prompts_invalid"] == 0)
+    report["runpod_safe"] = bool(report["ready_for_runpod"] == report["total_active_stories"])
+    report["reports"] = _write_prompts_resume_audit_reports(config, launch_id, report)
+    return report
+
+
+def _prompts_progress_root(ctx: Any) -> Path:
+    return ctx.launch_root / "10_Временные_файлы" / "visuals_gemini_batch" / "progress"
+
+
+def _prompts_progress_path(ctx: Any) -> Path:
+    return _prompts_progress_root(ctx) / "visuals_progress.json"
+
+
+def _prompts_batch_manifest_path(ctx: Any) -> Path:
+    return _prompts_progress_root(ctx) / "visuals_batch_manifest.json"
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _read_json_safe(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        data = _read_json(path)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _current_prompt_checkpoint(stage_dir: Path) -> dict[str, Any]:
+    checkpoint_path = stage_dir / "director_checkpoint.json"
+    partial_path = stage_dir / "prompts_list.partial.txt"
+    final_path = stage_dir / "prompts_list.txt"
+    current_chunk = 0
+    total_chunks = 0
+    if checkpoint_path.is_file():
+        try:
+            data = _read_json(checkpoint_path)
+            if isinstance(data, dict):
+                current_chunk = int(data.get("next_chunk_index") or 0)
+                total_chunks = int(data.get("total_chunks") or 0)
+        except Exception:
+            current_chunk = 0
+            total_chunks = 0
+    actual_prompts = 0
+    source = partial_path if partial_path.is_file() else final_path
+    if source.is_file():
+        actual_prompts = len(_load_prompts(source))
+    return {
+        "current_chunk": current_chunk,
+        "total_chunks": total_chunks,
+        "actual_prompts": actual_prompts,
+        "partial_exists": partial_path.is_file(),
+        "tmp_exists": any(stage_dir.glob("*.tmp")),
+        "final_exists": final_path.is_file(),
+        "stage_output_path": str(final_path),
+    }
+
+
+def _validate_prompt_assignments(assignments: dict[str, list[str]], active_story_ids: list[str]) -> list[str]:
+    blockers: list[str] = []
+    seen: dict[str, str] = {}
+    for worker_name, story_ids in assignments.items():
+        for story_id in story_ids:
+            if story_id in seen:
+                blockers.append(f"DUPLICATE_STORY_ASSIGNMENT story={story_id} workers={seen[story_id]},{worker_name}")
+            seen[story_id] = worker_name
+    missing = [story_id for story_id in active_story_ids if story_id not in seen]
+    extra = [story_id for story_id in seen if story_id not in set(active_story_ids)]
+    if missing:
+        blockers.append("missing assignments: " + ", ".join(missing[:10]))
+    if extra:
+        blockers.append("assignment contains non-active stories: " + ", ".join(extra[:10]))
+    if len(seen) != len(active_story_ids):
+        blockers.append(f"assignment count mismatch assigned={len(seen)} active_queue={len(active_story_ids)}")
+    return blockers
+
+
+def _initialize_prompts_progress(
+    *,
+    config: OrchestratorConfig,
+    ctx: Any,
+    launch_id: str,
+    run_session_id: str,
+    selected: list[Path],
+    skipped: list[dict[str, Any]],
+    worker_batches: list[list[tuple[int, Path, str, str]]],
+) -> dict[str, Any]:
+    assignments = {
+        f"worker_{worker_index}": [story_id for _index, _story_dir, story_id, _title in worker_jobs]
+        for worker_index, worker_jobs in enumerate(worker_batches, start=1)
+    }
+    assigned_story_ids = [story_id for worker_jobs in worker_batches for _index, _story_dir, story_id, _title in worker_jobs]
+    blockers = _validate_prompt_assignments(assignments, assigned_story_ids)
+    if blockers:
+        raise RuntimeError("; ".join(blockers))
+    now = _now_iso()
+    stories: dict[str, Any] = {}
+    assignment_lookup = {
+        story_id: f"worker_{worker_index}"
+        for worker_index, worker_jobs in enumerate(worker_batches, start=1)
+        for _index, _story_dir, story_id, _title in worker_jobs
+    }
+    for story_dir in selected:
+        manifest = _load_manifest(story_dir)
+        story_id, title = _story_identity(story_dir, manifest)
+        row = _visual_prompts_status_row(config, story_dir)
+        assigned_worker = assignment_lookup.get(story_id, "already_ready" if row["prompts_status"] == "done" else "")
+        stage_dir = ""
+        if assigned_worker.startswith("worker_"):
+            stage_dir = str(ctx.launch_root / "10_Временные_файлы" / "visuals_gemini_batch" / "prompts" / run_session_id / assigned_worker / story_id)
+        stories[story_id] = {
+            "title": title,
+            "story_dir": str(story_dir),
+            "stage_dir": stage_dir,
+            "assigned_worker": assigned_worker,
+            "status": "pending" if row["prompts_status"] != "done" else "done",
+            "current_chunk": 0,
+            "total_chunks": 0,
+            "expected_prompts": row.get("expected") or 0,
+            "actual_prompts": row.get("actual") or 0,
+            "output_path": row.get("prompts_path", ""),
+            "validation": "ok" if row["prompts_status"] == "done" else "pending",
+            "error": None,
+            "updated_at": now,
+        }
+    initial_done = sum(1 for row in stories.values() if row.get("status") == "done")
+    initial_pending = sum(1 for row in stories.values() if row.get("status") == "pending")
+    payload = {
+        "launch_id": launch_id,
+        "stage": "prompts",
+        "run_session_id": run_session_id,
+        "started_at": now,
+        "updated_at": now,
+        "total_stories": len(_iter_launch_story_dirs(config, launch_id)),
+        "excluded_from_video": sum(1 for row in skipped if row.get("reason") == "excluded_from_video"),
+        "active_queue": len(selected),
+        "prompt_generation_queue": len(assigned_story_ids),
+        "done": initial_done,
+        "failed": 0,
+        "blocked": 0,
+        "partial": 0,
+        "in_progress": 0,
+        "pending": initial_pending,
+        "remaining": initial_pending,
+        "workers": {
+            f"worker_{worker_index}": {
+                "assigned_total": len(worker_jobs),
+                "done": 0,
+                "failed": 0,
+                "partial": 0,
+                "current_story_id": None,
+                "current_title": None,
+                "current_chunk": None,
+                "total_chunks": None,
+                "started_at": None,
+                "updated_at": None,
+            }
+            for worker_index, worker_jobs in enumerate(worker_batches, start=1)
+        },
+        "stories": stories,
+        "last_completed": [],
+        "last_errors": [],
+    }
+    manifest = {
+        "launch_id": launch_id,
+        "stage": "prompts",
+        "run_session_id": run_session_id,
+        "active_queue": len(selected),
+        "prompt_generation_queue": len(assigned_story_ids),
+        "workers": len(worker_batches),
+        "assignments": assignments,
+        "created_at": now,
+    }
+    _atomic_write_json(_prompts_progress_path(ctx), payload)
+    _atomic_write_json(_prompts_batch_manifest_path(ctx), manifest)
+    return payload
+
+
+def reconcile_visuals_progress_from_filesystem(
+    *,
+    config: OrchestratorConfig,
+    launch_id: str,
+    run_session_id: str = "",
+    accept_known_promo_issues: bool = False,
+) -> dict[str, Any]:
+    ctx = build_launch_context(config, launch_id=launch_id)
+    progress = _read_json_safe(_prompts_progress_path(ctx))
+    session = run_session_id or str(progress.get("run_session_id") or "")
+    stories_meta = progress.get("stories") if isinstance(progress.get("stories"), dict) else {}
+    workers = progress.get("workers") if isinstance(progress.get("workers"), dict) else {}
+    if not workers:
+        workers = {}
+    rows: dict[str, Any] = {}
+    counts = {"done": 0, "failed": 0, "blocked": 0, "partial": 0, "in_progress": 0, "pending": 0, "excluded": 0}
+
+    with_progress = bool(stories_meta)
+    story_dirs = _iter_launch_story_dirs(config, launch_id)
+    for story_dir in story_dirs:
+        row = _visual_prompts_status_row(config, story_dir, accept_known_promo_issues=accept_known_promo_issues)
+        story_id = str(row["story_id"])
+        meta = stories_meta.get(story_id) if isinstance(stories_meta.get(story_id), dict) else {}
+        assigned_worker = str(meta.get("assigned_worker") or "")
+        stage_dir = Path(str(meta.get("stage_dir") or ""))
+        if not stage_dir.is_dir() and session and assigned_worker:
+            stage_dir = ctx.launch_root / "10_Временные_файлы" / "visuals_gemini_batch" / "prompts" / session / assigned_worker / story_id
+        checkpoint = _current_prompt_checkpoint(stage_dir) if stage_dir.is_dir() else {}
+        status = str(row["prompts_status"])
+        if status == "done":
+            normalized_status = "done"
+        elif row["excluded_from_video"]:
+            normalized_status = "excluded"
+        elif checkpoint.get("partial_exists") or checkpoint.get("tmp_exists") or checkpoint.get("actual_prompts", 0):
+            normalized_status = "partial"
+        elif status == "in_progress":
+            normalized_status = "in_progress"
+        elif status == "failed":
+            normalized_status = "failed"
+        elif status == "blocked":
+            normalized_status = "blocked"
+        else:
+            normalized_status = "pending"
+        counts[normalized_status] = counts.get(normalized_status, 0) + 1
+        rows[story_id] = {
+            **meta,
+            "story_id": story_id,
+            "title": row["title"],
+            "assigned_worker": assigned_worker or meta.get("assigned_worker"),
+            "status": normalized_status,
+            "current_chunk": checkpoint.get("current_chunk", meta.get("current_chunk", 0)),
+            "total_chunks": checkpoint.get("total_chunks", meta.get("total_chunks", 0)),
+            "expected_prompts": row.get("expected") or meta.get("expected_prompts", 0),
+            "actual_prompts": row.get("actual") or checkpoint.get("actual_prompts", 0),
+            "output_path": row.get("prompts_path") or meta.get("output_path", ""),
+            "validation": row.get("validation", "pending"),
+            "blocker": row.get("blocker", ""),
+            "next_action": row.get("next_action", ""),
+            "updated_at": _now_iso(),
+        }
+
+    active_queue = sum(1 for row in rows.values() if row.get("status") != "excluded") if with_progress else sum(1 for row in rows.values() if row.get("status") != "excluded")
+    done = counts.get("done", 0)
+    failed = counts.get("failed", 0)
+    partial = counts.get("partial", 0)
+    in_progress = counts.get("in_progress", 0)
+    blocked = counts.get("blocked", 0)
+    pending = counts.get("pending", 0)
+    remaining = max(0, active_queue - done - failed - blocked)
+
+    for worker_name, worker in workers.items():
+        assigned = [row for row in rows.values() if row.get("assigned_worker") == worker_name]
+        active = next((row for row in assigned if row.get("status") in {"in_progress", "partial"} and row.get("current_chunk")), None)
+        worker.update(
+            {
+                "assigned_total": len(assigned) or int(worker.get("assigned_total") or 0),
+                "done": sum(1 for row in assigned if row.get("status") == "done"),
+                "failed": sum(1 for row in assigned if row.get("status") == "failed"),
+                "partial": sum(1 for row in assigned if row.get("status") == "partial"),
+                "current_story_id": active.get("story_id") if active else worker.get("current_story_id"),
+                "current_title": active.get("title") if active else worker.get("current_title"),
+                "current_chunk": active.get("current_chunk") if active else worker.get("current_chunk"),
+                "total_chunks": active.get("total_chunks") if active else worker.get("total_chunks"),
+                "updated_at": _now_iso(),
+            }
+        )
+
+    progress.update(
+        {
+            "launch_id": launch_id,
+            "stage": "prompts",
+            "run_session_id": session,
+            "started_at": progress.get("started_at") or _now_iso(),
+            "updated_at": _now_iso(),
+            "total_stories": len(story_dirs),
+            "excluded_from_video": counts.get("excluded", 0),
+            "active_queue": active_queue,
+            "done": done,
+            "failed": failed,
+            "blocked": blocked,
+            "partial": partial,
+            "in_progress": in_progress,
+            "pending": pending,
+            "remaining": remaining,
+            "workers": workers,
+            "stories": rows,
+            "ready_for_runpod": sum(1 for row in rows.values() if row.get("status") == "done"),
+            "not_ready_for_runpod": sum(1 for row in rows.values() if row.get("status") not in {"done", "excluded"}),
+        }
+    )
+    _atomic_write_json(_prompts_progress_path(ctx), progress)
+    return progress
+
+
+def _render_prompts_progress(progress: dict[str, Any]) -> None:
+    print("================ PROMPTS PROGRESS ================", flush=True)
+    print(f"launch_id: {progress.get('launch_id')}", flush=True)
+    print(f"session: {progress.get('run_session_id')}", flush=True)
+    print(f"active queue:   {progress.get('active_queue', 0)}", flush=True)
+    for key in ("done", "failed", "partial", "in_progress", "pending", "remaining"):
+        print(f"{key + ':':16}{progress.get(key, 0)}", flush=True)
+    workers = progress.get("workers") if isinstance(progress.get("workers"), dict) else {}
+    for worker_name in sorted(workers):
+        worker = workers[worker_name]
+        title = worker.get("current_title") or "idle"
+        chunk = f"{worker.get('current_chunk') or 0}/{worker.get('total_chunks') or 0}"
+        assigned_total = int(worker.get("assigned_total") or 0)
+        worker_remaining = max(0, assigned_total - int(worker.get("done") or 0) - int(worker.get("failed") or 0))
+        print(
+            f"{worker_name}: {title} | chunk {chunk} | assigned {assigned_total} | "
+            f"done {worker.get('done', 0)} | failed {worker.get('failed', 0)} | remaining {worker_remaining}",
+            flush=True,
+        )
+    last_completed = progress.get("last_completed") if isinstance(progress.get("last_completed"), list) else []
+    last_errors = progress.get("last_errors") if isinstance(progress.get("last_errors"), list) else []
+    print("last completed:", flush=True)
+    for item in last_completed[-3:] or ["none"]:
+        print(f"- {item}", flush=True)
+    print("last errors:", flush=True)
+    for item in last_errors[-3:] or ["none"]:
+        print(f"- {item}", flush=True)
+    print("==================================================", flush=True)
+
+
+def run_youtube_prompts_progress_status(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubePromptsProgressStatusOptions,
+) -> dict[str, Any]:
+    launch_id = str(options.youtube_run_id or "").strip()
+    if not launch_id:
+        return {"ok": False, "message": "--youtube-run-id is required"}
+    progress = reconcile_visuals_progress_from_filesystem(
+        config=config,
+        launch_id=launch_id,
+        run_session_id=str(options.run_session_id or "").strip(),
+        accept_known_promo_issues=bool(options.accept_known_promo_issues),
+    )
+    stories = progress.get("stories") if isinstance(progress.get("stories"), dict) else {}
+    return {
+        "ok": True,
+        **progress,
+        "stories_list": list(stories.values()),
+    }
 
 
 def _video_segments_status(story_dir: Path) -> dict[str, Any]:
@@ -702,7 +1492,12 @@ def run_youtube_visuals_launch_status(
             prompts = _load_prompts(prompts_path)
             frames = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
             audio_ready = _audio_ready_for_video(story_dir, manifest)
-            visual_prompt_ready = _is_nonempty(prompts_path)
+            prompts_row = _visual_prompts_status_row(
+                config,
+                story_dir,
+                accept_known_promo_issues=bool(options.accept_known_promo_issues),
+            )
+            visual_prompt_ready = bool(prompts_row["ready_for_runpod"])
             images_ready = int(frames.get("expected") or 0) > 0 and int(frames.get("pending") or 0) == 0 and int(frames.get("failed") or 0) == 0
             if excluded:
                 blocker = "excluded_from_video"
@@ -714,8 +1509,8 @@ def run_youtube_visuals_launch_status(
                 blocker = "missing 05_characters/characters.txt"
                 next_action = "run visuals-run --execute --auto-gemini to generate characters automatically"
             elif not visual_prompt_ready:
-                blocker = "missing 06_prompts/prompts_list.txt"
-                next_action = "run visuals-run --execute --auto-gemini to generate director prompts automatically"
+                blocker = str(prompts_row["blocker"])
+                next_action = str(prompts_row["next_action"])
             elif not images_ready:
                 blocker = "ready_for_runpod"
                 next_action = "start RunPod, run visuals-run --execute --auto-gemini, then paste URL"
@@ -731,6 +1526,12 @@ def run_youtube_visuals_launch_status(
                 "exclude_reason": str(manifest.get("exclude_reason") or ""),
                 "promo_issues_accepted": promo_accepted,
                 "audio_ready": audio_ready,
+                "characters_status": prompts_row["characters_status"],
+                "prompts_status": prompts_row["prompts_status"],
+                "expected_prompts": prompts_row["expected"],
+                "actual_prompts": prompts_row["actual"],
+                "prompts_validation": prompts_row["validation"],
+                "ready_for_runpod": prompts_row["ready_for_runpod"],
                 "visual_prompt_ready": visual_prompt_ready,
                 "images_ready": images_ready,
                 "frames_expected": int(frames.get("expected") or 0),
@@ -749,6 +1550,14 @@ def run_youtube_visuals_launch_status(
         "ready_for_video": sum(1 for row in active_rows if row["audio_ready"]),
         "audio_ready": sum(1 for row in active_rows if row["audio_ready"]),
         "visual_prompts_ready": sum(1 for row in active_rows if row["visual_prompt_ready"]),
+        "prompts": {
+            "done": sum(1 for row in active_rows if row.get("prompts_status") == "done"),
+            "partial": sum(1 for row in active_rows if row.get("prompts_status") == "partial"),
+            "failed": sum(1 for row in active_rows if row.get("prompts_status") == "failed"),
+            "pending": sum(1 for row in active_rows if row.get("prompts_status") == "pending"),
+            "in_progress": sum(1 for row in active_rows if row.get("prompts_status") == "in_progress"),
+            "ready_for_runpod": sum(1 for row in active_rows if row.get("ready_for_runpod")),
+        },
         "images_ready": sum(1 for row in active_rows if row["images_ready"]),
         "blocked": sum(1 for row in active_rows if row["blocker"] and row["blocker"] != "ready_for_runpod"),
         "pending": sum(1 for row in active_rows if row["audio_ready"] and not row["visual_prompt_ready"]),
@@ -908,7 +1717,10 @@ def run_youtube_visuals_run_all(
                     flush=True,
                 )
                 if label == "FAILED":
-                    print(f"[{index}/{active_queue_count}] FAILED reason={batch_result.get('next_action') or batch_result.get('status')}", flush=True)
+                    print(
+                        f"[{index}/{active_queue_count}] FAILED reason={_terminal_safe(batch_result.get('next_action') or batch_result.get('status'))}",
+                        flush=True,
+                    )
                 results.append(
                     {
                         "stage": "characters",
@@ -950,6 +1762,8 @@ def run_youtube_visuals_run_all(
             print("================ PHASE 2: PROMPTS =======================", flush=True)
             prompt_workers = max(1, int(options.workers or 1))
             print(f"prompt_workers:       {prompt_workers}", flush=True)
+            run_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            print(f"run_session_id:       {run_session_id}", flush=True)
             prompt_progress = {"done": 0, "failed": 0, "blocked": 0, "skipped": 0}
             prompt_jobs: list[tuple[int, Path, str, str]] = []
             for index, story_dir in enumerate(selected, start=1):
@@ -957,6 +1771,21 @@ def run_youtube_visuals_run_all(
                 story_id, title = _story_identity(story_dir, manifest)
                 before = _story_visual_readiness(config, story_dir, story_id)
                 story_started = time.monotonic()
+                if not before["prompts_ready"] and options.execute:
+                    recovery = _recover_temp_prompts_output(
+                        config=config,
+                        ctx=ctx,
+                        story_id=story_id,
+                        story_dir=story_dir,
+                        execute=bool(options.execute),
+                    )
+                    if recovery.get("ok"):
+                        before = _story_visual_readiness(config, story_dir, story_id)
+                        print(
+                            f"[{index}/{active_queue_count}] RECOVER prompts: {story_id} / {title} | "
+                            f"source={recovery.get('source')}",
+                            flush=True,
+                        )
                 if before["prompts_ready"]:
                     prompt_progress["done"] += 1
                     prompt_progress["skipped"] += 1
@@ -991,6 +1820,14 @@ def run_youtube_visuals_run_all(
                         flush=True,
                     )
                 else:
+                    prompt_validation = before.get("prompts_validation") if isinstance(before.get("prompts_validation"), dict) else {}
+                    if prompt_validation.get("status") == "partial":
+                        print(
+                            f"[{index}/{active_queue_count}] RESUME prompts: {story_id} / {title} | "
+                            f"previous_partial={prompt_validation.get('prompts_count', 0)}/{_prompt_estimate(story_dir) or '?'} | "
+                            "action=regenerate_from_story_start",
+                            flush=True,
+                        )
                     prompt_jobs.append((index, story_dir, story_id, title))
 
             if prompt_jobs:
@@ -999,7 +1836,7 @@ def run_youtube_visuals_run_all(
                         prompt_progress["done"] += 1
                         print(
                             f"[{index}/{active_queue_count}] DRY-RUN prompts: {story_id} / {title} | "
-                            f"bot=gemini_director | worker={(job_number - 1) % prompt_workers + 1}/{prompt_workers} | prompts=missing",
+                            f"bot=gemini_director | worker={(job_number - 1) % prompt_workers + 1}/{prompt_workers} | prompts={_story_visual_readiness(config, story_dir, story_id)['prompts_status']}",
                             flush=True,
                         )
                         results.append(
@@ -1023,14 +1860,34 @@ def run_youtube_visuals_run_all(
                         )
                 else:
                     worker_count = min(prompt_workers, len(prompt_jobs))
+                    _prepare_prompt_worker_profiles(config, worker_count)
                     worker_batches: list[list[tuple[int, Path, str, str]]] = [[] for _ in range(worker_count)]
                     for job_number, job in enumerate(prompt_jobs):
                         worker_batches[job_number % worker_count].append(job)
+                    progress_payload = _initialize_prompts_progress(
+                        config=config,
+                        ctx=ctx,
+                        launch_id=launch_id,
+                        run_session_id=run_session_id,
+                        selected=selected,
+                        skipped=skipped,
+                        worker_batches=worker_batches,
+                    )
+                    print(f"visuals_progress_path: {_prompts_progress_path(ctx)}", flush=True)
+                    print(f"visuals_batch_manifest_path: {_prompts_batch_manifest_path(ctx)}", flush=True)
+                    _render_prompts_progress(progress_payload)
                     future_map = {}
                     with ThreadPoolExecutor(max_workers=prompt_workers) as executor:
                         for worker_index, worker_jobs in enumerate(worker_batches, start=1):
                             if not worker_jobs:
                                 continue
+                            if worker_index > 1:
+                                print(
+                                    f"[worker {worker_index}/{worker_count}] stagger start +45s "
+                                    "so previous browser can initialize",
+                                    flush=True,
+                                )
+                                time.sleep(45)
                             print(
                                 f"[worker {worker_index}/{worker_count}] START prompts browser | stories={len(worker_jobs)} | "
                                 "one story per dialog, browser reused between stories",
@@ -1041,6 +1898,7 @@ def run_youtube_visuals_run_all(
                                 / "10_Временные_файлы"
                                 / "visuals_gemini_batch"
                                 / "prompts"
+                                / run_session_id
                                 / f"worker_{worker_index}"
                             )
                             batch_stories = [
@@ -1051,6 +1909,49 @@ def run_youtube_visuals_run_all(
                                 )
                                 for _index, story_dir, story_id, _title in worker_jobs
                             ]
+                            for _index, story_dir, _story_id, _title in worker_jobs:
+                                worker_name = f"worker_{worker_index}"
+                                _update_manifest_dict(
+                                    story_dir,
+                                    {
+                                        "visual_prompts": {
+                                            "status": "in_progress",
+                                            "started_at": _now_iso(),
+                                            "updated_at": _now_iso(),
+                                            "worker_id": worker_index,
+                                            "expected_prompts": _prompt_estimate(story_dir),
+                                            "actual_prompts": 0,
+                                            "validation": "pending",
+                                            "error": None,
+                                        },
+                                        "pipeline_stage_status": {"scenes_prompts": "in_progress", "director_prompts": "in_progress"},
+                                    },
+                                )
+                                current_progress = _read_json_safe(_prompts_progress_path(ctx))
+                                stories_progress = current_progress.get("stories") if isinstance(current_progress.get("stories"), dict) else {}
+                                if isinstance(stories_progress.get(_story_id), dict):
+                                    stories_progress[_story_id].update(
+                                        {
+                                            "status": "in_progress",
+                                            "assigned_worker": worker_name,
+                                            "stage_dir": str(worker_root / _story_id),
+                                            "updated_at": _now_iso(),
+                                        }
+                                    )
+                                workers_progress = current_progress.get("workers") if isinstance(current_progress.get("workers"), dict) else {}
+                                if isinstance(workers_progress.get(worker_name), dict):
+                                    workers_progress[worker_name].update(
+                                        {
+                                            "current_story_id": _story_id,
+                                            "current_title": _title,
+                                            "started_at": workers_progress[worker_name].get("started_at") or _now_iso(),
+                                            "updated_at": _now_iso(),
+                                        }
+                                    )
+                                current_progress["stories"] = stories_progress
+                                current_progress["workers"] = workers_progress
+                                current_progress["updated_at"] = _now_iso()
+                                _atomic_write_json(_prompts_progress_path(ctx), current_progress)
                             future = executor.submit(
                                 _run_prompts_worker_batch,
                                 config=config,
@@ -1069,20 +1970,13 @@ def run_youtube_visuals_run_all(
                                 return_when=FIRST_COMPLETED,
                             )
                             if not done_futures:
-                                active = []
-                                for running_future in pending_futures:
-                                    worker_index, worker_jobs, worker_started = future_map[running_future]
-                                    active.append(
-                                        f"worker={worker_index}/{worker_count} stories={len(worker_jobs)} "
-                                        f"elapsed={_fmt_elapsed(time.monotonic() - worker_started)}"
-                                    )
-                                print(
-                                    "PROMPTS ACTIVE: "
-                                    + " | ".join(active)
-                                    + f" | done={prompt_progress['done']} failed={prompt_progress['failed']} "
-                                    + f"remaining={len(prompt_jobs) - completed}",
-                                    flush=True,
+                                progress_payload = reconcile_visuals_progress_from_filesystem(
+                                    config=config,
+                                    launch_id=launch_id,
+                                    run_session_id=run_session_id,
+                                    accept_known_promo_issues=bool(options.accept_known_promo_issues),
                                 )
+                                _render_prompts_progress(progress_payload)
                                 continue
                             for future in done_futures:
                                 worker_index, worker_jobs, worker_started = future_map[future]
@@ -1104,21 +1998,103 @@ def run_youtube_visuals_run_all(
                                 for index, story_dir, story_id, title in worker_jobs:
                                     after = _story_visual_readiness(config, story_dir, story_id)
                                     if after["prompts_ready"]:
+                                        validation = after.get("prompts_validation") if isinstance(after.get("prompts_validation"), dict) else {}
+                                        actual_prompts = int(validation.get("prompts_count") or len(_load_prompts(_prompts_path(config, story_id, story_dir))) or 0)
+                                        completed_at = _now_iso()
+                                        _update_manifest_dict(
+                                            story_dir,
+                                            {
+                                                "status": {"director_done": True},
+                                                "pipeline_stage_status": {"scenes_prompts": "done", "director_prompts": "done"},
+                                                "visual_prompts": {
+                                                    "status": "done",
+                                                    "started_at": None,
+                                                    "updated_at": completed_at,
+                                                    "completed_at": completed_at,
+                                                    "attempts": 1,
+                                                    "worker_id": worker_index,
+                                                    "expected_prompts": actual_prompts,
+                                                    "actual_prompts": actual_prompts,
+                                                    "validation": "ok",
+                                                    "error": None,
+                                                    "path": str(_prompts_path(config, story_id, story_dir)),
+                                                },
+                                            },
+                                        )
                                         prompt_progress["done"] += 1
                                         label = "DONE"
                                         ok = True
                                     else:
+                                        validation = after.get("prompts_validation") if isinstance(after.get("prompts_validation"), dict) else {}
+                                        partial_status = str(validation.get("status") or after.get("prompts_status") or "failed")
+                                        _update_manifest_dict(
+                                            story_dir,
+                                            {
+                                                "visual_prompts": {
+                                                    "status": "partial" if partial_status == "partial" else "failed",
+                                                    "updated_at": _now_iso(),
+                                                    "worker_id": worker_index,
+                                                    "expected_prompts": _prompt_estimate(story_dir),
+                                                    "actual_prompts": int(validation.get("prompts_count") or 0),
+                                                    "validation": "failed",
+                                                    "error": str(batch_result.get("next_action") or batch_result.get("status") or partial_status),
+                                                },
+                                                "pipeline_stage_status": {"scenes_prompts": partial_status, "director_prompts": partial_status},
+                                            },
+                                        )
                                         prompt_progress["failed"] += 1
-                                        label = "FAILED"
+                                        label = "PARTIAL" if after["prompts_status"] == "partial" else "FAILED"
                                         ok = False
+                                    progress_payload = reconcile_visuals_progress_from_filesystem(
+                                        config=config,
+                                        launch_id=launch_id,
+                                        run_session_id=run_session_id,
+                                        accept_known_promo_issues=bool(options.accept_known_promo_issues),
+                                    )
+                                    progress_stories = progress_payload.get("stories") if isinstance(progress_payload.get("stories"), dict) else {}
+                                    progress_workers = progress_payload.get("workers") if isinstance(progress_payload.get("workers"), dict) else {}
+                                    if isinstance(progress_stories.get(story_id), dict):
+                                        progress_stories[story_id].update(
+                                            {
+                                                "status": "done" if ok else ("partial" if label == "PARTIAL" else "failed"),
+                                                "validation": "ok" if ok else "failed",
+                                                "error": None if ok else str(batch_result.get("next_action") or batch_result.get("status") or ""),
+                                                "updated_at": _now_iso(),
+                                            }
+                                        )
+                                    worker_name = f"worker_{worker_index}"
+                                    if isinstance(progress_workers.get(worker_name), dict):
+                                        progress_workers[worker_name].update(
+                                            {
+                                                "current_story_id": None,
+                                                "current_title": None,
+                                                "current_chunk": None,
+                                                "total_chunks": None,
+                                                "updated_at": _now_iso(),
+                                            }
+                                        )
+                                    if ok:
+                                        completed_items = progress_payload.get("last_completed") if isinstance(progress_payload.get("last_completed"), list) else []
+                                        completed_items.append(title)
+                                        progress_payload["last_completed"] = completed_items[-10:]
+                                    elif label == "FAILED":
+                                        error_items = progress_payload.get("last_errors") if isinstance(progress_payload.get("last_errors"), list) else []
+                                        error_items.append(f"{story_id}: {batch_result.get('next_action') or batch_result.get('status')}")
+                                        progress_payload["last_errors"] = error_items[-10:]
+                                    progress_payload["stories"] = progress_stories
+                                    progress_payload["workers"] = progress_workers
+                                    progress_payload["updated_at"] = _now_iso()
+                                    _atomic_write_json(_prompts_progress_path(ctx), progress_payload)
                                     print(
                                         f"[{index}/{active_queue_count}] {label} prompts: {story_id} / {title} | "
-                                        f"characters={after['characters_status']} | prompts={after['prompts_status']} | elapsed={elapsed}",
+                                        f"characters={after['characters_status']} | prompts={after['prompts_status']} | "
+                                        f"generated={(after.get('prompts_validation') or {}).get('prompts_count', 0)}/{_prompt_estimate(story_dir) or '?'} | "
+                                        f"validation={(after.get('prompts_validation') or {}).get('status', 'failed')} | elapsed={elapsed}",
                                         flush=True,
                                     )
                                     if label == "FAILED":
                                         print(
-                                            f"[{index}/{active_queue_count}] FAILED reason={batch_result.get('next_action') or batch_result.get('status')}",
+                                            f"[{index}/{active_queue_count}] FAILED reason={_terminal_safe(batch_result.get('next_action') or batch_result.get('status'))}",
                                             flush=True,
                                         )
                                     results.append(
@@ -1135,29 +2111,58 @@ def run_youtube_visuals_run_all(
                                     )
                                     completed += 1
                                     pending = len(prompt_jobs) - completed
-                                    print(
-                                        "PROMPTS PROGRESS: "
-                                        f"done={prompt_progress['done']} failed={prompt_progress['failed']} blocked={prompt_progress['blocked']} "
-                                        f"pending={pending} remaining={pending}",
-                                        flush=True,
+                                    progress_payload = reconcile_visuals_progress_from_filesystem(
+                                        config=config,
+                                        launch_id=launch_id,
+                                        run_session_id=run_session_id,
+                                        accept_known_promo_issues=bool(options.accept_known_promo_issues),
                                     )
+                                    _render_prompts_progress(progress_payload)
 
             prompts_missing = []
             frames_queue = []
+            print("================ RUNPOD_PROMPTS_PREFLIGHT ==============", flush=True)
             for story_dir in selected:
                 manifest = _load_manifest(story_dir)
                 story_id, title = _story_identity(story_dir, manifest)
                 readiness = _story_visual_readiness(config, story_dir, story_id)
                 if not readiness["prompts_ready"]:
-                    prompts_missing.append({"story_id": story_id, "title": title})
+                    validation = readiness.get("prompts_validation") if isinstance(readiness.get("prompts_validation"), dict) else {}
+                    prompts_missing.append(
+                        {
+                            "story_id": story_id,
+                            "title": title,
+                            "status": readiness.get("prompts_status"),
+                            "actual": validation.get("prompts_count", 0),
+                            "expected": _prompt_estimate(story_dir),
+                        }
+                    )
+                    print(
+                        f"{story_id}: BLOCKED prompts_status={readiness.get('prompts_status')} "
+                        f"actual={validation.get('prompts_count', 0)} expected={_prompt_estimate(story_dir) or '?'}",
+                        flush=True,
+                    )
                 else:
                     frames_queue.append((story_dir, story_id, title))
+                    validation = readiness.get("prompts_validation") if isinstance(readiness.get("prompts_validation"), dict) else {}
+                    print(
+                        f"{story_id}: OK prompts_status=done validation=ok actual={validation.get('prompts_count', 0)}",
+                        flush=True,
+                    )
+            print(f"RUNPOD_PROMPTS_PREFLIGHT ready={len(frames_queue)} blocked={len(prompts_missing)}", flush=True)
 
             if prompts_missing:
                 print("================ PHASE 3: RUNPOD SKIPPED ================", flush=True)
                 print(f"reason=prompts_not_ready missing_prompts={len(prompts_missing)}", flush=True)
                 for row in prompts_missing:
-                    print(f"- {row.get('story_id')} / {row.get('title')} -> missing prompts", flush=True)
+                    print(
+                        f"- {row.get('story_id')} / {row.get('title')} -> prompts_status={row.get('status')} "
+                        f"actual={row.get('actual')} expected={row.get('expected') or '?'}",
+                        flush=True,
+                    )
+            elif options.prompts_only:
+                print("================ PHASE 3: SKIPPED BY --prompts-only =====", flush=True)
+                print("reason=prompts_only_no_runpod_no_frames", flush=True)
             else:
                 print("================ PHASE 3: RUNPOD / FRAMES ===============", flush=True)
                 runpod_url = str(options.runpod_url or "").strip()
@@ -1927,6 +2932,28 @@ def run_youtube_visuals_run(
         stages.append(_stage_row("frames", "blocked_missing_prompts", "prompts are missing or empty"))
         blockers.append("blocked_missing_prompts")
         return finish("blocked", "import prompts_list.txt first")
+
+    completed_at = _now_iso()
+    _update_manifest_dict(
+        story_dir,
+        {
+            "status": {"director_done": True},
+            "pipeline_stage_status": {"scenes_prompts": "done", "director_prompts": "done"},
+            "visual_prompts": {
+                "status": "done",
+                "started_at": None,
+                "updated_at": completed_at,
+                "completed_at": completed_at,
+                "attempts": 1,
+                "worker_id": None,
+                "expected_prompts": len(prompts),
+                "actual_prompts": len(prompts),
+                "validation": "ok",
+                "error": None,
+                "path": str(prompts_path),
+            },
+        },
+    )
 
     frames_status = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
 
