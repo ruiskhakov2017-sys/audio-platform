@@ -69,6 +69,7 @@ _ADULT_AGE_RANGE_RE = re.compile(
 class YoutubeVisualsCleanOptions:
     story_id: str
     execute: bool = False
+    youtube_run_id: str = ""
 
 
 def _now_iso() -> str:
@@ -88,7 +89,13 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8", errors="replace"))
 
 
-def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
+def _story_dir(config: OrchestratorConfig, story_id: str, *, launch_id: str | None = None) -> Path:
+    from orchestrator.isolated_launch_context import get_batch_launch_id
+    from orchestrator.youtube_path_resolver import resolve_youtube_technical_story_dir
+
+    lid = (launch_id or get_batch_launch_id() or "").strip() or None
+    if lid:
+        return resolve_youtube_technical_story_dir(config, story_id, launch_id=lid)
     return (config.root_dir / "output" / "youtube" / story_id).resolve()
 
 
@@ -148,8 +155,8 @@ def _is_protected_output_path(path: Path, story_dir: Path) -> bool:
     return any(_is_under(path, root) for root in _protected_roots(story_dir))
 
 
-def _fixed_cleanup_files(config: OrchestratorConfig, story_id: str) -> list[tuple[str, Path, str]]:
-    story_dir = _story_dir(config, story_id)
+def _fixed_cleanup_files(config: OrchestratorConfig, story_id: str, *, launch_id: str | None = None) -> list[tuple[str, Path, str]]:
+    story_dir = _story_dir(config, story_id, launch_id=launch_id)
     items: list[tuple[str, Path, str]] = [
         ("output", story_dir / "05_characters" / "characters.txt", "active output characters can be reused by visuals-run"),
         ("output", story_dir / "06_prompts" / "prompts_list.txt", "active output prompts can be reused by frames-runpod"),
@@ -416,9 +423,9 @@ def run_youtube_visuals_clean(
     options: YoutubeVisualsCleanOptions,
 ) -> dict[str, Any]:
     story_id = str(options.story_id).strip()
-    story_dir = _story_dir(config, story_id)
+    story_dir = _story_dir(config, story_id, launch_id=options.youtube_run_id or None)
     quarantine_dir = story_dir / f"_visuals_clean_quarantine_{_timestamp()}"
-    fixed = _fixed_cleanup_files(config, story_id)
+    fixed = _fixed_cleanup_files(config, story_id, launch_id=options.youtube_run_id or None)
     candidates: dict[str, tuple[str, Path, str]] = {}
     for label, path, reason in fixed:
         candidates[str(path.resolve()).lower()] = (label, path, reason)

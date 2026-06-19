@@ -214,7 +214,7 @@ def run_youtube_diagnose_cleaned_paths(*, config: OrchestratorConfig, site_run_i
         if isinstance(item, dict):
             diag_rows.append(_collect_diagnostic_row(config.root_dir, site_run_id, item))
 
-    diag_dir = _youtube_run_root(config.root_dir, youtube_run_id) / "_diagnostics"
+    diag_dir = _youtube_run_root(config.root_dir, youtube_run_id, config=config) / "_diagnostics"
     _write_json(diag_dir / "cleaned_path_diagnostics.json", {"items": diag_rows})
     lines: list[str] = [
         f"site_run_id={site_run_id}",
@@ -266,24 +266,28 @@ def _deferred_path(root_dir: Path, site_run_id: str) -> Path:
     return (root_dir / "runs" / "site" / site_run_id / "_phase_a" / "ready_queues" / "deferred.json").resolve()
 
 
-def _youtube_run_root(root_dir: Path, youtube_run_id: str) -> Path:
+def _youtube_run_root(root_dir: Path, youtube_run_id: str, *, config: OrchestratorConfig | None = None) -> Path:
+    if config is not None:
+        from orchestrator.youtube_path_resolver import resolve_youtube_run_root
+
+        return resolve_youtube_run_root(config, youtube_run_id)
     return (root_dir / "runs" / "youtube" / youtube_run_id).resolve()
 
 
-def _selection_dir(root_dir: Path, youtube_run_id: str) -> Path:
-    return _youtube_run_root(root_dir, youtube_run_id) / "_selection"
+def _selection_dir(root_dir: Path, youtube_run_id: str, *, config: OrchestratorConfig | None = None) -> Path:
+    return _youtube_run_root(root_dir, youtube_run_id, config=config) / "_selection"
 
 
-def _gemini_selection_dir(root_dir: Path, youtube_run_id: str) -> Path:
-    return _youtube_run_root(root_dir, youtube_run_id) / "_gemini_selection"
+def _gemini_selection_dir(root_dir: Path, youtube_run_id: str, *, config: OrchestratorConfig | None = None) -> Path:
+    return _youtube_run_root(root_dir, youtube_run_id, config=config) / "_gemini_selection"
 
 
-def _gemini_safe_dir(root_dir: Path, youtube_run_id: str) -> Path:
-    return _youtube_run_root(root_dir, youtube_run_id) / "_gemini_safe"
+def _gemini_safe_dir(root_dir: Path, youtube_run_id: str, *, config: OrchestratorConfig | None = None) -> Path:
+    return _youtube_run_root(root_dir, youtube_run_id, config=config) / "_gemini_safe"
 
 
-def _youtube_selection_report_path(root_dir: Path, youtube_run_id: str) -> Path:
-    return _youtube_run_root(root_dir, youtube_run_id) / "youtube_selection_workflow_report.txt"
+def _youtube_selection_report_path(root_dir: Path, youtube_run_id: str, *, config: OrchestratorConfig | None = None) -> Path:
+    return _youtube_run_root(root_dir, youtube_run_id, config=config) / "youtube_selection_workflow_report.txt"
 
 
 def _write_selection_workflow_report(path: Path, lines: list[str]) -> None:
@@ -370,7 +374,7 @@ def run_youtube_prefilter_from_site(*, config: OrchestratorConfig, options: Yout
     if not items:
         return {"ok": False, "message": f"deferred manifest is empty: {deferred_json}"}
 
-    run_root = _youtube_run_root(config.root_dir, youtube_run_id)
+    run_root = _youtube_run_root(config.root_dir, youtube_run_id, config=config)
     selection_dir = _selection_dir(config.root_dir, youtube_run_id)
     gem_sel = _gemini_selection_dir(config.root_dir, youtube_run_id)
     gem_safe = _gemini_safe_dir(config.root_dir, youtube_run_id)
@@ -606,7 +610,7 @@ def run_youtube_prepare_gemini_selection_input(
     if not youtube_run_id:
         return {"ok": False, "message": "youtube_run_id is required"}
 
-    run_root = _youtube_run_root(config.root_dir, youtube_run_id)
+    run_root = _youtube_run_root(config.root_dir, youtube_run_id, config=config)
     selection_dir = _selection_dir(config.root_dir, youtube_run_id)
     status_jsonl = run_root / "youtube_status.jsonl"
     yes_json = selection_dir / "youtube_size_yes.json"
@@ -721,7 +725,7 @@ def run_youtube_parse_gemini_selection(
     youtube_run_id = str(options.youtube_run_id).strip()
     if not youtube_run_id:
         return {"ok": False, "message": "youtube_run_id is required"}
-    run_root = _youtube_run_root(config.root_dir, youtube_run_id)
+    run_root = _youtube_run_root(config.root_dir, youtube_run_id, config=config)
     selection_dir = _selection_dir(config.root_dir, youtube_run_id)
     gem_sel = _gemini_selection_dir(config.root_dir, youtube_run_id)
     status_jsonl = run_root / "youtube_status.jsonl"
@@ -842,7 +846,7 @@ def run_youtube_prepare_safe_input(*, config: OrchestratorConfig, options: Youtu
     youtube_run_id = str(options.youtube_run_id).strip()
     if not youtube_run_id:
         return {"ok": False, "message": "youtube_run_id is required"}
-    run_root = _youtube_run_root(config.root_dir, youtube_run_id)
+    run_root = _youtube_run_root(config.root_dir, youtube_run_id, config=config)
     selection_dir = _selection_dir(config.root_dir, youtube_run_id)
     gem_safe = _gemini_safe_dir(config.root_dir, youtube_run_id)
     status_jsonl = run_root / "youtube_status.jsonl"
@@ -863,7 +867,13 @@ def run_youtube_prepare_safe_input(*, config: OrchestratorConfig, options: Youtu
     prepared_items: list[dict[str, Any]] = []
     created = 0
     skipped = 0
-    output_youtube_root = (config.root_dir / "output" / "youtube").resolve()
+    from orchestrator.youtube_path_resolver import (
+        assert_youtube_production_write_allowed,
+        legacy_global_youtube_story_root,
+        resolve_youtube_technical_story_dir,
+    )
+
+    output_youtube_root = legacy_global_youtube_story_root(config)
 
     for row in items:
         if not isinstance(row, dict):
@@ -884,7 +894,7 @@ def run_youtube_prepare_safe_input(*, config: OrchestratorConfig, options: Youtu
             )
             created += 1
 
-        story_root = output_youtube_root / canonical
+        story_root = resolve_youtube_technical_story_dir(config, canonical, launch_id=youtube_run_id)
         # Bridge layout (фактическая цепочка); старые 03_chunks…07_video не удаляем, только добавляем новые имена.
         for rel in (
             "00_source",
@@ -898,7 +908,15 @@ def run_youtube_prepare_safe_input(*, config: OrchestratorConfig, options: Youtu
             "08_video",
             "logs",
         ):
-            (story_root / rel).mkdir(parents=True, exist_ok=True)
+            stage_path = story_root / rel
+            assert_youtube_production_write_allowed(
+                config,
+                stage_path,
+                youtube_run_id=youtube_run_id,
+                module="orchestrator.youtube_from_site",
+                function="run_youtube_prepare_safe_input",
+            )
+            stage_path.mkdir(parents=True, exist_ok=True)
 
         source_ref = story_root / "00_source" / "source_ref.json"
         if (not source_ref.exists()) or options.force:
@@ -990,6 +1008,7 @@ def run_youtube_prepare_safe_input(*, config: OrchestratorConfig, options: Youtu
         "safe_output_dir": str(safe_output_dir),
         "safe_parsed_dir": str(safe_parsed_dir),
         "output_youtube_root": str(output_youtube_root),
+        "output_story_root_mode": "launch_03_youtube",
         "status_jsonl": str(status_jsonl),
     }
 
@@ -1004,7 +1023,7 @@ def run_youtube_selection_from_site(
     if not youtube_run_id:
         return {"ok": False, "message": "youtube_run_id is required"}
 
-    run_root = _youtube_run_root(config.root_dir, youtube_run_id)
+    run_root = _youtube_run_root(config.root_dir, youtube_run_id, config=config)
     status_jsonl = run_root / "youtube_status.jsonl"
     report_path = _youtube_selection_report_path(config.root_dir, youtube_run_id)
 
@@ -1148,7 +1167,7 @@ def run_youtube_continue_after_selection(
     if not youtube_run_id:
         return {"ok": False, "message": "youtube_run_id is required"}
 
-    run_root = _youtube_run_root(config.root_dir, youtube_run_id)
+    run_root = _youtube_run_root(config.root_dir, youtube_run_id, config=config)
     status_jsonl = run_root / "youtube_status.jsonl"
     report_path = _youtube_selection_report_path(config.root_dir, youtube_run_id)
 

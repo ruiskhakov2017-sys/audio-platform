@@ -158,6 +158,7 @@ from orchestrator.youtube_visuals_bridge import (
     run_youtube_frames_runpod_bridge,
 )
 from orchestrator.youtube_visuals_runner import (
+    YoutubeGeminiPreflightAccountsOptions,
     YoutubeGeminiWorkersOptions,
     YoutubePromptsProgressStatusOptions,
     YoutubePromptsResumeAuditOptions,
@@ -167,6 +168,7 @@ from orchestrator.youtube_visuals_runner import (
     YoutubeVisualsStatusOptions,
     mark_story_excluded_from_video,
     run_youtube_gemini_workers_setup,
+    run_youtube_gemini_preflight_accounts,
     run_youtube_gemini_workers_status,
     run_youtube_prompts_progress_status,
     run_youtube_prompts_resume_audit,
@@ -175,6 +177,14 @@ from orchestrator.youtube_visuals_runner import (
     run_youtube_visuals_run_all,
     run_youtube_visuals_status,
     set_launch_stage,
+)
+from orchestrator.youtube_prompts_temp_import_repair import (
+    YoutubePromptsTempImportRepairOptions,
+    run_youtube_prompts_temp_import_repair,
+)
+from orchestrator.youtube_prompts_targeted_repair import (
+    YoutubePromptsTargetedRepairOptions,
+    run_youtube_prompts_targeted_repair,
 )
 from orchestrator.youtube_visual_prompts_audit import (
     YoutubeVisualPromptsAuditOptions,
@@ -1174,6 +1184,14 @@ def _parser() -> argparse.ArgumentParser:
     yt_gemini_workers_setup.add_argument("--workers", type=int, default=3)
     yt_gemini_workers_setup.add_argument("--execute", action="store_true")
 
+    gem = sub.add_parser("gemini", help="Gemini runtime utilities.")
+    gem_sub = gem.add_subparsers(dest="gemini_cmd", required=True)
+    gem_preflight = gem_sub.add_parser("preflight-accounts", help="Controlled Gemini browser preflight without generation.")
+    gem_preflight.add_argument("--stage", default="visuals")
+    gem_preflight.add_argument("--youtube-run-id", default="")
+    gem_preflight.add_argument("--accounts", default="0,1,2")
+    gem_preflight.add_argument("--execute", action="store_true")
+
     yt_visuals_status = yt_sub.add_parser(
         "visuals-status",
         help="Show single-story YouTube visuals state and current blocker.",
@@ -1188,6 +1206,32 @@ def _parser() -> argparse.ArgumentParser:
     )
     yt_prompts_resume_audit.add_argument("--youtube-run-id", required=True)
     yt_prompts_resume_audit.add_argument("--accept-known-promo-issues", action="store_true")
+
+    yt_prompts_temp_repair = yt_sub.add_parser(
+        "prompts-temp-import-repair",
+        help="Validate temp prompts session outputs and import valid files into canonical launch story folders.",
+    )
+    yt_prompts_temp_repair.add_argument("--youtube-run-id", required=True)
+    yt_prompts_temp_repair.add_argument("--run-session-id", default="")
+    yt_prompts_temp_repair.add_argument("--execute", action="store_true")
+
+    yt_prompts_targeted_repair = yt_sub.add_parser(
+        "prompts-targeted-repair",
+        help="Forensic and targeted Gemini prompts rerun/repair for specific launch stories.",
+    )
+    yt_prompts_targeted_repair.add_argument("--youtube-run-id", required=True)
+    yt_prompts_targeted_repair.add_argument("--story-id", action="append", required=True)
+    yt_prompts_targeted_repair.add_argument("--workers", type=int, default=1)
+    yt_prompts_targeted_repair.add_argument("--preferred-session-id", default="20260618_082047")
+    yt_prompts_targeted_repair.add_argument("--accept-known-promo-issues", action="store_true")
+    yt_prompts_targeted_repair.add_argument("--execute", action="store_true")
+
+    yt_path_repair = yt_sub.add_parser(
+        "production-path-repair",
+        help="Forensic path leak audit, import valid legacy output/youtube artifacts into launch, recalc launch-only readiness.",
+    )
+    yt_path_repair.add_argument("--youtube-run-id", required=True)
+    yt_path_repair.add_argument("--execute", action="store_true", help="Actually import legacy artifacts (default dry-run recovery).")
 
     yt_prompts_progress_status = yt_sub.add_parser(
         "prompts-progress-status",
@@ -3210,6 +3254,52 @@ def main() -> int:
     modes = load_runtime_modes(modes_cfg)
     runner = Runner(cfg)
 
+    if args.command == "gemini":
+        sub_cmd = str(getattr(args, "gemini_cmd", "") or "").strip().lower()
+        if sub_cmd == "preflight-accounts":
+            result = run_youtube_gemini_preflight_accounts(
+                config=cfg,
+                options=YoutubeGeminiPreflightAccountsOptions(
+                    stage=str(getattr(args, "stage", "visuals") or "visuals").strip(),
+                    youtube_run_id=str(getattr(args, "youtube_run_id", "") or "").strip(),
+                    accounts=str(getattr(args, "accounts", "0,1,2") or "0,1,2").strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            print("GEMINI_PREFLIGHT_ACCOUNTS", flush=True)
+            print(f"stage: {result.get('stage')}", flush=True)
+            print(f"execute: {str(bool(result.get('execute'))).lower()}", flush=True)
+            print(f"source_of_truth: {result.get('source_of_truth')}", flush=True)
+            print(f"proxy_required: {str(bool(result.get('proxy_required'))).lower()}", flush=True)
+            print(f"proxy_server: {result.get('proxy_server')}", flush=True)
+            print(f"proxy_source: {result.get('proxy_source')}", flush=True)
+            print(f"bridge_started: {str(bool(result.get('bridge_started'))).lower()}", flush=True)
+            print(f"proxy_error: {result.get('proxy_error')}", flush=True)
+            print("worker | profile_dir | actual_email | resolved_registry_email | proxy_server | proxy_source | actual_url | bot_ok | internet_ok | gemini_ok | screenshot | result", flush=True)
+            for row in result.get("rows") or []:
+                print(
+                    f"{row.get('worker_id')} | {row.get('profile_dir')} | {row.get('actual_email')} | "
+                    f"{row.get('resolved_registry_email')} | {row.get('proxy_server')} | {row.get('proxy_source')} | "
+                    f"{row.get('actual_url')} | {row.get('bot_ok')} | "
+                    f"{row.get('internet_ok')} | {row.get('gemini_ok')} | {row.get('screenshot')} | {row.get('result')}",
+                    flush=True,
+                )
+                if row.get("browser_error"):
+                    print(f"browser_error[{row.get('worker_id')}]: {row.get('browser_error')}", flush=True)
+                if row.get("html"):
+                    print(f"html[{row.get('worker_id')}]: {row.get('html')}", flush=True)
+                if row.get("screenshot"):
+                    print(f"screenshot[{row.get('worker_id')}]: {row.get('screenshot')}", flush=True)
+            if result.get("blockers"):
+                print("BLOCKERS:", flush=True)
+                for blocker in result.get("blockers") or []:
+                    print(f"- {blocker}", flush=True)
+            print(f"report_json: {result.get('report_json')}", flush=True)
+            print(f"report_md: {result.get('report_md')}", flush=True)
+            return 0 if result.get("ok") else 2
+        print("Неизвестная подкоманда gemini")
+        return 2
+
     if args.command == "show-modes":
         print("Текущие режимы:")
         for k in DEFAULT_MODES:
@@ -4509,15 +4599,25 @@ def main() -> int:
             print("GEMINI_WORKERS_STATUS", flush=True)
             print(f"source_of_truth: {result.get('source_of_truth')}", flush=True)
             print(f"execute: {str(bool(result.get('execute'))).lower()}", flush=True)
+            print("worker | profile_dir | actual_email_marker | resolved_registry_email | bot_url | gem_id | mapping_ok", flush=True)
             for row in result.get("rows") or []:
                 print(f"worker_{row.get('worker_id')}:", flush=True)
                 print(f"  profile_dir: {row.get('profile_dir')}", flush=True)
-                print(f"  expected_email: {row.get('expected_email')}", flush=True)
                 print(f"  actual_email_marker: {row.get('actual_email_marker')}", flush=True)
+                print(f"  resolved_registry_email: {row.get('resolved_registry_email')}", flush=True)
                 print(f"  bot_url: {row.get('bot_url')}", flush=True)
+                print(f"  gem_id: {row.get('bot_url').split('/gem/', 1)[-1] if row.get('bot_url') else ''}", flush=True)
+                print(f"  mapping_ok: {str(bool(row.get('mapping_ok'))).lower()}", flush=True)
                 print(f"  cloned_profile: {str(bool(row.get('cloned_profile'))).lower()}", flush=True)
                 print(f"  ready: {str(bool(row.get('ready'))).lower()}", flush=True)
                 print(f"  blocker: {row.get('blocker')}", flush=True)
+                print(
+                    f"{row.get('worker_id')} | {row.get('profile_dir')} | {row.get('actual_email_marker')} | "
+                    f"{row.get('resolved_registry_email')} | {row.get('bot_url')} | "
+                    f"{row.get('bot_url').split('/gem/', 1)[-1] if row.get('bot_url') else ''} | "
+                    f"{str(bool(row.get('mapping_ok'))).lower()}",
+                    flush=True,
+                )
             print(f"GEMINI_WORKERS_READY = {str(bool(result.get('ready'))).lower()}", flush=True)
             blockers = result.get("blockers") or result.get("setup_blockers") or []
             if blockers:
@@ -4755,6 +4855,98 @@ def main() -> int:
             print(f"run_report={reports.get('run_report')}")
             print(f"frames_report={reports.get('frames_report')}")
             return 0
+
+        if sub_cmd == "production-path-repair":
+            from orchestrator.youtube_launch_path_ops import run_youtube_production_path_repair
+
+            launch_id = str(args.youtube_run_id).strip()
+            result = run_youtube_production_path_repair(
+                config=cfg,
+                youtube_run_id=launch_id,
+                execute_recovery=bool(args.execute),
+            )
+            if not result.get("ok", False):
+                print(result.get("message", "production path repair failed"))
+                return 2
+            print("YOUTUBE_PRODUCTION_PATH_REPAIR")
+            print(f"forensic_json={result.get('forensic_reports', {}).get('json')}")
+            print(f"recovery_json={result.get('recovery_reports', {}).get('json')}")
+            print(f"readiness_json={result.get('readiness_reports', {}).get('json')}")
+            recovery = result.get("recovery") if isinstance(result.get("recovery"), dict) else {}
+            readiness = result.get("readiness") if isinstance(result.get("readiness"), dict) else {}
+            print(f"imported={recovery.get('imported_count', 0)} rejected={recovery.get('rejected_count', 0)}")
+            summary = readiness.get("summary") if isinstance(readiness.get("summary"), dict) else {}
+            print(
+                f"launch_only ready={summary.get('ready', 0)} pending={summary.get('pending', 0)} "
+                f"partial={summary.get('partial', 0)} failed={summary.get('failed', 0)} "
+                f"legacy_only_ignored={summary.get('legacy_only_ignored', 0)} "
+                f"ready_for_runpod={summary.get('ready_for_runpod', 0)}"
+            )
+            return 0
+
+        if sub_cmd == "prompts-temp-import-repair":
+            result = run_youtube_prompts_temp_import_repair(
+                config=cfg,
+                options=YoutubePromptsTempImportRepairOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    run_session_id=str(getattr(args, "run_session_id", "") or "").strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            if not result.get("ok", False):
+                print(result.get("message", "prompts temp import repair failed"))
+                return 2
+            print("PROMPTS_TEMP_IMPORT_REPAIR")
+            print(f"json_report={result.get('reports', {}).get('json')}")
+            print(f"md_report={result.get('reports', {}).get('md')}")
+            print(f"temp_sessions={len(result.get('temp_sessions_found') or [])}")
+            print(f"imported={result.get('imported_count', 0)}")
+            print(f"rejected={result.get('rejected_count', 0)}")
+            final_readiness = result.get("final_readiness") if isinstance(result.get("final_readiness"), dict) else {}
+            print(
+                f"ready_for_runpod={final_readiness.get('ready_for_runpod', 0)} "
+                f"blocked={final_readiness.get('blocked', 0)} "
+                f"pending={final_readiness.get('pending', 0)} "
+                f"failed={final_readiness.get('failed', 0)} "
+                f"next_stage_allowed={str(bool(final_readiness.get('next_stage_allowed'))).lower()}"
+            )
+            return 0
+
+        if sub_cmd == "prompts-targeted-repair":
+            result = run_youtube_prompts_targeted_repair(
+                config=cfg,
+                options=YoutubePromptsTargetedRepairOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    story_ids=list(getattr(args, "story_id", None) or []),
+                    workers=max(1, int(getattr(args, "workers", 1) or 1)),
+                    preferred_session_id=str(getattr(args, "preferred_session_id", "") or "").strip(),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            if not result.get("ok", False) and result.get("message"):
+                print(result.get("message", "prompts targeted repair failed"))
+                return 2
+            print("PROMPTS_TARGETED_REPAIR")
+            print(f"json_report={result.get('reports', {}).get('json')}")
+            print(f"md_report={result.get('reports', {}).get('md')}")
+            for row in result.get("stories", []):
+                forensic = row.get("forensic") if isinstance(row.get("forensic"), dict) else {}
+                print(
+                    f"- {row.get('story_id')}: worker={row.get('assigned_worker')} "
+                    f"sessions={','.join(forensic.get('sessions_with_stage_dir') or [])} "
+                    f"temp_final={forensic.get('temp_prompts_list_found')} "
+                    f"temp_partial={forensic.get('temp_partial_found')} "
+                    f"raw_gemini={forensic.get('raw_gemini_response_found')} "
+                    f"reason={row.get('why_no_canonical_prompts_list')}"
+                )
+            final_readiness = result.get("final_readiness") if isinstance(result.get("final_readiness"), dict) else {}
+            print(
+                f"selected_not_ready={final_readiness.get('selected_not_ready', 0)} "
+                f"ready_for_runpod={final_readiness.get('ready_for_runpod', 0)} "
+                f"next_stage_allowed={str(bool(final_readiness.get('next_stage_allowed'))).lower()}"
+            )
+            return 0 if result.get("ok", False) else 1
 
         if sub_cmd == "prompts-resume-audit":
             result = run_youtube_prompts_resume_audit(

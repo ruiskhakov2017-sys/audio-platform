@@ -8,6 +8,7 @@ the existing frames bridge when both --execute and --runpod-url are provided.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import time
@@ -17,7 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from orchestrator.config import OrchestratorConfig
+from orchestrator.youtube_prompts_failure_reasons import (
+    PROMPTS_GENERATION_INCOMPLETE,
+    classify_stage_prompts_failure,
+    normalize_failure_reason,
+)
 from orchestrator.launch_contract import build_launch_context
 from orchestrator.youtube_video_segments import (
     YoutubeVideoPrepareSegmentsOptions,
@@ -127,6 +132,14 @@ class YoutubeStageSetOptions:
 @dataclass
 class YoutubeGeminiWorkersOptions:
     workers: int = 3
+    execute: bool = False
+
+
+@dataclass
+class YoutubeGeminiPreflightAccountsOptions:
+    stage: str = "visuals"
+    youtube_run_id: str = ""
+    accounts: str = "0,1,2"
     execute: bool = False
 
 
@@ -382,38 +395,49 @@ def _prompt_worker_mappings(config: OrchestratorConfig, worker_count: int) -> tu
     source = str(resolved.get("registry_path") or (config.root_dir / "configs" / "gemini_bots_registry.yaml"))
     chain = resolved.get("selected_director_chain") if isinstance(resolved.get("selected_director_chain"), list) else []
     blockers = [str(item) for item in (resolved.get("warnings") or []) if item]
-    if len(chain) < worker_count:
-        blockers.append(f"not enough Gemini prompt bots in source: required={worker_count} found={len(chain)}")
-    seen_emails: set[str] = set()
-    seen_urls: set[str] = set()
+    by_email: dict[str, dict[str, Any]] = {}
+    for item in chain:
+        if not isinstance(item, dict):
+            continue
+        email = str(item.get("email") or "").strip().lower()
+        if email:
+            by_email[email] = item
     mappings: list[dict[str, Any]] = []
     for worker_index in range(1, worker_count + 1):
-        item = chain[worker_index - 1] if worker_index - 1 < len(chain) and isinstance(chain[worker_index - 1], dict) else {}
-        email = str(item.get("email") or "").strip()
-        url = str(item.get("gem_url") or item.get("url") or "").strip()
-        account_index = item.get("account_index", worker_index - 1)
         worker_root = _prompt_worker_profile_dir(config, worker_index).parent
         profile_dir = worker_root / "user_data"
-        if not email:
-            blockers.append(f"worker_{worker_index} expected email missing")
-        if not url:
-            blockers.append(f"worker_{worker_index} bot URL missing")
-        if email and email.lower() in seen_emails:
-            blockers.append(f"duplicate Gemini worker email: {email}")
-        if url and url in seen_urls:
-            blockers.append(f"duplicate Gemini worker bot URL: {url}")
-        seen_emails.add(email.lower())
-        seen_urls.add(url)
+        account_marker = worker_root / ".account_email"
+        marker_email = account_marker.read_text(encoding="utf-8", errors="replace").strip() if account_marker.is_file() else ""
+        profile_email = ""
+        try:
+            from orchestrator.phase_a import _read_profile_email
+
+            profile_email = _read_profile_email(profile_dir).strip() if profile_dir.is_dir() else ""
+        except Exception:
+            profile_email = ""
+        runtime_email = (profile_email or marker_email).strip().lower()
+        resolved_item = by_email.get(runtime_email, {})
+        resolved_email = str(resolved_item.get("email") or "").strip()
+        resolved_url = str(resolved_item.get("gem_url") or resolved_item.get("url") or "").strip()
+        mapping_ok = bool(runtime_email and resolved_item and resolved_email and resolved_url)
+        if not runtime_email:
+            blockers.append(f"worker_{worker_index} identity unknown: missing profile/marker email")
+        elif not resolved_item:
+            blockers.append(f"worker_{worker_index} no registry director bot for email={runtime_email}")
         mappings.append(
             {
                 "worker_id": worker_index,
                 "profile_dir": str(profile_dir),
                 "worker_root": str(worker_root),
-                "expected_email": email,
-                "bot_url": url,
+                "actual_email_marker": marker_email,
+                "actual_email_profile": profile_email,
+                "runtime_email": runtime_email,
+                "resolved_registry_email": resolved_email,
+                "bot_url": resolved_url,
                 "bot_name": "youtube_scene_prompts",
-                "account_index": account_index,
+                "account_index": resolved_item.get("account_index"),
                 "source_of_truth": source,
+                "mapping_ok": mapping_ok,
             }
         )
     return source, mappings, blockers
@@ -426,21 +450,29 @@ def _worker_status_row(mapping: dict[str, Any]) -> dict[str, Any]:
     mapping_path = worker_root / "worker_mapping.json"
     cloned_marker = worker_root / ".orchestrator_clone_from_base"
     actual_email = account_marker.read_text(encoding="utf-8", errors="replace").strip() if account_marker.is_file() else ""
-    expected_email = str(mapping.get("expected_email") or "").strip()
+    prefs_email = str(mapping.get("actual_email_profile") or "").strip()
+    resolved_email = str(mapping.get("resolved_registry_email") or "").strip()
     blockers: list[str] = []
-    if cloned_marker.exists() and actual_email.lower() != expected_email.lower():
+    if cloned_marker.exists() and resolved_email and actual_email.lower() != resolved_email.lower():
         blockers.append("profile is cloned from base and has no matching unique identity")
     if not profile_dir.is_dir():
         blockers.append("profile directory missing; run gemini-workers-setup --execute, then login if browser asks")
     if not actual_email:
         blockers.append("actual email marker missing; run gemini-workers-setup --execute")
-    elif expected_email and actual_email.lower() != expected_email.lower():
-        blockers.append(f"actual email marker mismatch: actual={actual_email} expected={expected_email}")
+    if prefs_email and actual_email and prefs_email.lower() != actual_email.lower():
+        blockers.append(f"profile/marker email mismatch: profile={prefs_email} marker={actual_email}")
+    elif profile_dir.is_dir() and not prefs_email:
+        blockers.append("chrome profile email unknown; login required in worker profile")
+    if not resolved_email:
+        blockers.append("registry mapping missing for worker runtime email")
     if not str(mapping.get("bot_url") or "").strip():
         blockers.append("bot URL missing")
+    if not bool(mapping.get("mapping_ok")):
+        blockers.append("worker mapping is not consistent")
     return {
         **mapping,
         "actual_email_marker": actual_email,
+        "chrome_profile_email": prefs_email,
         "mapping_path": str(mapping_path),
         "cloned_profile": cloned_marker.exists(),
         "ready": not blockers,
@@ -492,13 +524,397 @@ def run_youtube_gemini_workers_setup(config: OrchestratorConfig, options: Youtub
     }
 
 
+def _parse_worker_indexes_from_accounts(accounts: str) -> list[int]:
+    out: list[int] = []
+    for raw in str(accounts or "").split(","):
+        token = raw.strip().lower()
+        if not token:
+            continue
+        if token.startswith("w"):
+            token = token[1:]
+            if token.isdigit():
+                out.append(max(1, int(token)))
+            continue
+        if token.isdigit():
+            out.append(max(1, int(token) + 1))
+    return sorted(set(out)) or [1, 2, 3]
+
+
+def _gem_id_from_url(url: str) -> str:
+    text = str(url or "").strip()
+    if "/gem/" not in text:
+        return ""
+    return text.split("/gem/", 1)[-1].split("/", 1)[0].strip()
+
+
+def _offline_reason(page_text: str, final_url: str, browser_error: str) -> str:
+    low = f"{page_text}\n{final_url}\n{browser_error}".lower()
+    if "proxy authentication required" in low or " 407 " in low:
+        return "PROXY_AUTH_REQUIRED"
+    if "err_proxy_connection_failed" in low or "proxy connection failed" in low:
+        return "PROXY_CONNECTION_FAILED"
+    if "err_name_not_resolved" in low or "dns_probe_finished" in low:
+        return "DNS_FAILED"
+    if "нет соединения с интернетом" in low or "no internet" in low or "err_internet_disconnected" in low:
+        return "BROWSER_NETWORK_OFFLINE"
+    if "err_connection_timed_out" in low or "timed out" in low:
+        return "GEMINI_LOAD_TIMEOUT"
+    return ""
+
+
+def _is_gemini_editor_available(page: Any) -> bool:
+    selectors = ("textarea", "div[contenteditable='true']", "[role='textbox']", "rich-textarea")
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            if locator.count() > 0 and locator.first.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _proxy_required_for_preflight() -> bool:
+    value = str(os.getenv("GEMINI_PROXY_REQUIRED") or "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _bootstrap_preflight_proxy(config: OrchestratorConfig) -> dict[str, Any]:
+    existing_server = str(os.getenv("GEMINI_PROXY_SERVER") or "").strip()
+    required = _proxy_required_for_preflight()
+    if not required:
+        return {
+            "proxy_required": False,
+            "proxy_server": existing_server,
+            "proxy_source": "env" if existing_server else "unavailable",
+            "bridge_started": False,
+            "proxy_error": "",
+            "proxy_session": None,
+        }
+    if existing_server:
+        return {
+            "proxy_required": True,
+            "proxy_server": existing_server,
+            "proxy_source": "env",
+            "bridge_started": False,
+            "proxy_error": "",
+            "proxy_session": None,
+        }
+    try:
+        from orchestrator.gemini_colab_proxy import GeminiColabProxySession
+
+        session = GeminiColabProxySession(config.root_dir.resolve()).start()
+        server = str(session.proxy_server or "").strip()
+        if not server:
+            session.stop()
+            return {
+                "proxy_required": True,
+                "proxy_server": "",
+                "proxy_source": "unavailable",
+                "bridge_started": False,
+                "proxy_error": "PROXY_BOOTSTRAP_FAILED: bridge started but proxy_server is empty",
+                "proxy_session": None,
+            }
+        os.environ["GEMINI_PROXY_SERVER"] = server
+        os.environ["GEMINI_PROXY_REQUIRED"] = "1"
+        return {
+            "proxy_required": True,
+            "proxy_server": server,
+            "proxy_source": "existing_bridge",
+            "bridge_started": True,
+            "proxy_error": "",
+            "proxy_session": session,
+        }
+    except Exception as exc:
+        return {
+            "proxy_required": True,
+            "proxy_server": "",
+            "proxy_source": "unavailable",
+            "bridge_started": False,
+            "proxy_error": f"PROXY_BOOTSTRAP_FAILED: {exc!r}",
+            "proxy_session": None,
+        }
+
+
+def _run_worker_browser_preflight(
+    *,
+    worker_row: dict[str, Any],
+    worker_artifacts_dir: Path,
+    proxy_server: str,
+    proxy_source: str,
+) -> dict[str, Any]:
+    from playwright.sync_api import sync_playwright
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "legacy"))
+    from gemini_browser_proxy import append_chrome_proxy_args
+
+    profile_dir = Path(str(worker_row.get("profile_dir") or ""))
+    expected_email = str(worker_row.get("resolved_registry_email") or "").strip().lower()
+    bot_url = str(worker_row.get("bot_url") or "").strip()
+    expected_gem_id = _gem_id_from_url(bot_url)
+    worker_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    nav_rows: list[dict[str, Any]] = []
+    console_errors: list[str] = []
+    browser_error = ""
+
+    def _navigate(page: Any, label: str, url: str) -> dict[str, Any]:
+        item = {
+            "label": label,
+            "requested_url": url,
+            "final_url": "",
+            "actual_gem_id": "",
+            "internet_ok": False,
+            "gemini_ok": False,
+            "bot_ok": False,
+            "offline_reason": "",
+            "screenshot": "",
+            "html": "",
+            "error": "",
+        }
+        screenshot_path = worker_artifacts_dir / f"{label}.png"
+        html_path = worker_artifacts_dir / f"{label}.html"
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+            page.wait_for_timeout(1200)
+            final_url = str(page.url or "")
+            body_text = page.locator("body").inner_text(timeout=5000)
+            html = page.content()
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            html_path.write_text(html, encoding="utf-8")
+            reason = _offline_reason(body_text + "\n" + html, final_url, browser_error)
+            item.update(
+                {
+                    "final_url": final_url,
+                    "actual_gem_id": _gem_id_from_url(final_url),
+                    "internet_ok": not reason,
+                    "gemini_ok": ("gemini.google.com" in final_url.lower() and not reason and _is_gemini_editor_available(page)),
+                    "offline_reason": reason,
+                    "screenshot": str(screenshot_path),
+                    "html": str(html_path),
+                }
+            )
+            if label == "bot":
+                item["bot_ok"] = bool(expected_gem_id and item["actual_gem_id"] and item["actual_gem_id"].lower() == expected_gem_id.lower() and not reason)
+        except Exception as exc:
+            item["error"] = repr(exc)
+            item["offline_reason"] = _offline_reason("", "", repr(exc)) or "PROXY_OR_NETWORK_ERROR"
+        return item
+
+    identity_ok = bool(str(worker_row.get("runtime_email") or "").strip().lower() == expected_email and expected_email)
+    if not profile_dir.is_dir():
+        return {
+            **worker_row,
+            "actual_email": str(worker_row.get("runtime_email") or "").strip().lower(),
+            "proxy_server": proxy_server,
+            "proxy_source": proxy_source,
+            "actual_url": "",
+            "identity_ok": False,
+            "internet_ok": False,
+            "gemini_ok": False,
+            "bot_ok": False,
+            "result": "FAIL",
+            "issue": "PROFILE_EMPTY_OR_WRONG",
+            "screenshot": "",
+            "html": "",
+            "browser_error": "profile_dir_missing",
+        }
+
+    context = None
+    try:
+        with sync_playwright() as pw:
+            launch_kwargs = {
+                "user_data_dir": str(profile_dir),
+                "headless": False,
+                "viewport": None,
+                "args": append_chrome_proxy_args(["--disable-blink-features=AutomationControlled"]),
+            }
+            for channel in ("chrome", "msedge", None):
+                try:
+                    context = (
+                        pw.chromium.launch_persistent_context(channel=channel, **launch_kwargs)
+                        if channel is not None
+                        else pw.chromium.launch_persistent_context(**launch_kwargs)
+                    )
+                    break
+                except Exception as exc:
+                    browser_error = repr(exc)
+                    context = None
+            if context is None:
+                raise RuntimeError(browser_error or "browser_launch_failed")
+            page = context.pages[0] if context.pages else context.new_page()
+            page.on("console", lambda msg: console_errors.append(f"{msg.type}: {msg.text}") if msg.type in {"error", "warning"} else None)
+            nav_rows.append(_navigate(page, "google", "https://www.google.com"))
+            nav_rows.append(_navigate(page, "gemini", "https://gemini.google.com"))
+            nav_rows.append(_navigate(page, "bot", bot_url))
+    except Exception as exc:
+        browser_error = repr(exc)
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
+
+    google = next((row for row in nav_rows if row.get("label") == "google"), {})
+    gemini = next((row for row in nav_rows if row.get("label") == "gemini"), {})
+    bot = next((row for row in nav_rows if row.get("label") == "bot"), {})
+    internet_ok = bool(google.get("internet_ok") and gemini.get("internet_ok") and bot.get("internet_ok"))
+    gemini_ok = bool(gemini.get("gemini_ok"))
+    bot_ok = bool(bot.get("bot_ok"))
+    issue = (
+        str(bot.get("offline_reason") or gemini.get("offline_reason") or google.get("offline_reason") or "")
+        or ("WRONG_GEMINI_BOT" if not bot_ok else "")
+        or ("WRONG_GOOGLE_ACCOUNT" if not identity_ok else "")
+        or ("PROXY_OR_NETWORK_ERROR" if browser_error else "")
+    )
+    result = "PASS" if (identity_ok and bot_ok and internet_ok and gemini_ok and not issue) else "FAIL"
+    return {
+        **worker_row,
+        "actual_email": str(worker_row.get("runtime_email") or "").strip().lower(),
+        "proxy_server": proxy_server,
+        "proxy_source": proxy_source,
+        "actual_url": str(bot.get("final_url") or ""),
+        "identity_ok": identity_ok,
+        "internet_ok": internet_ok,
+        "gemini_ok": gemini_ok,
+        "bot_ok": bot_ok,
+        "result": result,
+        "issue": issue,
+        "screenshot": str(bot.get("screenshot") or gemini.get("screenshot") or google.get("screenshot") or ""),
+        "html": str(bot.get("html") or gemini.get("html") or google.get("html") or ""),
+        "browser_error": browser_error,
+        "console_errors": console_errors[-20:],
+    }
+
+
+def run_youtube_gemini_preflight_accounts(config: OrchestratorConfig, options: YoutubeGeminiPreflightAccountsOptions) -> dict[str, Any]:
+    worker_indexes = _parse_worker_indexes_from_accounts(options.accounts)
+    source, mappings, blockers = _prompt_worker_mappings(config, max(worker_indexes))
+    by_worker = {int(row.get("worker_id")): row for row in mappings}
+    selected_rows = [by_worker[index] for index in worker_indexes if index in by_worker]
+    reports_root = (config.root_dir / "reports" / "gemini_execution").resolve()
+    preflight_root = reports_root / "worker_preflight" / datetime.now().strftime("%Y%m%d_%H%M%S")
+    rows: list[dict[str, Any]] = []
+    proxy_bootstrap = _bootstrap_preflight_proxy(config)
+    proxy_required = bool(proxy_bootstrap.get("proxy_required"))
+    proxy_server = str(proxy_bootstrap.get("proxy_server") or "").strip()
+    proxy_source = str(proxy_bootstrap.get("proxy_source") or "unavailable")
+    proxy_error = str(proxy_bootstrap.get("proxy_error") or "")
+    bootstrap_failed = bool(proxy_required and not proxy_server)
+    for row in selected_rows:
+        if options.execute:
+            worker_dir = preflight_root / f"worker_{int(row.get('worker_id') or 0)}"
+            if bootstrap_failed:
+                rows.append(
+                    {
+                        **row,
+                        "actual_email": str(row.get("runtime_email") or "").strip().lower(),
+                        "proxy_server": proxy_server,
+                        "proxy_source": proxy_source,
+                        "actual_url": "",
+                        "identity_ok": bool(row.get("mapping_ok")),
+                        "internet_ok": False,
+                        "gemini_ok": False,
+                        "bot_ok": False,
+                        "result": "FAIL",
+                        "issue": "PROXY_BOOTSTRAP_FAILED",
+                        "screenshot": "",
+                        "html": "",
+                        "browser_error": proxy_error,
+                    }
+                )
+            else:
+                rows.append(
+                    _run_worker_browser_preflight(
+                        worker_row=row,
+                        worker_artifacts_dir=worker_dir,
+                        proxy_server=proxy_server,
+                        proxy_source=proxy_source,
+                    )
+                )
+        else:
+            rows.append(
+                {
+                    **row,
+                    "actual_email": str(row.get("runtime_email") or "").strip().lower(),
+                    "proxy_server": proxy_server,
+                    "proxy_source": proxy_source,
+                    "actual_url": "",
+                    "identity_ok": bool(row.get("mapping_ok")),
+                    "internet_ok": False,
+                    "gemini_ok": False,
+                    "bot_ok": bool(row.get("mapping_ok")),
+                    "result": "DRY_RUN",
+                    "issue": "" if row.get("mapping_ok") else "MAPPING_INCONSISTENT",
+                    "screenshot": "",
+                    "html": "",
+                    "browser_error": "",
+                }
+            )
+    ok = all(bool(row.get("identity_ok")) and bool(row.get("bot_ok")) and bool(row.get("internet_ok")) and bool(row.get("gemini_ok")) for row in rows) if options.execute else all(bool(row.get("mapping_ok")) for row in rows)
+    payload = {
+        "ok": ok and not blockers,
+        "stage": str(options.stage or "visuals"),
+        "youtube_run_id": str(options.youtube_run_id or ""),
+        "execute": bool(options.execute),
+        "accounts": str(options.accounts or ""),
+        "workers": worker_indexes,
+        "source_of_truth": source,
+        "proxy_required": proxy_required,
+        "proxy_server": proxy_server,
+        "proxy_source": proxy_source,
+        "bridge_started": bool(proxy_bootstrap.get("bridge_started")),
+        "proxy_error": proxy_error,
+        "blockers": blockers,
+        "rows": rows,
+        "reports_root": str(preflight_root) if options.execute else "",
+    }
+    reports_root.mkdir(parents=True, exist_ok=True)
+    report_json = reports_root / "GEMINI_IDENTITY_NETWORK_PREFLIGHT.json"
+    report_md = reports_root / "GEMINI_IDENTITY_NETWORK_PREFLIGHT.md"
+    report_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    lines = [
+        "# Gemini worker preflight",
+        "",
+        f"stage: {payload['stage']}",
+        f"execute: {str(payload['execute']).lower()}",
+        f"source_of_truth: {payload['source_of_truth']}",
+        f"proxy_required: {str(bool(payload.get('proxy_required'))).lower()}",
+        f"proxy_server: {payload.get('proxy_server')}",
+        f"proxy_source: {payload.get('proxy_source')}",
+        f"bridge_started: {str(bool(payload.get('bridge_started'))).lower()}",
+        f"proxy_error: {payload.get('proxy_error')}",
+        "",
+        "worker | profile_dir | actual_email | resolved_registry_email | proxy_server | proxy_source | actual_url | bot_ok | internet_ok | gemini_ok | screenshot | result",
+    ]
+    for row in rows:
+        lines.append(
+            f"{row.get('worker_id')} | {row.get('profile_dir')} | {row.get('actual_email')} | "
+            f"{row.get('resolved_registry_email')} | {row.get('proxy_server')} | {row.get('proxy_source')} | "
+            f"{row.get('actual_url')} | {row.get('bot_ok')} | "
+            f"{row.get('internet_ok')} | {row.get('gemini_ok')} | {row.get('screenshot')} | {row.get('result')}"
+        )
+    if blockers:
+        lines.extend(["", "## Blockers", ""] + [f"- {item}" for item in blockers])
+    report_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    payload["report_json"] = str(report_json)
+    payload["report_md"] = str(report_md)
+    session = proxy_bootstrap.get("proxy_session")
+    if session is not None:
+        try:
+            session.stop()
+        except Exception:
+            pass
+    return payload
+
+
 def _print_gemini_workers_preflight(result: dict[str, Any]) -> None:
     print("================ GEMINI WORKERS PREFLIGHT ================", flush=True)
     print(f"workers: {result.get('workers')}", flush=True)
     print(f"source_of_truth: {result.get('source_of_truth')}", flush=True)
     for row in result.get("rows") or []:
         print(f"worker_{row.get('worker_id')}:", flush=True)
-        print(f"  expected_email: {row.get('expected_email')}", flush=True)
+        print(f"  expected_email: {row.get('resolved_registry_email')}", flush=True)
         print(f"  actual_email_marker: {row.get('actual_email_marker')}", flush=True)
         print(f"  bot_url: {row.get('bot_url')}", flush=True)
         print(f"  profile: {row.get('profile_dir')}", flush=True)
@@ -529,7 +945,10 @@ def _mapping_for_worker(config: OrchestratorConfig, worker_index: int) -> dict[s
 
 def _load_prompt_worker_bot(config: OrchestratorConfig, worker_index: int) -> dict[str, str]:
     mapping = _mapping_for_worker(config, worker_index)
-    return {"url": str(mapping.get("bot_url") or ""), "email": str(mapping.get("expected_email") or "")}
+    return {
+        "url": str(mapping.get("bot_url") or ""),
+        "email": str(mapping.get("resolved_registry_email") or mapping.get("runtime_email") or ""),
+    }
 
 
 def _prompt_worker_user_data_dir(config: OrchestratorConfig, worker_index: int) -> str:
@@ -1166,6 +1585,17 @@ def reconcile_visuals_progress_from_filesystem(
         else:
             normalized_status = "pending"
         counts[normalized_status] = counts.get(normalized_status, 0) + 1
+        error_value = meta.get("error")
+        if normalized_status == "done":
+            error_value = None
+        elif normalized_status in {"failed", "pending", "partial", "blocked", "in_progress"}:
+            error_value = normalize_failure_reason(
+                str(error_value or ""),
+                fallback=classify_stage_prompts_failure(
+                    stage_dir=stage_dir if stage_dir.is_dir() else None,
+                    canonical_ready=normalized_status == "done",
+                ),
+            )
         rows[story_id] = {
             **meta,
             "story_id": story_id,
@@ -1180,6 +1610,7 @@ def reconcile_visuals_progress_from_filesystem(
             "validation": row.get("validation", "pending"),
             "blocker": row.get("blocker", ""),
             "next_action": row.get("next_action", ""),
+            "error": error_value,
             "updated_at": _now_iso(),
         }
 
@@ -1564,6 +1995,12 @@ def run_youtube_visuals_launch_status(
         "ready_for_frames": sum(1 for row in active_rows if row["visual_prompt_ready"] and not row["images_ready"]),
         "known_promo_issues_accepted": any(row["promo_issues_accepted"] for row in rows),
     }
+    not_ready_for_runpod = sum(1 for row in active_rows if not row.get("ready_for_runpod"))
+    summary["not_ready_for_runpod"] = not_ready_for_runpod
+    summary["next_stage_allowed"] = bool(
+        not_ready_for_runpod == 0
+        and (summary["ready_for_frames"] > 0 or summary["images_ready"] > 0)
+    )
     ctx = build_launch_context(config, launch_id=launch_id)
     report = {
         "ok": True,
@@ -2027,6 +2464,13 @@ def run_youtube_visuals_run_all(
                                     else:
                                         validation = after.get("prompts_validation") if isinstance(after.get("prompts_validation"), dict) else {}
                                         partial_status = str(validation.get("status") or after.get("prompts_status") or "failed")
+                                        story_stage_dir = worker_root / story_id
+                                        failure_reason = normalize_failure_reason(
+                                            str(batch_result.get("next_action") or batch_result.get("status") or ""),
+                                            fallback=classify_stage_prompts_failure(stage_dir=story_stage_dir),
+                                        )
+                                        if after["prompts_status"] == "partial":
+                                            failure_reason = PROMPTS_GENERATION_INCOMPLETE
                                         _update_manifest_dict(
                                             story_dir,
                                             {
@@ -2037,7 +2481,7 @@ def run_youtube_visuals_run_all(
                                                     "expected_prompts": _prompt_estimate(story_dir),
                                                     "actual_prompts": int(validation.get("prompts_count") or 0),
                                                     "validation": "failed",
-                                                    "error": str(batch_result.get("next_action") or batch_result.get("status") or partial_status),
+                                                    "error": failure_reason,
                                                 },
                                                 "pipeline_stage_status": {"scenes_prompts": partial_status, "director_prompts": partial_status},
                                             },
@@ -2058,7 +2502,7 @@ def run_youtube_visuals_run_all(
                                             {
                                                 "status": "done" if ok else ("partial" if label == "PARTIAL" else "failed"),
                                                 "validation": "ok" if ok else "failed",
-                                                "error": None if ok else str(batch_result.get("next_action") or batch_result.get("status") or ""),
+                                                "error": None if ok else failure_reason,
                                                 "updated_at": _now_iso(),
                                             }
                                         )
@@ -2254,7 +2698,11 @@ def run_youtube_visuals_run_all(
             accept_known_promo_issues=bool(options.accept_known_promo_issues),
         ),
     )
-    summary = status.get("summary") if isinstance(status.get("summary"), dict) else {}
+    summary = dict(status.get("summary") if isinstance(status.get("summary"), dict) else {})
+    preflight_blocked = len(locals().get("prompts_missing") or [])
+    if preflight_blocked > 0 or int(summary.get("not_ready_for_runpod") or 0) > 0:
+        summary["next_stage_allowed"] = False
+        summary["runpod_preflight_blocked"] = max(preflight_blocked, int(summary.get("not_ready_for_runpod") or 0))
     failed_rows = [
         row
         for row in results
@@ -2288,7 +2736,7 @@ def run_youtube_visuals_run_all(
             print(f"- {row.get('story_id')} -> {row.get('next_action')}", flush=True)
     else:
         print("- none", flush=True)
-    print(f"next_stage_allowed: {str(bool(summary.get('ready_for_frames') or summary.get('images_ready'))).lower()}", flush=True)
+    print(f"next_stage_allowed: {str(bool(summary.get('next_stage_allowed'))).lower()}", flush=True)
     print("==========================================================", flush=True)
     payload = {
         "ok": all(
@@ -2308,6 +2756,7 @@ def run_youtube_visuals_run_all(
         "skipped": skipped,
         "stories": results,
         "status": status,
+        "next_stage_allowed": bool(summary.get("next_stage_allowed")),
         "elapsed_sec": round(time.monotonic() - started_at, 3),
         "generated_at": _now_iso(),
     }

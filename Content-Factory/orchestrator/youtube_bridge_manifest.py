@@ -78,14 +78,17 @@ def _resolved_cleaned_for_row(root_dir: Path, row: dict[str, Any]) -> tuple[Path
 
 def _output_story_root(
     *,
-    root_dir: Path,
+    config: OrchestratorConfig,
     youtube_run_id: str,
     canonical: str,
     layout_mode: str,
 ) -> Path:
+    root_dir = config.root_dir.resolve()
     if layout_mode == "fixture":
         return (root_dir / "output" / "youtube" / "_smoke" / youtube_run_id / canonical).resolve()
-    return (root_dir / "output" / "youtube" / canonical).resolve()
+    from orchestrator.youtube_path_resolver import resolve_youtube_technical_story_dir
+
+    return resolve_youtube_technical_story_dir(config, canonical, launch_id=youtube_run_id)
 
 
 def _legacy_bridge_paths(root_dir: Path, youtube_run_id: str, story_id: str) -> dict[str, str]:
@@ -155,7 +158,7 @@ def _build_story_manifest_payload(
     story_id = _story_id_from_row(row)
     site_run_id = str(row.get("site_run_id", "")).strip() or _infer_site_run_id([row])
     story_dir = _output_story_root(
-        root_dir=root_dir,
+        config=config,
         youtube_run_id=youtube_run_id,
         canonical=canonical,
         layout_mode=layout_mode,
@@ -228,9 +231,19 @@ def _build_story_manifest_payload(
     }
 
 
-def _mkdir_story_layout(story_dir: Path) -> None:
+def _mkdir_story_layout(config: OrchestratorConfig, youtube_run_id: str, story_dir: Path) -> None:
+    from orchestrator.youtube_path_resolver import assert_youtube_production_write_allowed
+
     for name in YOUTUBE_STORY_SUBDIRS:
-        (story_dir / name).mkdir(parents=True, exist_ok=True)
+        stage_path = story_dir / name
+        assert_youtube_production_write_allowed(
+            config,
+            stage_path,
+            youtube_run_id=youtube_run_id,
+            module="orchestrator.youtube_bridge_manifest",
+            function="_mkdir_story_layout",
+        )
+        stage_path.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -417,7 +430,7 @@ def run_youtube_build_bridge_manifest(
         canonical = str(row.get("canonical_basename", "")).strip() or "story"
         story_id = _story_id_from_row(row)
         story_dir = _output_story_root(
-            root_dir=root_dir,
+            config=config,
             youtube_run_id=youtube_run_id,
             canonical=canonical,
             layout_mode=layout_mode,
@@ -427,7 +440,7 @@ def run_youtube_build_bridge_manifest(
             missing_notes.append(f"{canonical}: resolved cleaned text missing ({cleaned_src})")
 
         if mkdir_layout:
-            _mkdir_story_layout(story_dir)
+            _mkdir_story_layout(config, youtube_run_id, story_dir)
 
         sm = _build_story_manifest_payload(
             config=config,

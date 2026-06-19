@@ -138,9 +138,11 @@ def _legacy_write_path(
     legacy_relative: str,
     fallback: Path,
 ) -> Path:
+    from orchestrator.isolated_launch_context import get_batch_launch_id
     from orchestrator.youtube_path_resolver import resolve_bridge_legacy_write_path
 
-    return resolve_bridge_legacy_write_path(config, story_id, legacy_relative, fallback)
+    lid = (get_batch_launch_id() or "").strip() or None
+    return resolve_bridge_legacy_write_path(config, story_id, legacy_relative, fallback, launch_id=lid)
 
 
 def _append_text(path: Path, text: str) -> None:
@@ -153,10 +155,12 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
+def _story_dir(config: OrchestratorConfig, story_id: str, *, launch_id: str | None = None) -> Path:
+    from orchestrator.isolated_launch_context import get_batch_launch_id
     from orchestrator.youtube_path_resolver import resolve_bridge_story_dir
 
-    return resolve_bridge_story_dir(config, story_id)
+    lid = (launch_id or get_batch_launch_id() or "").strip() or None
+    return resolve_bridge_story_dir(config, story_id, launch_id=lid)
 
 
 def _director_module_dir(config: OrchestratorConfig) -> Path:
@@ -2153,6 +2157,10 @@ def run_youtube_director_prompts_batch_auto_gemini(
     config: OrchestratorConfig,
     options: YoutubeGeminiBatchOptions,
 ) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id
+    from orchestrator.youtube_full_auto.layout import safe_slug
+    from orchestrator.youtube_full_auto.result_correlation import STAGE_YOUTUBE_SCENE_PROMPTS, text_hash_sha256, write_staged_marker
+
     director_dir = _director_module_dir(config)
     stories_dir = Path(options.stories[0].stage_dir).parent if options.stories else director_dir / "stories_from_orchestrator"
     log_path = director_dir / "logs" / f"youtube_gemini_director_batch_auto_{abs(hash(str(stories_dir))) % 100000}.log"
@@ -2171,6 +2179,21 @@ def run_youtube_director_prompts_batch_auto_gemini(
             stage_dir.mkdir(parents=True, exist_ok=True)
             if source_text.is_file():
                 _bridge_copy2(config, source_text, stage_dir / "story.txt", function="run_youtube_director_prompts_batch_auto_gemini")
+                worker_match = re.search(r"worker_(\d+)", str(options.worker_label or ""))
+                worker_idx = int(worker_match.group(1)) if worker_match else 0
+                run_id = str(get_batch_launch_id() or "")
+                write_staged_marker(
+                    stage_dir,
+                    run_id=run_id,
+                    story_id=item.story_id,
+                    story_slug=safe_slug(item.story_id),
+                    text_hash_sha256_value=text_hash_sha256(source_text),
+                    stage=STAGE_YOUTUBE_SCENE_PROMPTS,
+                    browser_session_id=str(options.worker_label or "prompts_batch"),
+                    account_index=worker_idx,
+                    worker_id=str(options.worker_label or ""),
+                    title=item.story_id,
+                )
             if audio_path.is_file():
                 _bridge_copy2(config, audio_path, stage_dir / "narration.mp3", function="run_youtube_director_prompts_batch_auto_gemini")
             if characters_path.is_file():
