@@ -70,25 +70,24 @@ def detect_path_language(path: Path) -> str:
     return detect_text_language(_read_text(path)) if path.is_file() else "missing"
 
 
-def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
-    root = (config.root_dir / "output" / "youtube").resolve()
-    direct = root / story_id
-    if direct.is_dir():
-        return direct.resolve()
-    key = story_id.strip()
-    matches: list[Path] = []
-    if root.is_dir():
-        for child in root.iterdir():
-            if not child.is_dir():
-                continue
-            manifest = _read_json(child / "youtube_story_manifest.json")
-            sid = str(manifest.get("story_id", "")).strip()
-            canonical = str(manifest.get("canonical_basename", "")).strip()
-            if key in {sid, canonical} or sid.casefold() == key.casefold() or canonical.casefold() == key.casefold():
-                matches.append(child)
-    if len(matches) == 1:
-        return matches[0].resolve()
-    return direct.resolve()
+def _story_dir(
+    config: OrchestratorConfig,
+    story_id: str,
+    *,
+    launch_id: str | None = None,
+    launch_root: Path | None = None,
+) -> Path:
+    from orchestrator.launch_contract import resolve_youtube_story_dir
+    from orchestrator.isolated_launch_context import get_batch_launch_id
+
+    effective_launch_id = str(launch_id or get_batch_launch_id() or "").strip()
+    story_dir, _ctx = resolve_youtube_story_dir(
+        config,
+        story_id,
+        launch_id=effective_launch_id,
+        launch_root=launch_root,
+    )
+    return story_dir
 
 
 def _manifest_path(story_dir: Path) -> Path:

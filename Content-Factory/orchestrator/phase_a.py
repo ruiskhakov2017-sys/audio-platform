@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -13,7 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.gemini_colab_proxy import GeminiColabProxySession
+from orchestrator.gemini_diagnostics import (
+    MODEL_SWITCH_FAILURE_KIND,
+    extract_model_switch_failure,
+    has_model_switch_failure,
+    read_text_tail,
+    write_json as write_diag_json,
+)
 from orchestrator.human_launch_layout import launch_legacy_output_root, launch_legacy_runs_root
+from orchestrator.isolated_io import is_active_isolated, write_json as isolated_write_json
+from orchestrator.isolated_launch_context import get_active_config
+from orchestrator.isolated_runtime_paths import resolve_phase_a_paths
 from orchestrator.length_filter import LengthFilterOptions, run_length_filter
 from orchestrator.site_tts.info_parser import resolve_cleaned_story_txt_path, resolve_voice_letter_from_info_content
 from orchestrator.status import StatusStore
@@ -42,6 +54,7 @@ SELECTION_REJECT_TOKEN_RE = re.compile(r"(?i)\b(reject|rejected|decline|declined
 POLICY_REFUSAL_RE = re.compile(
     r"(?is)(may\s+go\s+against\s+my\s+guidelines|can't\s+help\s+with\s+that|cannot\s+help\s+with\s+that|не\s+могу\s+помочь\s+с\s+этим|противоречит\s+моим?\s+правилам|не\s+могу\s+выполнить\s+этот\s+запрос)"
 )
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
 @dataclass
@@ -64,22 +77,81 @@ class PhaseAOptions:
     visual_mode: str = "manual"
     visual_pod_url: str = ""
     # Пул Chrome-профилей (Gemini): не более ``gemini_target_active_workers`` процессов одновременно.
-    gemini_target_active_workers: int = 3
+    gemini_target_active_workers: int = 5
     gemini_profiles_total: int = 5
     gemini_max_restarts_per_profile: int = 3
     gemini_profile_cooldown_seconds: float = 900.0
     gemini_supervised_workers: bool = True
+    gemini_start_mode: str = "staggered-first-result"
+    ramp_up_stop_on_system_fail: bool = True
+    gemini_session_mode: str = "persistent-account"
     # Если задан — корень Запуски/<name>/; runs/ и output/ в 10_Временные_файлы/legacy/...
     launch_dir: Path | None = None
 
 
-def _write_json(path: Path, payload: Any) -> None:
+def _write_json(path: Path, payload: Any, *, config: OrchestratorConfig | None = None) -> None:
+    cfg = config or get_active_config()
+    if cfg is not None and is_active_isolated(cfg):
+        isolated_write_json(cfg, path, payload, module="orchestrator.phase_a", function="_write_json")
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_phase_a_gemini_error_report(
+    *,
+    launch_dir: Path | None,
+    run_root: Path,
+    logs_dir: Path,
+    stage_key: str,
+    message: str,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {}
+    supervisor_report = logs_dir / "phase_a_gemini_error_report.json"
+    if supervisor_report.is_file():
+        try:
+            raw = json.loads(supervisor_report.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                report = raw
+        except Exception:
+            report = {}
+    if not report:
+        for log_path in sorted(logs_dir.glob(f"{stage_key}_worker_*.log")):
+            tail = read_text_tail(log_path)
+            if not has_model_switch_failure(tail):
+                continue
+            report = extract_model_switch_failure(
+                tail,
+                stage_key=stage_key,
+                log_path=str(log_path.resolve()),
+                next_action="Запустите python -m orchestrator site gemini-preflight --launch-name <launch> и проверьте Gemini model selector.",
+            )
+            break
+    if not report:
+        report = {
+            "ok": False,
+            "failure_kind": "gemini_phase_a_failed",
+            "stage_key": stage_key,
+            "reason": message,
+        }
+    report["phase_a_message"] = message
+    report["run_root"] = str(run_root.resolve())
+    report["logs_dir"] = str(logs_dir.resolve())
+    run_report = run_root / "phase_a_gemini_error_report.json"
+    report["run_report_path"] = str(run_report.resolve())
+    write_diag_json(run_report, report)
+    if launch_dir is not None:
+        launch_report = launch_dir.resolve() / "10_Отчёты" / "phase_a_gemini_error_report.json"
+        report["launch_name"] = launch_dir.resolve().name
+        report["launch_report_path"] = str(launch_report.resolve())
+        if report.get("failure_kind") == MODEL_SWITCH_FAILURE_KIND:
+            report["next_action"] = f'python -m orchestrator site gemini-preflight --launch-name "{launch_dir.resolve().name}"'
+        write_diag_json(launch_report, report)
+    return report
 
 
 def _is_nonempty_info_txt(path: Path) -> bool:
@@ -394,6 +466,17 @@ def _read_profile_email(user_data_dir: Path) -> str:
         email = str(item.get("email", "")).strip().lower()
         if email:
             return email
+    gaia_cookie = payload.get("gaia_cookie")
+    if isinstance(gaia_cookie, dict):
+        blob = str(gaia_cookie.get("last_list_accounts_binary_data") or "").strip()
+        if blob:
+            try:
+                decoded = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=False)
+                match = EMAIL_RE.search(decoded.decode("utf-8", errors="ignore"))
+                if match:
+                    return match.group(0).strip().lower()
+            except Exception:
+                pass
     return ""
 
 
@@ -414,6 +497,8 @@ def _run_legacy_gemini_gate(
     profile_cooldown_seconds: float = 900.0,
     supervised_workers: bool = True,
     profile_index_override: int | None = None,
+    gemini_start_mode: str = "staggered-first-result",
+    ramp_up_stop_on_system_fail: bool = True,
 ) -> tuple[bool, str]:
     def _build_error_bundle(failed_workers: list[int]) -> str:
         if logs_dir is None:
@@ -532,38 +617,152 @@ def _run_legacy_gemini_gate(
         f"profiles_total={profiles_cap} pending_count={effective_pending} target_active={target_active}",
         flush=True,
     )
-    if workers == 1:
-        env = dict(os.environ)
-        env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
-        env["GEMINI_STAGE_KEY"] = stage_key
-        env["GEMINI_DYNAMIC_QUEUE"] = "1"
-        if logs_dir is not None:
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_1.log").resolve())
-        single_idx = int(profile_index_override) if profile_index_override is not None else 0
-        single_idx = max(0, min(int(profiles_cap) - 1, single_idx))
-        user_data_dir = gemini_module_dir / f"user_data_{single_idx}"
-        env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
-        ok_url, selected_url, selected_email, err = _select_url(single_idx)
-        if not ok_url:
-            return False, err
-        env.pop("GEMINI_URL", None)
-        env["GEMINI_URL"] = selected_url
-        env["PARALLEL_WORKERS"] = "1"
-        env["WORKER_INDEX"] = str(single_idx)
-        print(
-            f"[A3] worker 1/{workers} gem_stage={stage_key} profile=user_data_{single_idx} "
-            f"registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
-            flush=True,
-        )
-        progress_state: dict[str, Any] = {}
-        proc = subprocess.Popen(
-            [sys.executable, str(gemini)],
-            env=env,
-            creationflags=gemini_worker_subprocess_creationflags(),
-        )
+    proxy_session = GeminiColabProxySession(config.root_dir)
+    try:
+        proxy_session.start()
+        proxy_overlay = proxy_session.env_overlay()
+        print(f"[A3] gemini colab proxy bridge: {proxy_overlay.get('GEMINI_PROXY_SERVER')}", flush=True)
+        if workers == 1:
+            env = dict(os.environ)
+            env.update(proxy_overlay)
+            env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
+            env["GEMINI_STAGE_KEY"] = stage_key
+            env["GEMINI_DYNAMIC_QUEUE"] = "1"
+            if logs_dir is not None:
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_1.log").resolve())
+            single_idx = int(profile_index_override) if profile_index_override is not None else 0
+            single_idx = max(0, min(int(profiles_cap) - 1, single_idx))
+            user_data_dir = gemini_module_dir / f"user_data_{single_idx}"
+            env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
+            ok_url, selected_url, selected_email, err = _select_url(single_idx)
+            if not ok_url:
+                return False, err
+            env.pop("GEMINI_URL", None)
+            env["GEMINI_URL"] = selected_url
+            env["GEMINI_ACCOUNT_EMAIL"] = selected_email
+            env["PARALLEL_WORKERS"] = "1"
+            env["WORKER_INDEX"] = str(single_idx)
+            print(
+                f"[A3] worker 1/{workers} gem_stage={stage_key} profile=user_data_{single_idx} "
+                f"registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
+                flush=True,
+            )
+            progress_state: dict[str, Any] = {}
+            proc = subprocess.Popen(
+                [sys.executable, str(gemini)],
+                env=env,
+                creationflags=gemini_worker_subprocess_creationflags(),
+            )
+            poll_iv = 0.75
+            while proc.poll() is None:
+                maybe_print_gemini_queue_progress(
+                    stage_key=stage_key,
+                    gemini_stories_root=gemini_stories_root,
+                    pending=None,
+                    expected_total=effective_pending,
+                    progress_state=progress_state,
+                )
+                time.sleep(poll_iv)
+            maybe_print_gemini_queue_progress(
+                stage_key=stage_key,
+                gemini_stories_root=gemini_stories_root,
+                pending=None,
+                expected_total=effective_pending,
+                progress_state=progress_state,
+            )
+            if int(proc.returncode or 0) != 0:
+                return False, "legacy Gemini gate failed (see console output above)"
+            return True, "legacy Gemini gate completed"
+
+        if use_supervisor:
+
+            def _build_proc_env(idx: int, parallel_slice: int) -> dict[str, str] | None:
+                ok_url, selected_url, selected_email, err = _select_url(idx)
+                if not ok_url:
+                    print(f"[A3] supervisor skip profile {idx+1}: {err}", flush=True)
+                    return None
+                env = dict(os.environ)
+                env.update(proxy_overlay)
+                env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
+                env["GEMINI_STAGE_KEY"] = stage_key
+                # Под supervisor разделяем очередь по WORKER_INDEX (см. parallel_slice), а не по
+                # индексу Chrome-профиля: иначе профили 0 и 2 при target=2 дают одинаковый idx%2.
+                env["GEMINI_DYNAMIC_QUEUE"] = "0"
+                if logs_dir is not None:
+                    logs_dir.mkdir(parents=True, exist_ok=True)
+                    env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_{idx+1}.log").resolve())
+                user_data_dir = gemini_module_dir / f"user_data_{idx}"
+                env.pop("GEMINI_URL", None)
+                env["GEMINI_URL"] = selected_url
+                env["GEMINI_ACCOUNT_EMAIL"] = selected_email
+                ta = max(1, int(target_active))
+                env["PARALLEL_WORKERS"] = str(ta)
+                slot = max(0, min(ta - 1, int(parallel_slice)))
+                env["WORKER_INDEX"] = str(slot)
+                env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
+                return env
+
+            return run_supervised_gemini_workers(
+                gemini_script=gemini,
+                gemini_stories_root=gemini_stories_root,
+                logs_dir=logs_dir or (gemini_stories_root.parent / "logs"),
+                stage_key=stage_key,
+                options=GeminiSupervisorOptions(
+                    target_active_workers=target_active,
+                    profiles_total=profiles_cap,
+                    max_restarts_per_profile=max(1, int(max_restarts_per_profile)),
+                    profile_cooldown_seconds=float(profile_cooldown_seconds),
+                    max_supervisor_seconds=600.0 if effective_pending <= 2 else 0.0,
+                    run_id=str(run_id or "").strip(),
+                    gemini_start_mode=str(gemini_start_mode or "staggered-first-result"),
+                    ramp_up_stop_on_system_fail=bool(ramp_up_stop_on_system_fail),
+                ),
+                build_proc_env=_build_proc_env,
+                events_file=events_file,
+                expected_gemini_pending_total=effective_pending,
+            )
+
+        procs: list[tuple[int, subprocess.Popen[bytes]]] = []
+        skipped_workers: list[tuple[int, str]] = []
+        for idx in range(workers):
+            env = dict(os.environ)
+            env.update(proxy_overlay)
+            env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
+            env["GEMINI_STAGE_KEY"] = stage_key
+            # Несколько процессов с dynamic_queue=1 тянут одну очередь; при сбое локов возможен дубль.
+            env["GEMINI_DYNAMIC_QUEUE"] = "0" if int(workers) > 1 else "1"
+            if logs_dir is not None:
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_{idx+1}.log").resolve())
+            user_data_dir = gemini_module_dir / f"user_data_{idx}"
+            ok_url, selected_url, selected_email, err = _select_url(idx)
+            if not ok_url:
+                skipped_workers.append((idx, err))
+                print(f"[A3] worker {idx+1}/{workers} skipped: {err}", flush=True)
+                continue
+            env.pop("GEMINI_URL", None)
+            env["GEMINI_URL"] = selected_url
+            env["GEMINI_ACCOUNT_EMAIL"] = selected_email
+            env["PARALLEL_WORKERS"] = str(workers)
+            env["WORKER_INDEX"] = str(idx)
+            env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
+            cmd = [sys.executable, str(gemini)]
+            print(
+                f"[A3] worker {idx+1}/{workers} started: {' '.join(cmd)} "
+                f"gem_stage={stage_key} registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
+                flush=True,
+            )
+            creationflags = gemini_worker_subprocess_creationflags()
+            procs.append((idx, subprocess.Popen(cmd, env=env, creationflags=creationflags)))
+
+        if not procs:
+            reasons = "; ".join([f"worker {i+1}: {msg}" for i, msg in skipped_workers]) or "no valid workers"
+            return False, f"legacy Gemini gate failed: no active workers. {reasons}"
+
+        progress_state = {}
         poll_iv = 0.75
-        while proc.poll() is None:
+        while any(proc.poll() is None for _, proc in procs):
             maybe_print_gemini_queue_progress(
                 stage_key=stage_key,
                 gemini_stories_root=gemini_stories_root,
@@ -579,141 +778,42 @@ def _run_legacy_gemini_gate(
             expected_total=effective_pending,
             progress_state=progress_state,
         )
-        if int(proc.returncode or 0) != 0:
-            return False, "legacy Gemini gate failed (see console output above)"
-        return True, "legacy Gemini gate completed"
 
-    if use_supervisor:
+        failed: list[int] = []
+        succeeded: list[int] = []
+        for idx, proc in procs:
+            code = int(proc.returncode or 0)
+            if code != 0:
+                failed.append(idx)
+            else:
+                succeeded.append(idx)
+            print(f"[A3] worker {idx+1}/{workers} finished with code={code}", flush=True)
 
-        def _build_proc_env(idx: int, parallel_slice: int) -> dict[str, str] | None:
-            ok_url, selected_url, selected_email, err = _select_url(idx)
-            if not ok_url:
-                print(f"[A3] supervisor skip profile {idx+1}: {err}", flush=True)
-                return None
-            env = dict(os.environ)
-            env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
-            env["GEMINI_STAGE_KEY"] = stage_key
-            # Под supervisor разделяем очередь по WORKER_INDEX (см. parallel_slice), а не по
-            # индексу Chrome-профиля: иначе профили 0 и 2 при target=2 дают одинаковый idx%2.
-            env["GEMINI_DYNAMIC_QUEUE"] = "0"
-            if logs_dir is not None:
-                logs_dir.mkdir(parents=True, exist_ok=True)
-                env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_{idx+1}.log").resolve())
-            user_data_dir = gemini_module_dir / f"user_data_{idx}"
-            env.pop("GEMINI_URL", None)
-            env["GEMINI_URL"] = selected_url
-            ta = max(1, int(target_active))
-            env["PARALLEL_WORKERS"] = str(ta)
-            slot = max(0, min(ta - 1, int(parallel_slice)))
-            env["WORKER_INDEX"] = str(slot)
-            env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
-            return env
+        skipped_note = ""
+        if skipped_workers:
+            skipped_note = "; skipped_workers=" + ",".join(str(i + 1) for i, _ in skipped_workers)
 
-        return run_supervised_gemini_workers(
-            gemini_script=gemini,
-            gemini_stories_root=gemini_stories_root,
-            logs_dir=logs_dir or (gemini_stories_root.parent / "logs"),
-            stage_key=stage_key,
-            options=GeminiSupervisorOptions(
-                target_active_workers=target_active,
-                profiles_total=profiles_cap,
-                max_restarts_per_profile=max(1, int(max_restarts_per_profile)),
-                profile_cooldown_seconds=float(profile_cooldown_seconds),
-                max_supervisor_seconds=600.0 if effective_pending <= 2 else 0.0,
-                run_id=str(run_id or "").strip(),
-            ),
-            build_proc_env=_build_proc_env,
-            events_file=events_file,
-            expected_gemini_pending_total=effective_pending,
-        )
-
-    procs: list[tuple[int, subprocess.Popen[bytes]]] = []
-    skipped_workers: list[tuple[int, str]] = []
-    for idx in range(workers):
-        env = dict(os.environ)
-        env["GEMINI_STORIES_DIR"] = str(gemini_stories_root)
-        env["GEMINI_STAGE_KEY"] = stage_key
-        # Несколько процессов с dynamic_queue=1 тянут одну очередь; при сбое локов возможен дубль.
-        env["GEMINI_DYNAMIC_QUEUE"] = "0" if int(workers) > 1 else "1"
-        if logs_dir is not None:
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            env["GEMINI_LOG_FILE"] = str((logs_dir / f"{stage_key}_worker_{idx+1}.log").resolve())
-        user_data_dir = gemini_module_dir / f"user_data_{idx}"
-        ok_url, selected_url, selected_email, err = _select_url(idx)
-        if not ok_url:
-            skipped_workers.append((idx, err))
-            print(f"[A3] worker {idx+1}/{workers} skipped: {err}", flush=True)
-            continue
-        env.pop("GEMINI_URL", None)
-        env["GEMINI_URL"] = selected_url
-        env["PARALLEL_WORKERS"] = str(workers)
-        env["WORKER_INDEX"] = str(idx)
-        env["GEMINI_USER_DATA_DIR"] = str(user_data_dir)
-        cmd = [sys.executable, str(gemini)]
-        print(
-            f"[A3] worker {idx+1}/{workers} started: {' '.join(cmd)} "
-            f"gem_stage={stage_key} registry_email={selected_email or 'n/a'} gem_url={env['GEMINI_URL']}",
-            flush=True,
-        )
-        creationflags = gemini_worker_subprocess_creationflags()
-        procs.append((idx, subprocess.Popen(cmd, env=env, creationflags=creationflags)))
-
-    if not procs:
-        reasons = "; ".join([f"worker {i+1}: {msg}" for i, msg in skipped_workers]) or "no valid workers"
-        return False, f"legacy Gemini gate failed: no active workers. {reasons}"
-
-    progress_state: dict[str, Any] = {}
-    poll_iv = 0.75
-    while any(proc.poll() is None for _, proc in procs):
-        maybe_print_gemini_queue_progress(
-            stage_key=stage_key,
-            gemini_stories_root=gemini_stories_root,
-            pending=None,
-            expected_total=effective_pending,
-            progress_state=progress_state,
-        )
-        time.sleep(poll_iv)
-    maybe_print_gemini_queue_progress(
-        stage_key=stage_key,
-        gemini_stories_root=gemini_stories_root,
-        pending=None,
-        expected_total=effective_pending,
-        progress_state=progress_state,
-    )
-
-    failed: list[int] = []
-    succeeded: list[int] = []
-    for idx, proc in procs:
-        code = int(proc.returncode or 0)
-        if code != 0:
-            failed.append(idx)
-        else:
-            succeeded.append(idx)
-        print(f"[A3] worker {idx+1}/{workers} finished with code={code}", flush=True)
-
-    skipped_note = ""
-    if skipped_workers:
-        skipped_note = "; skipped_workers=" + ",".join(str(i + 1) for i, _ in skipped_workers)
-
-    if failed and not succeeded:
-        bundle = _build_error_bundle(failed)
-        hint = f"; error_bundle: {bundle}" if bundle else ""
-        return False, (
-            f"legacy Gemini gate failed in workers: {', '.join(str(i+1) for i in failed)}"
-            f"{hint}{skipped_note}"
-        )
-    if failed:
-        bundle = _build_error_bundle(failed)
-        hint = f"; error_bundle: {bundle}" if bundle else ""
+        if failed and not succeeded:
+            bundle = _build_error_bundle(failed)
+            hint = f"; error_bundle: {bundle}" if bundle else ""
+            return False, (
+                f"legacy Gemini gate failed in workers: {', '.join(str(i+1) for i in failed)}"
+                f"{hint}{skipped_note}"
+            )
+        if failed:
+            bundle = _build_error_bundle(failed)
+            hint = f"; error_bundle: {bundle}" if bundle else ""
+            return True, (
+                f"legacy Gemini gate completed with partial worker failures: "
+                f"ok={','.join(str(i+1) for i in succeeded)} "
+                f"failed={','.join(str(i+1) for i in failed)}{hint}{skipped_note}"
+            )
         return True, (
-            f"legacy Gemini gate completed with partial worker failures: "
-            f"ok={','.join(str(i+1) for i in succeeded)} "
-            f"failed={','.join(str(i+1) for i in failed)}{hint}{skipped_note}"
+            f"legacy Gemini gate completed ({len(procs)} active workers"
+            f"{skipped_note})"
         )
-    return True, (
-        f"legacy Gemini gate completed ({len(procs)} active workers"
-        f"{skipped_note})"
-    )
+    finally:
+        proxy_session.stop()
 
 
 def _gemini_fit(info_path: Path) -> str | None:
@@ -1103,10 +1203,24 @@ def _write_stage_stop_report(
 
 
 def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str, Any]:
+    launch_dir = options.launch_dir
+    if launch_dir is not None:
+        from orchestrator.isolated_launch_context import isolated_launch_context
+        from orchestrator.isolated_launch_mode import is_isolated_launch
+
+        if is_isolated_launch(config, launch_id=launch_dir.name, launch_root=launch_dir):
+            with isolated_launch_context(config, launch_dir.name, launch_root=launch_dir):
+                return _run_phase_a_body(config, options)
+    return _run_phase_a_body(config, options)
+
+
+def _run_phase_a_body(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str, Any]:
     pipeline = "phase-a"
     stage = "phase_a"
     stories_dir = options.stories_dir.resolve()
-    status = StatusStore(config.status_file)
+    from orchestrator.isolated_launch_context import resolve_status_file
+
+    status = StatusStore(resolve_status_file(config))
     status.append(
         story_id=options.story_id,
         pipeline=pipeline,
@@ -1116,11 +1230,15 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     )
 
     branch = "youtube" if str(options.run_branch).strip().lower() == "youtube" else "site"
-    if options.launch_dir is not None:
-        launch_base = options.launch_dir.resolve()
-        runs_root = launch_legacy_runs_root(launch_base, branch, options.story_id)
-    else:
-        runs_root = config.root_dir / "runs" / branch / options.story_id
+    phase_paths = resolve_phase_a_paths(
+        config,
+        launch_dir=options.launch_dir,
+        branch=branch,
+        story_id=options.story_id,
+    )
+    runs_root = phase_paths.runs_root
+    output_dir = phase_paths.output_dir
+    isolated_layout = phase_paths.isolated
     if runs_root.exists() and not options.resume:
         shutil.rmtree(runs_root, ignore_errors=True)
     runs_stories_root = runs_root / "stories"
@@ -1130,26 +1248,27 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
     runs_policy_refusal_root = runs_root / "policy_refusal"
     runs_manual_root = runs_root / "manual_review"
     runs_logs_root = runs_root / "logs"
-    runs_stories_root.mkdir(parents=True, exist_ok=True)
-    runs_rejected_root.mkdir(parents=True, exist_ok=True)
-    runs_rejected_by_length_root.mkdir(parents=True, exist_ok=True)
-    runs_rejected_by_selection_root.mkdir(parents=True, exist_ok=True)
-    runs_policy_refusal_root.mkdir(parents=True, exist_ok=True)
-    runs_manual_root.mkdir(parents=True, exist_ok=True)
-    runs_logs_root.mkdir(parents=True, exist_ok=True)
-    if options.launch_dir is not None:
-        output_dir = launch_legacy_output_root(options.launch_dir.resolve(), branch=branch)
-    else:
-        output_dir = config.root_dir / "output" / ("youtube" if branch == "youtube" else "site")
+    if not isolated_layout:
+        runs_stories_root.mkdir(parents=True, exist_ok=True)
+        runs_rejected_root.mkdir(parents=True, exist_ok=True)
+        runs_rejected_by_length_root.mkdir(parents=True, exist_ok=True)
+        runs_rejected_by_selection_root.mkdir(parents=True, exist_ok=True)
+        runs_policy_refusal_root.mkdir(parents=True, exist_ok=True)
+        runs_manual_root.mkdir(parents=True, exist_ok=True)
+        runs_logs_root.mkdir(parents=True, exist_ok=True)
     run_root = runs_root / "_phase_a"
     if run_root.exists() and not options.resume:
         shutil.rmtree(run_root, ignore_errors=True)
-    run_root.mkdir(parents=True, exist_ok=True)
+    if not isolated_layout:
+        run_root.mkdir(parents=True, exist_ok=True)
     run_log = runs_root / "run.log"
     _append_run_log(run_log, f"phase_a started run_id={options.story_id}")
     print(f"[PHASE A] started: story_id={options.story_id}", flush=True)
     if options.launch_dir is not None:
-        print(f"[PHASE A] launch_dir (legacy under 10_Временные_файлы): {options.launch_dir.resolve()}", flush=True)
+        if isolated_layout:
+            print(f"[PHASE A] launch_dir (isolated): {options.launch_dir.resolve()}", flush=True)
+        else:
+            print(f"[PHASE A] launch_dir (legacy under 10_Временные_файлы): {options.launch_dir.resolve()}", flush=True)
     print(f"[PHASE A] phase_a artifacts dir: {run_root}", flush=True)
     print(
         f"[PHASE A] gemini workers requested={max(1, min(5, int(options.gemini_workers)))} "
@@ -1385,8 +1504,17 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             max_restarts_per_profile=max(1, int(options.gemini_max_restarts_per_profile)),
             profile_cooldown_seconds=float(options.gemini_profile_cooldown_seconds),
             supervised_workers=bool(options.gemini_supervised_workers),
+            gemini_start_mode=str(options.gemini_start_mode),
+            ramp_up_stop_on_system_fail=bool(options.ramp_up_stop_on_system_fail),
         )
         if not ok_gemini:
+            gemini_error_report = _write_phase_a_gemini_error_report(
+                launch_dir=options.launch_dir,
+                run_root=run_root,
+                logs_dir=runs_logs_root,
+                stage_key=options.gemini_stage_key,
+                message=gemini_msg,
+            )
             status.append(
                 story_id=options.story_id,
                 pipeline=pipeline,
@@ -1396,7 +1524,14 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             )
             _write_json(
                 run_root / "selection_gate_manifest.json",
-                {"stage": "selection_gate", "ok": False, "message": gemini_msg},
+                {
+                    "stage": "selection_gate",
+                    "ok": False,
+                    "message": gemini_msg,
+                    "failure_kind": gemini_error_report.get("failure_kind"),
+                    "error_report": gemini_error_report.get("launch_report_path")
+                    or gemini_error_report.get("run_report_path"),
+                },
             )
             return {"ok": False, "message": gemini_msg}
 
@@ -1808,8 +1943,17 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             max_restarts_per_profile=max(1, int(options.gemini_max_restarts_per_profile)),
             profile_cooldown_seconds=float(options.gemini_profile_cooldown_seconds),
             supervised_workers=bool(options.gemini_supervised_workers),
+            gemini_start_mode=str(options.gemini_start_mode),
+            ramp_up_stop_on_system_fail=bool(options.ramp_up_stop_on_system_fail),
         )
         if not ok_info:
+            gemini_error_report = _write_phase_a_gemini_error_report(
+                launch_dir=options.launch_dir,
+                run_root=run_root,
+                logs_dir=runs_logs_root,
+                stage_key=options.gemini_info_stage_key,
+                message=info_msg,
+            )
             status.append(
                 story_id=options.story_id,
                 pipeline=pipeline,
@@ -1819,7 +1963,14 @@ def run_phase_a(config: OrchestratorConfig, options: PhaseAOptions) -> dict[str,
             )
             _write_json(
                 run_root / "site_info_manifest.json",
-                {"stage": "site_info_builder", "ok": False, "message": info_msg},
+                {
+                    "stage": "site_info_builder",
+                    "ok": False,
+                    "message": info_msg,
+                    "failure_kind": gemini_error_report.get("failure_kind"),
+                    "error_report": gemini_error_report.get("launch_report_path")
+                    or gemini_error_report.get("run_report_path"),
+                },
             )
             _write_stage_stop_report(
                 runs_root / "REPORT.md",

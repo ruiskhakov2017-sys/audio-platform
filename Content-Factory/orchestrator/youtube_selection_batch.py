@@ -255,7 +255,18 @@ def _candidate_rows(*, config: OrchestratorConfig, options: YoutubeSelectionBatc
     return candidates, summary, deferred_path
 
 
-def _write_mini_deferred(root_dir: Path, site_run_id: str, item: dict[str, Any]) -> Path:
+def _write_mini_deferred(
+    root_dir: Path,
+    site_run_id: str,
+    item: dict[str, Any],
+    *,
+    config: OrchestratorConfig | None = None,
+    batch_launch_id: str | None = None,
+) -> Path:
+    if config is not None:
+        from orchestrator.youtube_path_resolver import write_mini_deferred as isolated_write
+
+        return isolated_write(config, site_run_id, item, batch_launch_id=batch_launch_id)
     out = root_dir / "runs" / "site" / site_run_id / "_phase_a" / "ready_queues" / "deferred.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"queue": "deferred", "items": [item]}, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -406,7 +417,13 @@ def run_youtube_selection_batch_from_site(
             f"yes={yes_count}/{target_yes} title={title}",
             flush=True,
         )
-        _write_mini_deferred(root_dir, mini_site_id, candidate["item"])
+        _write_mini_deferred(
+            root_dir,
+            mini_site_id,
+            candidate["item"],
+            config=config,
+            batch_launch_id=youtube_run_id,
+        )
 
         status = "failed"
         verdict = "unknown"

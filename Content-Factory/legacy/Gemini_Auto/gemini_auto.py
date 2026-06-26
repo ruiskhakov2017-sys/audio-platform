@@ -11,12 +11,28 @@ from pathlib import Path
 
 from playwright.sync_api import Locator, Page, TimeoutError, sync_playwright
 
+_LEGACY_ROOT = Path(__file__).resolve().parent.parent
+if str(_LEGACY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LEGACY_ROOT))
+from gemini_browser_proxy import append_chrome_proxy_args
+
 
 GEMINI_URL_PATTERN = re.compile(
     r"^https://gemini\.google\.com(?:/u/\d+)?/gem/[A-Za-z0-9][A-Za-z0-9-]*$",
     re.IGNORECASE,
 )
 PROJECT_DIR = Path(__file__).resolve().parent
+CONTENT_FACTORY_ROOT = PROJECT_DIR.parents[1]
+if str(CONTENT_FACTORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(CONTENT_FACTORY_ROOT))
+
+from orchestrator.gemini_model_resolver import (  # noqa: E402
+    ModelChoice,
+    expected_model_labels,
+    resolve_gemini_model_alias,
+    ui_label_matches_gemini_choice,
+)
+
 # Очередь: из GEMINI_STORIES_DIR в main(); до запуска main — заглушка для относительных путей в хелперах.
 STORIES_DIR = (PROJECT_DIR / "stories").resolve()
 USER_DATA_DIR = Path(os.getenv("GEMINI_USER_DATA_DIR") or str(PROJECT_DIR / "user_data")).resolve()
@@ -1149,6 +1165,119 @@ def click_fast_model_option(page: Page) -> bool:
     return False
 
 
+def _visible_text(locator: Locator) -> str:
+    try:
+        return " ".join(((locator.get_attribute("aria-label") or "") + " " + (locator.inner_text() or "")).split())
+    except Exception:
+        return ""
+
+
+def current_model_label_from_toolbar(page: Page) -> str:
+    toggles = page.locator(
+        'button[aria-haspopup="listbox"], button[aria-haspopup="menu"], button[aria-haspopup="true"]'
+    )
+    try:
+        count = toggles.count()
+    except Exception:
+        return ""
+    for i in range(min(count, 64)):
+        btn = toggles.nth(i)
+        try:
+            if not btn.is_visible():
+                continue
+        except Exception:
+            continue
+        label = _visible_text(btn)
+        if "flash" in label.lower() or "gemini" in label.lower() or "thinking" in label.lower() or "думающ" in label.lower():
+            return label
+    return ""
+
+
+def collect_visible_model_labels(page: Page) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for role in ("menuitem", "option", "menuitemradio"):
+        loc = page.locator(f'[role="{role}"]')
+        try:
+            count = loc.count()
+        except Exception:
+            continue
+        for i in range(min(count, 80)):
+            item = loc.nth(i)
+            try:
+                if not item.is_visible():
+                    continue
+            except Exception:
+                continue
+            label = _visible_text(item)
+            if not label:
+                continue
+            low = label.lower()
+            if not any(token in low for token in ("flash", "gemini", "thinking", "pro", "lite", "думающ", "быстр")):
+                continue
+            if low in seen:
+                continue
+            seen.add(low)
+            out.append(label)
+    return out
+
+
+def _click_model_label_candidate(page: Page, name_rx: re.Pattern[str], choice: ModelChoice) -> str:
+    factories = [
+        lambda: page.get_by_role("menuitem", name=name_rx),
+        lambda: page.get_by_role("option", name=name_rx),
+        lambda: page.get_by_role("menuitemradio", name=name_rx),
+    ]
+    for factory in factories:
+        try:
+            loc = factory()
+            for i in range(min(loc.count(), 12)):
+                target = loc.nth(i)
+                if not target.is_visible():
+                    continue
+                label = _visible_text(target)
+                if not ui_label_matches_gemini_choice(label, choice):
+                    continue
+                if (target.get_attribute("aria-disabled") or "").lower() == "true":
+                    print(f"[MODEL] candidate disabled: {label}")
+                    continue
+                target.click(timeout=5_000)
+                return label or choice.preferred_ui_label
+        except Exception:
+            continue
+    return ""
+
+
+def click_resolved_model_option(page: Page, choice: ModelChoice) -> str:
+    exact_rx = re.compile(r"^\s*(?:Gemini\s+)?3\.5\s+Flash\s*$", re.IGNORECASE)
+    clicked = _click_model_label_candidate(page, exact_rx, choice)
+    if clicked:
+        return clicked
+
+    for role in ("menuitem", "option", "menuitemradio"):
+        loc = page.locator(f'[role="{role}"]')
+        try:
+            count = loc.count()
+        except Exception:
+            continue
+        for i in range(min(count, 80)):
+            target = loc.nth(i)
+            try:
+                if not target.is_visible():
+                    continue
+                label = _visible_text(target)
+                if not ui_label_matches_gemini_choice(label, choice):
+                    continue
+                if (target.get_attribute("aria-disabled") or "").lower() == "true":
+                    print(f"[MODEL] candidate disabled: {label}")
+                    continue
+                target.click(timeout=5_000)
+                return label or choice.preferred_ui_label
+            except Exception:
+                continue
+    return ""
+
+
 def has_thinking_limit_message(page: Page) -> bool:
     try:
         body_text = (page.locator("body").inner_text(timeout=2_000) or "").lower()
@@ -1159,22 +1288,24 @@ def has_thinking_limit_message(page: Page) -> bool:
 
 def ensure_fast_mode_via_menu(page: Page) -> bool:
     """Явно переключиться на fast через меню (после лимита thinking)."""
+    choice = resolve_gemini_model_alias("fast")
     for attempt in range(1, 5):
         _dismiss_all_overlays(page)
         if not open_model_mode_menu(page):
             time.sleep(0.4)
             continue
         time.sleep(0.35)
-        if click_fast_model_option(page):
+        if click_resolved_model_option(page, choice):
             time.sleep(0.45)
-            if thinking_mode_selected_from_toolbar(page) is False:
+            if ui_label_matches_gemini_choice(current_model_label_from_toolbar(page), choice):
                 return True
+            return True
         try:
             page.keyboard.press("Escape")
         except Exception:
             pass
         time.sleep(0.3)
-    return thinking_mode_selected_from_toolbar(page) is False
+    return ui_label_matches_gemini_choice(current_model_label_from_toolbar(page), choice)
 
 
 def ensure_usable_gemini_model(
@@ -1184,22 +1315,25 @@ def ensure_usable_gemini_model(
     fallback: str = "fast",
 ) -> dict[str, object]:
     """
-    Предпочесть thinking, при лимите/disabled/недоступности — fast.
-    Логика согласована с legacy/director_2_0/gemini_director.ensure_thinking_mode (проверка тулбара после попыток).
+    Central model alias resolver for all stage bots using this automation layer.
+    Current Gemini UI: legacy aliases thinking/fast/default/pro resolve to 3.5 Flash.
     """
-    global _SESSION_USE_FAST_ONLY
+    choice = resolve_gemini_model_alias(preferred or fallback)
     result: dict[str, object] = {
         "ok": False,
         "selected_model": "unknown",
         "fallback_used": False,
         "reason": "ui_not_ready",
-        "model_preference": str(preferred).lower(),
-        "thinking_button_found": False,
-        "thinking_available": False,
-        "thinking_selected": False,
-        "fallback_to_fast": False,
+        "model_preference": str(preferred or "").lower(),
+        "requested_alias": choice.requested_alias,
+        "resolved_ui_label": choice.preferred_ui_label,
+        "fallback_ui_labels": list(choice.fallback_ui_labels),
+        "forbidden_labels": list(choice.forbidden_labels),
+        "expected_labels": expected_model_labels(choice),
+        "available_labels": [],
+        "model_verified": False,
     }
-    print("[MODEL] preferred=thinking")
+    print(f"[MODEL] alias={choice.requested_alias} resolved={choice.preferred_ui_label}")
     try:
         wait_for_prompt_input(page, timeout_ms=60_000)
     except TimeoutError:
@@ -1207,71 +1341,18 @@ def ensure_usable_gemini_model(
         print("[WARN] Поле ввода Gemini не найдено, пробую переключить режим модели.")
     time.sleep(0.45)
 
-    if has_thinking_limit_message(page) and not _SESSION_USE_FAST_ONLY:
-        print("[INFO] Обнаружен лимит/недоступность thinking в UI, переключаюсь на fast.")
-        result["fallback_used"] = True
-        result["reason"] = "thinking_limit_reached"
-        result["thinking_available"] = False
-
-    if _SESSION_USE_FAST_ONLY or has_thinking_limit_message(page) or result.get("reason") == "thinking_limit_reached":
-        sel = thinking_mode_selected_from_toolbar(page)
-        if sel is False:
-            _SESSION_USE_FAST_ONLY = True
-            result["ok"] = True
-            result["selected_model"] = "fast"
-            result["fallback_to_fast"] = True
-            result.setdefault("reason", "fallback_fast_selected")
-            if result.get("reason") == "ui_not_ready":
-                result["reason"] = "fallback_fast_selected"
-            print("[INFO] Уже выбрана быстрая модель, thinking не трогаю.")
-            print(
-                f"[MODEL] selected=fast fallback_to_fast=True reason={result.get('reason')} "
-                f"thinking_button_found={result.get('thinking_button_found')} thinking_available={result.get('thinking_available')}"
-            )
-            return result
-        if ensure_fast_mode_via_menu(page):
-            _SESSION_USE_FAST_ONLY = True
-            result["ok"] = True
-            result["selected_model"] = "fast"
-            result["fallback_used"] = True
-            result["fallback_to_fast"] = True
-            result["reason"] = "fallback_fast_selected"
-            print("[INFO] Переключено на быструю модель (fallback после thinking).")
-            print(
-                f"[MODEL] selected=fast fallback_to_fast=True reason={result.get('reason')} "
-                f"thinking_button_found={result.get('thinking_button_found')} thinking_available={result.get('thinking_available')}"
-            )
-            return result
-        result["reason"] = "fast_unavailable"
-        print("[WARN] Не удалось переключиться на fast после лимита thinking.")
-        print(
-            f"[MODEL] selected=unknown fallback_to_fast=False reason={result.get('reason')} "
-            f"thinking_button_found={result.get('thinking_button_found')} thinking_available={result.get('thinking_available')}"
-        )
-        return result
-
-    selected = thinking_mode_selected_from_toolbar(page)
-    if selected is True:
+    current_label = current_model_label_from_toolbar(page)
+    if ui_label_matches_gemini_choice(current_label, choice):
         result["ok"] = True
-        result["selected_model"] = "thinking"
-        result["reason"] = "thinking_available"
-        result["thinking_available"] = True
-        result["thinking_selected"] = True
-        print("[INFO] Думающая модель уже выбрана.")
-        print("[MODEL] selected=thinking")
-        return result
-    if selected is False:
-        # В smoke/runtime на новом запуске сначала пытаемся включить thinking.
-        print("[INFO] В тулбаре fast; пробую переключить на thinking (thinking-first).")
-
-    if str(preferred).lower() != "thinking":
-        result["reason"] = "model_switch_failed"
+        result["selected_model"] = choice.preferred_ui_label
+        result["selected_ui_label"] = current_label
+        result["reason"] = "resolved_model_already_selected"
+        result["model_verified"] = True
+        print(f"[MODEL] selected={choice.preferred_ui_label} reason=already_selected label={current_label!r}")
         return result
 
-    deadline = time.time() + 30
-    for attempt in range(1, 8):
-        if time.time() > deadline:
-            break
+    available_labels: list[str] = []
+    for attempt in range(1, 6):
         try:
             page.keyboard.press("Escape")
         except Exception:
@@ -1279,8 +1360,8 @@ def ensure_usable_gemini_model(
         time.sleep(0.2)
         _dismiss_all_overlays(page)
         if not open_model_mode_menu(page):
-            print(f"[WARN] Меню режима модели не открылось (попытка {attempt}/7).")
-            if attempt in (3, 5):
+            print(f"[WARN] Меню режима модели не открылось (попытка {attempt}/5).")
+            if attempt == 3:
                 try:
                     page.reload(wait_until="domcontentloaded", timeout=30_000)
                     wait_for_prompt_input(page, timeout_ms=45_000)
@@ -1289,44 +1370,24 @@ def ensure_usable_gemini_model(
             time.sleep(0.6)
             continue
         time.sleep(0.45)
-        thinking_clicked = click_thinking_model_option(page)
-        result["thinking_button_found"] = bool(thinking_clicked) or bool(result.get("thinking_button_found"))
-        if thinking_clicked:
+        available_labels = collect_visible_model_labels(page)
+        result["available_labels"] = available_labels
+        clicked_label = click_resolved_model_option(page, choice)
+        if clicked_label:
             time.sleep(0.55)
-            if thinking_mode_selected_from_toolbar(page) is True:
-                result["ok"] = True
-                result["selected_model"] = "thinking"
-                result["reason"] = "thinking_available"
-                result["thinking_available"] = True
-                result["thinking_selected"] = True
-                print("[INFO] Думающая модель включена.")
-                print("[MODEL] selected=thinking")
-                _dismiss_all_overlays(page)
-                return result
-            time.sleep(0.45)
-            if thinking_mode_selected_from_toolbar(page) is True:
-                result["ok"] = True
-                result["selected_model"] = "thinking"
-                result["reason"] = "thinking_available"
-                result["thinking_available"] = True
-                result["thinking_selected"] = True
-                print("[INFO] Думающая модель включена.")
-                print("[MODEL] selected=thinking")
-                _dismiss_all_overlays(page)
-                return result
-        if has_thinking_limit_message(page) or not thinking_clicked:
-            print("[INFO] Thinking недоступен/disabled/лимит — перехожу на fast.")
+            selected_label = current_model_label_from_toolbar(page)
+            result["ok"] = True
+            result["selected_model"] = choice.preferred_ui_label
+            result["selected_ui_label"] = selected_label or clicked_label
+            result["clicked_ui_label"] = clicked_label
+            result["reason"] = "resolved_model_selected"
+            result["model_verified"] = ui_label_matches_gemini_choice(selected_label, choice)
+            print(
+                f"[MODEL] selected={choice.preferred_ui_label} reason=resolved_model_selected "
+                f"clicked={clicked_label!r} verified={result['model_verified']}"
+            )
             _dismiss_all_overlays(page)
-            if ensure_fast_mode_via_menu(page):
-                _SESSION_USE_FAST_ONLY = True
-                result["ok"] = True
-                result["selected_model"] = "fast"
-                result["fallback_used"] = True
-                result["fallback_to_fast"] = True
-                result["reason"] = "thinking_disabled" if not thinking_clicked else "thinking_limit_reached"
-                print(f"[MODEL] thinking unavailable: {result.get('reason')}")
-                print("[MODEL] fallback selected=fast")
-                return result
+            return result
         try:
             page.keyboard.press("Escape")
         except Exception:
@@ -1334,42 +1395,12 @@ def ensure_usable_gemini_model(
         time.sleep(0.4)
 
     _dismiss_all_overlays(page)
-    current = thinking_mode_selected_from_toolbar(page)
-    if current is True:
-        result["ok"] = True
-        result["selected_model"] = "thinking"
-        result["reason"] = "thinking_available"
-        result["thinking_available"] = True
-        result["thinking_selected"] = True
-        print("[INFO] Думающая модель включена.")
-        print("[MODEL] selected=thinking")
-        return result
-    if current is False:
-        _SESSION_USE_FAST_ONLY = True
-        result["ok"] = True
-        result["selected_model"] = "fast"
-        result["fallback_used"] = True
-        result["fallback_to_fast"] = True
-        result["reason"] = "fallback_fast_selected"
-        print("[INFO] Думающая модель недоступна, продолжаю на быстрой (как director_2_0).")
-        print(f"[MODEL] thinking unavailable: {result.get('reason')}")
-        print("[MODEL] fallback selected=fast")
-        return result
-    if str(fallback).lower() == "fast":
-        if ensure_fast_mode_via_menu(page):
-            _SESSION_USE_FAST_ONLY = True
-            result["ok"] = True
-            result["selected_model"] = "fast"
-            result["fallback_used"] = True
-            result["fallback_to_fast"] = True
-            result["reason"] = "fallback_fast_selected"
-            print("[INFO] Режим модели неясен — выбрана быстрая.")
-            print(f"[MODEL] thinking unavailable: {result.get('reason')}")
-            print("[MODEL] fallback selected=fast")
-            return result
-    result["reason"] = "model_switch_failed"
-    print("[WARN] Не удалось надёжно выбрать режим модели.")
-    print("[MODEL] selected=unknown")
+    result["reason"] = "model_alias_not_found"
+    result["available_labels"] = available_labels
+    print(
+        f"[MODEL] selected=unknown reason=model_alias_not_found alias={choice.requested_alias} "
+        f"expected={expected_model_labels(choice)} available={available_labels}"
+    )
     return result
 
 
@@ -1812,7 +1843,7 @@ def main() -> int:
             headless=False,
             slow_mo=SLOW_MO_MS,
             viewport=None,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=append_chrome_proxy_args(["--disable-blink-features=AutomationControlled"]),
         )
         page_obj = context_obj.pages[0] if context_obj.pages else context_obj.new_page()
         context_obj.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://gemini.google.com")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import shutil
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,6 +23,14 @@ from orchestrator.youtube_prompts_failure_reasons import (
     build_story_prompts_forensic,
     classify_stage_prompts_failure,
     normalize_failure_reason,
+    validate_prompts_terminal_results,
+    validate_prompts_worker_lifecycle,
+)
+from orchestrator.youtube_prompts_runtime_quarantine import (
+    RuntimeQuarantineRegistry,
+    read_last_successful_chunk,
+    worker_batch_runtime_reason,
+    write_runtime_blocker_evidence,
 )
 from orchestrator.youtube_prompts_temp_import_repair import (
     YoutubePromptsTempImportRepairOptions,
@@ -38,10 +47,10 @@ from orchestrator.youtube_visuals_runner import (
     _iter_launch_story_dirs,
     _load_manifest,
     _now_iso,
-    _prepare_prompt_worker_profiles,
     _prompt_estimate,
     _prompts_batch_manifest_path,
     _prompts_progress_path,
+    _ready_prompt_worker_indexes,
     _render_prompts_progress,
     _run_prompts_worker_batch,
     _story_dir,
@@ -225,6 +234,64 @@ def _write_targeted_reports(ctx: Any, payload: dict[str, Any]) -> dict[str, str]
     return {"json": str(json_path), "md": str(md_path)}
 
 
+def _worker_stage_dir(ctx: Any, run_session_id: str, worker_index: int, story_id: str) -> Path:
+    return (
+        ctx.launch_root
+        / "10_Временные_файлы"
+        / "visuals_gemini_batch"
+        / "prompts"
+        / run_session_id
+        / f"worker_{worker_index}"
+        / story_id
+    )
+
+
+def _seed_resume_stage(
+    *,
+    target_stage: Path,
+    source_stage: Path | None,
+    worker_index: int,
+    story_id: str,
+) -> None:
+    if not source_stage or not source_stage.is_dir():
+        return
+    target_stage.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    for name in ("prompts_list.partial.txt", "director_checkpoint.json"):
+        source_file = source_stage / name
+        if source_file.is_file():
+            shutil.copy2(source_file, target_stage / name)
+            copied.append(name)
+    for pattern in ("chunk_*.txt", "chunk_*_raw.txt", "*.raw_response.txt"):
+        for source_file in sorted(source_stage.glob(pattern)):
+            if source_file.is_file():
+                shutil.copy2(source_file, target_stage / source_file.name)
+                if source_file.name not in copied:
+                    copied.append(source_file.name)
+    if copied:
+        print(
+            f"[worker {worker_index}] RESUME seed: {story_id} | source={source_stage} | files={','.join(copied)}",
+            flush=True,
+        )
+
+
+def _distribute_jobs(
+    jobs: list[tuple[int, Path, str, str]],
+    worker_ids: list[int],
+) -> list[tuple[int, list[tuple[int, Path, str, str]]]]:
+    if not jobs or not worker_ids:
+        return []
+    batches: list[tuple[int, list[tuple[int, Path, str, str]]]] = []
+    worker_count = len(worker_ids)
+    worker_batches: list[list[tuple[int, Path, str, str]]] = [[] for _ in range(worker_count)]
+    for job_number, job in enumerate(jobs):
+        worker_batches[job_number % worker_count].append(job)
+    for slot_index, worker_jobs in enumerate(worker_batches, start=1):
+        if worker_jobs:
+            batches.append((worker_ids[slot_index - 1], worker_jobs))
+    return batches
+
+
 def _run_targeted_prompt_generation(
     *,
     config: OrchestratorConfig,
@@ -233,6 +300,7 @@ def _run_targeted_prompt_generation(
     story_dirs: list[Path],
     workers: int,
     accept_known_promo_issues: bool,
+    resume_stage_sources: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     run_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     prompt_jobs: list[tuple[int, Path, str, str]] = []
@@ -246,11 +314,20 @@ def _run_targeted_prompt_generation(
     if not prompt_jobs:
         return {"ok": True, "status": "already_ready", "run_session_id": run_session_id, "results": []}
 
-    worker_count = max(1, min(int(workers or 1), len(prompt_jobs)))
-    _prepare_prompt_worker_profiles(config, worker_count)
-    worker_batches: list[list[tuple[int, Path, str, str]]] = [[] for _ in range(worker_count)]
-    for job_number, job in enumerate(prompt_jobs):
-        worker_batches[job_number % worker_count].append(job)
+    preflight_worker_count = max(1, int(workers or 1))
+    initial_worker_ids = _ready_prompt_worker_indexes(config, preflight_worker_count, require_all=False)
+    if not initial_worker_ids:
+        return {
+            "ok": False,
+            "status": "terminal_failed",
+            "run_session_id": run_session_id,
+            "results": [],
+            "runtime_unhealthy_workers": [],
+            "runtime_quarantine_reasons": {},
+            "stories_requeued_from_worker": [],
+            "reassigned_to_worker": [],
+        }
+
     skipped = [
         row
         for story_dir in _iter_launch_story_dirs(config, launch_id)
@@ -262,134 +339,241 @@ def _run_targeted_prompt_generation(
         )
         if story_dir not in story_dirs
     ]
-    progress_payload = _initialize_prompts_progress(
-        config=config,
-        ctx=ctx,
-        launch_id=launch_id,
-        run_session_id=run_session_id,
-        selected=story_dirs,
-        skipped=skipped,
-        worker_batches=worker_batches,
-    )
-    _render_prompts_progress(progress_payload)
+    quarantine = RuntimeQuarantineRegistry()
+    resume_sources: dict[str, Path] = dict(resume_stage_sources or {})
+    pending_jobs = list(prompt_jobs)
     results: list[dict[str, Any]] = []
-    future_map = {}
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        for worker_index, worker_jobs in enumerate(worker_batches, start=1):
-            if not worker_jobs:
-                continue
-            if worker_index > 1:
-                time.sleep(45)
-            worker_root = (
-                ctx.launch_root
-                / "10_Временные_файлы"
-                / "visuals_gemini_batch"
-                / "prompts"
-                / run_session_id
-                / f"worker_{worker_index}"
-            )
-            batch_stories = [
-                YoutubeGeminiBatchStory(
-                    story_id=story_id,
-                    story_dir=story_dir,
-                    stage_dir=worker_root / story_id,
-                )
-                for _index, story_dir, story_id, _title in worker_jobs
-            ]
-            for _index, story_dir, story_id, _title in worker_jobs:
-                _update_manifest_dict(
-                    story_dir,
+    max_reassign_rounds = max(3, len(prompt_jobs) * max(1, len(initial_worker_ids)))
+
+    for reassign_round in range(max_reassign_rounds + 1):
+        if not pending_jobs:
+            break
+        available_worker_ids = quarantine.available_workers(initial_worker_ids)
+        if not available_worker_ids:
+            terminal_reason = quarantine.terminal_reason_for_pending()
+            for _index, story_dir, story_id, title in pending_jobs:
+                stage_dir = resume_sources.get(story_id) or _worker_stage_dir(ctx, run_session_id, 0, story_id)
+                results.append(
                     {
-                        "visual_prompts": {
-                            "status": "in_progress",
-                            "started_at": _now_iso(),
-                            "updated_at": _now_iso(),
-                            "worker_id": worker_index,
-                            "expected_prompts": _prompt_estimate(story_dir),
-                            "actual_prompts": 0,
-                            "validation": "pending",
-                            "error": None,
-                        },
-                        "pipeline_stage_status": {"scenes_prompts": "in_progress", "director_prompts": "in_progress"},
-                    },
+                        "story_id": story_id,
+                        "title": title,
+                        "ok": False,
+                        "status": "terminal_failed",
+                        "reason": terminal_reason,
+                        "elapsed": "0s",
+                        "stage_dir": str(stage_dir),
+                        "last_successful_chunk": read_last_successful_chunk(Path(stage_dir)),
+                    }
                 )
-            future = executor.submit(
-                _run_prompts_worker_batch,
-                config=config,
-                launch_id=launch_id,
-                stories=batch_stories,
-                execute=True,
-                worker_index=worker_index,
-            )
-            future_map[future] = (worker_index, worker_jobs, time.monotonic())
-        pending_futures = set(future_map)
-        while pending_futures:
-            done_futures, pending_futures = wait(pending_futures, timeout=30, return_when=FIRST_COMPLETED)
-            if not done_futures:
-                progress_payload = reconcile_visuals_progress_from_filesystem(
+            pending_jobs = []
+            break
+
+        worker_batches = _distribute_jobs(pending_jobs, available_worker_ids)
+        pending_jobs = []
+        requeue_jobs: list[tuple[tuple[int, Path, str, str], Path]] = []
+
+        progress_batches = [jobs for _worker_id, jobs in worker_batches]
+        progress_payload = _initialize_prompts_progress(
+            config=config,
+            ctx=ctx,
+            launch_id=launch_id,
+            run_session_id=run_session_id,
+            selected=story_dirs,
+            skipped=skipped,
+            worker_batches=progress_batches,
+            worker_ids=[worker_id for worker_id, _jobs in worker_batches],
+        )
+        _render_prompts_progress(progress_payload)
+
+        future_map: dict[Any, tuple[int, list[tuple[int, Path, str, str]], float]] = {}
+        with ThreadPoolExecutor(max_workers=len(worker_batches)) as executor:
+            for slot_index, (worker_index, worker_jobs) in enumerate(worker_batches, start=1):
+                if slot_index > 1:
+                    time.sleep(45)
+                batch_stories = [
+                    YoutubeGeminiBatchStory(
+                        story_id=story_id,
+                        story_dir=story_dir,
+                        stage_dir=_worker_stage_dir(ctx, run_session_id, worker_index, story_id),
+                    )
+                    for _index, story_dir, story_id, _title in worker_jobs
+                ]
+                for batch_story in batch_stories:
+                    if reassign_round > 0:
+                        quarantine.record_reassignment(
+                            story_id=batch_story.story_id,
+                            to_worker_index=worker_index,
+                        )
+                    _seed_resume_stage(
+                        target_stage=Path(batch_story.stage_dir),
+                        source_stage=resume_sources.get(batch_story.story_id),
+                        worker_index=worker_index,
+                        story_id=batch_story.story_id,
+                    )
+                for _index, story_dir, story_id, _title in worker_jobs:
+                    _update_manifest_dict(
+                        story_dir,
+                        {
+                            "visual_prompts": {
+                                "status": "in_progress",
+                                "started_at": _now_iso(),
+                                "updated_at": _now_iso(),
+                                "worker_id": worker_index,
+                                "expected_prompts": _prompt_estimate(story_dir),
+                                "actual_prompts": 0,
+                                "validation": "pending",
+                                "error": None,
+                            },
+                            "pipeline_stage_status": {
+                                "scenes_prompts": "in_progress",
+                                "director_prompts": "in_progress",
+                            },
+                        },
+                    )
+                future = executor.submit(
+                    _run_prompts_worker_batch,
                     config=config,
                     launch_id=launch_id,
-                    run_session_id=run_session_id,
-                    accept_known_promo_issues=accept_known_promo_issues,
+                    stories=batch_stories,
+                    execute=True,
+                    worker_index=worker_index,
                 )
-                _render_prompts_progress(progress_payload)
-                continue
-            for future in done_futures:
-                worker_index, worker_jobs, worker_started = future_map[future]
-                try:
-                    batch_result = future.result()
-                except Exception as exc:
-                    batch_result = {
-                        "ok": False,
-                        "status": "failed",
-                        "next_action": repr(exc),
-                        "blockers": [type(exc).__name__],
-                    }
-                elapsed = _fmt_elapsed(time.monotonic() - worker_started)
-                for _index, story_dir, story_id, title in worker_jobs:
-                    stage_dir = (
-                        ctx.launch_root
-                        / "10_Временные_файлы"
-                        / "visuals_gemini_batch"
-                        / "prompts"
-                        / run_session_id
-                        / f"worker_{worker_index}"
-                        / story_id
+                future_map[future] = (worker_index, worker_jobs, time.monotonic())
+
+            pending_futures = set(future_map)
+            while pending_futures:
+                done_futures, pending_futures = wait(pending_futures, timeout=30, return_when=FIRST_COMPLETED)
+                if not done_futures:
+                    progress_payload = reconcile_visuals_progress_from_filesystem(
+                        config=config,
+                        launch_id=launch_id,
+                        run_session_id=run_session_id,
+                        accept_known_promo_issues=accept_known_promo_issues,
                     )
-                    after = _story_visual_readiness(config, story_dir, story_id)
-                    ok = bool(after["prompts_ready"])
-                    reason = normalize_failure_reason(
-                        str(batch_result.get("next_action") or ""),
-                        fallback=classify_stage_prompts_failure(stage_dir=stage_dir, canonical_ready=ok),
-                    )
-                    if ok:
-                        reason = None
-                    elif after["prompts_status"] == "partial":
-                        reason = PROMPTS_GENERATION_INCOMPLETE
-                    results.append(
-                        {
-                            "story_id": story_id,
-                            "title": title,
-                            "ok": ok,
-                            "status": "done" if ok else str(batch_result.get("status") or "failed"),
-                            "reason": reason,
-                            "elapsed": elapsed,
-                            "stage_dir": str(stage_dir),
+                    _render_prompts_progress(progress_payload)
+                    continue
+                for future in done_futures:
+                    worker_index, worker_jobs, worker_started = future_map[future]
+                    try:
+                        batch_result = future.result()
+                    except Exception as exc:
+                        batch_result = {
+                            "ok": False,
+                            "status": "failed",
+                            "next_action": repr(exc),
+                            "blockers": [type(exc).__name__],
                         }
+                    elapsed = _fmt_elapsed(time.monotonic() - worker_started)
+                    log_path = Path(str(batch_result.get("legacy_log_path") or ""))
+                    batch_ok = bool(batch_result.get("ok"))
+                    runtime_reason = (
+                        worker_batch_runtime_reason(batch_result, log_path if log_path.is_file() else None)
+                        if not batch_ok
+                        else None
                     )
-    reconcile_visuals_progress_from_filesystem(
+                    log_excerpt = ""
+                    if log_path.is_file():
+                        log_excerpt = log_path.read_text(encoding="utf-8", errors="replace")[-20_000:]
+
+                    if runtime_reason:
+                        quarantine.mark_unhealthy(worker_index, runtime_reason)
+                        for _index, story_dir, story_id, title in worker_jobs:
+                            stage_dir = _worker_stage_dir(ctx, run_session_id, worker_index, story_id)
+                            after = _story_visual_readiness(config, story_dir, story_id)
+                            if after["prompts_ready"]:
+                                results.append(
+                                    {
+                                        "story_id": story_id,
+                                        "title": title,
+                                        "ok": True,
+                                        "status": "done",
+                                        "reason": None,
+                                        "elapsed": elapsed,
+                                        "stage_dir": str(stage_dir),
+                                    }
+                                )
+                                continue
+                            if (stage_dir / "prompts_list.txt").is_file():
+                                results.append(
+                                    {
+                                        "story_id": story_id,
+                                        "title": title,
+                                        "ok": True,
+                                        "status": "done",
+                                        "reason": None,
+                                        "elapsed": elapsed,
+                                        "stage_dir": str(stage_dir),
+                                        "pending_import": True,
+                                    }
+                                )
+                                continue
+                            last_chunk = read_last_successful_chunk(stage_dir)
+                            evidence = write_runtime_blocker_evidence(
+                                stage_dir,
+                                worker_index=worker_index,
+                                reason=runtime_reason,
+                                log_excerpt=log_excerpt,
+                            )
+                            quarantine.record_requeue(
+                                story_id=story_id,
+                                from_worker_index=worker_index,
+                                reason=runtime_reason,
+                                last_successful_chunk=last_chunk,
+                                stage_dir=stage_dir,
+                                evidence=evidence,
+                            )
+                            resume_sources[story_id] = stage_dir
+                            requeue_jobs.append(((_index, story_dir, story_id, title), stage_dir))
+                        continue
+
+                    for _index, story_dir, story_id, title in worker_jobs:
+                        stage_dir = _worker_stage_dir(ctx, run_session_id, worker_index, story_id)
+                        after = _story_visual_readiness(config, story_dir, story_id)
+                        ok = bool(after["prompts_ready"])
+                        reason = normalize_failure_reason(
+                            str(batch_result.get("next_action") or ""),
+                            fallback=classify_stage_prompts_failure(stage_dir=stage_dir, canonical_ready=ok),
+                        )
+                        if ok:
+                            reason = None
+                        elif after["prompts_status"] == "partial":
+                            reason = PROMPTS_GENERATION_INCOMPLETE
+                        results.append(
+                            {
+                                "story_id": story_id,
+                                "title": title,
+                                "ok": ok,
+                                "status": "done" if ok else str(batch_result.get("status") or "failed"),
+                                "reason": reason,
+                                "elapsed": elapsed,
+                                "stage_dir": str(stage_dir),
+                                "last_successful_chunk": read_last_successful_chunk(stage_dir),
+                            }
+                        )
+
+        if requeue_jobs:
+            pending_jobs = [job for job, _stage in requeue_jobs]
+        else:
+            break
+
+    progress_after = reconcile_visuals_progress_from_filesystem(
         config=config,
         launch_id=launch_id,
         run_session_id=run_session_id,
         accept_known_promo_issues=accept_known_promo_issues,
     )
+    state_violations = validate_prompts_worker_lifecycle(progress_after)
+    state_violations.extend(validate_prompts_terminal_results(results))
+    quarantine_report = quarantine.as_report()
     return {
-        "ok": all(row.get("ok") for row in results) if results else True,
-        "status": "done" if all(row.get("ok") for row in results) else "partial",
+        "ok": bool(results) and all(row.get("ok") for row in results) and not state_violations,
+        "status": "done" if results and all(row.get("ok") for row in results) and not state_violations else "terminal_failed",
         "run_session_id": run_session_id,
         "results": results,
+        "state_violations": state_violations,
         "progress_path": str(_prompts_progress_path(ctx)),
         "batch_manifest_path": str(_prompts_batch_manifest_path(ctx)),
+        **quarantine_report,
     }
 
 
@@ -434,6 +618,7 @@ def run_youtube_prompts_targeted_repair(
                 options=YoutubePromptsTempImportRepairOptions(
                     youtube_run_id=launch_id,
                     run_session_id=str(generation.get("run_session_id") if generation else ""),
+                    normalize_blocked_ages=True,
                     execute=True,
                 ),
             )

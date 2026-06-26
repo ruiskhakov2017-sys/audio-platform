@@ -18,7 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from orchestrator.account_capabilities import assert_gemini_capable
 from orchestrator.config import OrchestratorConfig
+from orchestrator.gemini_colab_proxy import apply_gemini_colab_proxy_env, gemini_colab_proxy_session
 from orchestrator.phase_a import _load_gemini_registry
 from orchestrator.youtube_language import EXPECTED_YOUTUBE_LANGUAGE, detect_path_language, detect_text_language
 
@@ -58,7 +60,20 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _write_json(path: Path, payload: Any) -> None:
+def _write_json(path: Path, payload: Any, *, config: OrchestratorConfig | None = None) -> None:
+    from orchestrator.isolated_io import is_active_isolated, write_json as isolated_write_json
+    from orchestrator.isolated_launch_context import get_active_config
+
+    cfg = config or get_active_config()
+    if cfg is not None and is_active_isolated(cfg):
+        isolated_write_json(
+            cfg,
+            path,
+            payload,
+            module="orchestrator.youtube_safe_english_bridge",
+            function="_write_json",
+        )
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -78,24 +93,9 @@ def _count_words(text: str) -> int:
 
 
 def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
-    root = (config.root_dir / "output" / "youtube").resolve()
-    direct = root / story_id
-    if direct.is_dir():
-        return direct.resolve()
-    key = story_id.strip()
-    matches: list[Path] = []
-    if root.is_dir():
-        for child in root.iterdir():
-            if not child.is_dir():
-                continue
-            manifest = _read_json(child / "youtube_story_manifest.json")
-            sid = str(manifest.get("story_id", "")).strip()
-            canonical = str(manifest.get("canonical_basename", "")).strip()
-            if key in {sid, canonical} or sid.casefold() == key.casefold() or canonical.casefold() == key.casefold():
-                matches.append(child)
-    if len(matches) == 1:
-        return matches[0].resolve()
-    return direct.resolve()
+    from orchestrator.youtube_path_resolver import resolve_bridge_story_dir
+
+    return resolve_bridge_story_dir(config, story_id)
 
 
 def _manifest_path(story_dir: Path) -> Path:
@@ -106,7 +106,19 @@ def _source_path(story_dir: Path) -> Path:
     return story_dir / "00_source" / "source_cleaned_story.txt"
 
 
-def _safe_path(story_dir: Path) -> Path:
+def _safe_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    from orchestrator.isolated_launch_context import get_batch_launch_id
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+    from orchestrator.youtube_path_resolver import resolve_youtube_story_write_path
+
+    batch_id = get_batch_launch_id()
+    if batch_id and is_isolated_launch(config, launch_id=batch_id):
+        return resolve_youtube_story_write_path(
+            config,
+            story_id,
+            "02_safe_story/safe_story.txt",
+            launch_id=batch_id,
+        )
     return story_dir / "02_safe_story" / "safe_story.txt"
 
 
@@ -181,6 +193,7 @@ def _registry_candidates(config: OrchestratorConfig, explicit: Path) -> list[Pat
 
 
 def _pick_safe_bot(config: OrchestratorConfig, registry: Path, account_index: int) -> dict[str, str]:
+    assert_gemini_capable(int(account_index))
     registry_path = ""
     bots: list[dict[str, Any]] = []
     for candidate in _registry_candidates(config, registry):
@@ -197,7 +210,9 @@ def _pick_safe_bot(config: OrchestratorConfig, registry: Path, account_index: in
             valid.append((str(bot.get("email", "")).strip(), url))
     if not valid:
         return {"email": "", "url": "", "registry_path": registry_path, "account_index": str(account_index), "bot_key": BOT_KEY}
-    idx = max(0, min(int(account_index or 0), len(valid) - 1))
+    idx = int(account_index)
+    if idx >= len(valid):
+        raise ValueError(f"ACCOUNT_NOT_GEMINI_CAPABLE: account_index={idx}")
     email, url = valid[idx]
     return {"email": email, "url": url, "registry_path": registry_path, "account_index": str(idx), "bot_key": BOT_KEY}
 
@@ -284,7 +299,7 @@ def _write_runner(path: Path, *, legacy_dir: Path, prompt_path: Path, bot_config
                 "gemini_url = bot_chain[bot_idx].url",
                 "hub_url = bot_chain[bot_idx].hub_url",
                 "with ga.sync_playwright() as playwright:",
-                "    context = playwright.chromium.launch_persistent_context(user_data_dir=str(ga.USER_DATA_DIR), channel='chrome', headless=False, slow_mo=ga.SLOW_MO_MS, viewport=None, args=['--disable-blink-features=AutomationControlled'])",
+                "    context = playwright.chromium.launch_persistent_context(user_data_dir=str(ga.USER_DATA_DIR), channel='chrome', headless=False, slow_mo=ga.SLOW_MO_MS, viewport=None, chromium_sandbox=True, args=['--disable-blink-features=AutomationControlled'])",
                 "    page = context.pages[0] if context.pages else context.new_page()",
                 "    context.grant_permissions(['clipboard-read', 'clipboard-write'], origin='https://gemini.google.com')",
                 "    for _ in range(3):",
@@ -418,11 +433,22 @@ def _patch_manifest_failure(manifest_path: Path, payload: dict[str, Any]) -> Non
 
 
 def run_youtube_safe_english_run(*, config: OrchestratorConfig, options: YoutubeSafeEnglishRunOptions) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id, isolated_launch_context
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+
+    batch_id = get_batch_launch_id()
+    if batch_id and is_isolated_launch(config, launch_id=batch_id):
+        with isolated_launch_context(config, batch_id):
+            return _run_youtube_safe_english_run_body(config=config, options=options)
+    return _run_youtube_safe_english_run_body(config=config, options=options)
+
+
+def _run_youtube_safe_english_run_body(*, config: OrchestratorConfig, options: YoutubeSafeEnglishRunOptions) -> dict[str, Any]:
     story_id = str(options.story_id).strip()
     story_dir = _story_dir(config, story_id)
     manifest_path = _manifest_path(story_dir)
     source = _source_path(story_dir)
-    safe = _safe_path(story_dir)
+    safe = _safe_path(config, story_id, story_dir)
     prompt = (config.root_dir / PROMPT_PATH).resolve()
     adapter_dir = _adapter_dir(story_dir)
     staging_story = _staging_story_dir(story_dir)
@@ -503,7 +529,13 @@ def run_youtube_safe_english_run(*, config: OrchestratorConfig, options: Youtube
     staging_story.mkdir(parents=True, exist_ok=True)
     raw_outputs.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, staging_source)
+    from orchestrator.isolated_io import copy2 as iso_copy2, is_active_isolated
+
+    iso = is_active_isolated(config)
+    if iso:
+        iso_copy2(config, source, staging_source, module="orchestrator.youtube_safe_english_bridge", function="run")
+    else:
+        shutil.copy2(source, staging_source)
     _write_json(
         bot_config,
         [{"email": bot.get("email", ""), "url": bot.get("url", ""), "app": ""}],
@@ -527,15 +559,22 @@ def run_youtube_safe_english_run(*, config: OrchestratorConfig, options: Youtube
         logf.write(f"[orchestrator] gemini_email={bot.get('email', '')}\n")
         logf.write(f"[orchestrator] gemini_url={bot.get('url', '')}\n")
         logf.flush()
-        proc = subprocess.run(
-            [sys.executable, str(runner)],
-            cwd=str(adapter_dir),
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "GEMINI_NON_INTERACTIVE": "1"},
-            timeout=None,
-        )
+        with gemini_colab_proxy_session(config.root_dir) as proxy_session:
+            run_env = apply_gemini_colab_proxy_env(
+                {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "GEMINI_NON_INTERACTIVE": "1"},
+                proxy_session,
+            )
+            logf.write(f"[orchestrator] GEMINI_PROXY_SERVER={run_env.get('GEMINI_PROXY_SERVER', '')}\n")
+            logf.flush()
+            proc = subprocess.run(
+                [sys.executable, str(runner)],
+                cwd=str(adapter_dir),
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=run_env,
+                timeout=None,
+            )
     changed_files.append(str(log_path))
     if proc.returncode != 0:
         result = {**base, "ok": False, "status": "english_safe_failed", "returncode": proc.returncode, "changed_files": changed_files}
@@ -571,12 +610,18 @@ def run_youtube_safe_english_run(*, config: OrchestratorConfig, options: Youtube
         return result
 
     if safe.is_file() and safe_language != EXPECTED_YOUTUBE_LANGUAGE:
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(safe, backup_path)
+        if iso:
+            iso_copy2(config, safe, backup_path, module="orchestrator.youtube_safe_english_bridge", function="run")
+        else:
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(safe, backup_path)
         result["backup_path"] = str(backup_path)
         changed_files.append(str(backup_path))
-    safe.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(staging_clean, safe)
+    if iso:
+        iso_copy2(config, staging_clean, safe, module="orchestrator.youtube_safe_english_bridge", function="run")
+    else:
+        safe.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(staging_clean, safe)
     result["output_hash"] = _sha256_file(safe)
     changed_files.append(str(safe))
     _patch_manifest_success(manifest_path, result)

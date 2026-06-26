@@ -32,8 +32,22 @@ def iter_site_story_dirs(site_root: Path) -> list[Path]:
     return sorted([p for p in site_root.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
 
 
-def iter_human_launch_story_dirs(launch: Path) -> list[Path]:
-    base = launch.resolve() / D05_RASSKAZY
+def iter_human_launch_story_dirs(launch: Path, *, project_root: Path | None = None) -> list[Path]:
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+    from orchestrator.isolated_launch_paths import D01_SITE, D_RASSKAZY
+
+    launch = launch.resolve()
+    isolated = False
+    if project_root is not None:
+        class _RootCfg:
+            def __init__(self, root: Path) -> None:
+                self.root_dir = root
+
+        isolated = is_isolated_launch(_RootCfg(project_root), launch_id=launch.name, launch_root=launch)
+    if isolated:
+        base = launch / D01_SITE / D_RASSKAZY
+    else:
+        base = launch / D05_RASSKAZY
     if not base.is_dir():
         return []
     return sorted([p for p in base.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
@@ -48,7 +62,11 @@ def resolve_site_tts_human_launch_root(
     """
     Корень Запуски/<name> для site-tts в human-launch режиме.
     Явный --launch-dir перекрывает --launch-name.
+    Isolated launches (CF_ISO_*): 01_Сайт/Рассказы без 05_Рассказы.
     """
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+    from orchestrator.isolated_launch_paths import D01_SITE, D_RASSKAZY
+
     project_root = project_root.resolve()
     raw_dir = launch_dir
     if raw_dir is not None and str(raw_dir).strip():
@@ -61,9 +79,17 @@ def resolve_site_tts_human_launch_root(
         out = (human_zapuski_root(project_root) / name).resolve()
     if not out.is_dir():
         return None
-    if not (out / D05_RASSKAZY).is_dir():
-        return None
-    return out
+
+    class _RootCfg:
+        root_dir = project_root
+
+    if is_isolated_launch(_RootCfg(), launch_id=out.name, launch_root=out):
+        return out
+    if (out / D05_RASSKAZY).is_dir():
+        return out
+    if (out / D01_SITE / D_RASSKAZY).is_dir():
+        return out
+    return None
 
 
 def story_needs_tts(paths: SiteTtsPaths) -> bool:
@@ -179,6 +205,19 @@ def scan_site_tts_queue(
     return rows
 
 
+def _paths_for_human_launch_story(launch: Path, story_name: str, *, project_root: Path) -> SiteTtsPaths:
+    from orchestrator.isolated_launch_mode import is_isolated_launch, resolver_if_isolated
+
+    class _RootCfg:
+        root_dir = project_root.resolve()
+
+    launch = launch.resolve()
+    if is_isolated_launch(_RootCfg(), launch_id=launch.name, launch_root=launch):
+        r = resolver_if_isolated(_RootCfg(), launch_id=launch.name, launch_root=launch)
+        return SiteTtsPaths.from_isolated_resolver(r, story_name)
+    return SiteTtsPaths.from_human_launch_story(launch, story_name, ensure_dirs=False)
+
+
 def scan_human_launch_tts_queue(
     launch: Path,
     *,
@@ -186,10 +225,9 @@ def scan_human_launch_tts_queue(
     voice_types: frozenset[str] | None = None,
     folder_suffix: str | None = None,
 ) -> list[dict[str, str | bool]]:
-    _ = project_root
     rows: list[dict[str, str | bool]] = []
-    for folder in iter_human_launch_story_dirs(launch):
-        paths = SiteTtsPaths.from_human_launch_story(launch, folder.name, ensure_dirs=False)
+    for folder in iter_human_launch_story_dirs(launch, project_root=project_root):
+        paths = _paths_for_human_launch_story(launch, folder.name, project_root=project_root)
         has_clean = paths.cleaned_story_txt.is_file()
         has_info = paths.info_txt.is_file()
         try:
@@ -235,10 +273,9 @@ def collect_human_launch_tts_items(
     voice_types: frozenset[str] | None = None,
     folder_suffix: str | None = None,
 ) -> list[SiteTtsBatchItem]:
-    _ = project_root
     items: list[SiteTtsBatchItem] = []
-    for folder in iter_human_launch_story_dirs(launch):
-        paths = SiteTtsPaths.from_human_launch_story(launch, folder.name, ensure_dirs=False)
+    for folder in iter_human_launch_story_dirs(launch, project_root=project_root):
+        paths = _paths_for_human_launch_story(launch, folder.name, project_root=project_root)
         if not story_needs_tts(paths):
             continue
         if not folder_suffix_matches(folder.name, folder_suffix):
@@ -277,13 +314,34 @@ def run_site_tts_for_story(
     modes = load_runtime_modes(modes_config)
     engine = str(modes.get("site_tts_engine", "kokoro")).strip().lower()
     settings = load_site_tts_settings(root_dir)
-    if human_launch is not None:
-        paths = SiteTtsPaths.from_human_launch_story(human_launch.resolve(), story_key, ensure_dirs=True)
+    from orchestrator.isolated_launch_context import get_active_resolver
+    from orchestrator.isolated_launch_mode import is_isolated_launch, resolver_if_isolated
+
+    class _RootCfg:
+        root_dir = root_dir.resolve()
+
+    resolver = get_active_resolver()
+    if resolver is not None and resolver.isolated:
+        paths = SiteTtsPaths.from_isolated_resolver(resolver, story_key)
+    elif human_launch is not None:
+        launch = human_launch.resolve()
+        if is_isolated_launch(_RootCfg(), launch_id=launch.name, launch_root=launch):
+            r = resolver_if_isolated(_RootCfg(), launch_id=launch.name, launch_root=launch)
+            paths = SiteTtsPaths.from_isolated_resolver(r, story_key)
+        else:
+            paths = SiteTtsPaths.from_human_launch_story(launch, story_key, ensure_dirs=True)
     else:
         site_root = (site_output_root or (root_dir / "output" / "site")).resolve()
         paths = SiteTtsPaths.for_site_output_folder(root_dir, site_root, story_key)
+
     rid = run_id or uuid.uuid4().hex
-    work = (root_dir / "runs" / "tts" / rid / story_key).resolve()
+    if resolver is not None and resolver.isolated:
+        work = (resolver.technical_runs_tts_dir() / rid / story_key).resolve()
+    elif human_launch is not None and is_isolated_launch(_RootCfg(), launch_id=human_launch.name, launch_root=human_launch):
+        r = resolver_if_isolated(_RootCfg(), launch_id=human_launch.name, launch_root=human_launch)
+        work = (r.technical_runs_tts_dir() / rid / story_key).resolve()
+    else:
+        work = (root_dir / "runs" / "tts" / rid / story_key).resolve()
 
     adapter = get_modular_site_adapter(engine)
     if adapter is None:

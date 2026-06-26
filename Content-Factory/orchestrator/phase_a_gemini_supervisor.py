@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from orchestrator.events import EventLogger
+from orchestrator.gemini_diagnostics import extract_model_switch_failure, has_model_switch_failure, read_text_tail, write_json
 
 # Должен совпадать с legacy/Gemini_Auto/gemini_auto.py EXIT_CODE_SESSION_SEND_EXHAUSTED
 GEMINI_EXIT_SESSION_SEND_EXHAUSTED = 44
@@ -101,6 +102,8 @@ class GeminiSupervisorOptions:
     max_supervisor_seconds: float = 0.0
     run_id: str = ""
     pipeline: str = "phase-a"
+    gemini_start_mode: str = "staggered-first-result"
+    ramp_up_stop_on_system_fail: bool = True
 
 
 @dataclass
@@ -174,9 +177,16 @@ def run_supervised_gemini_workers(
     state_path = (logs_dir / "gemini_supervisor_state.json").resolve()
     profiles: dict[int, _ProfileRuntime] = {i: _ProfileRuntime() for i in range(profiles_total)}
     active: dict[int, subprocess.Popen[bytes]] = {}
+    from orchestrator.gemini_worker_scheduler import normalize_gemini_start_mode
+    from orchestrator.youtube_full_auto.bridge_errors import classify_from_text
+
+    start_mode = normalize_gemini_start_mode(str(getattr(options, "gemini_start_mode", "") or ""))
+    max_spawn_profile = profiles_total - 1 if start_mode == "immediate" else 0
+    profile_first_outcome: set[int] = set()
     # Chrome-профиль (idx) ≠ слот для assign_worker_slice в gemini_auto: при пропуске профиля 1
     # и воркерах 0+2 оба имели бы WORKER_INDEX%PARALLEL_WORKERS==0 без отдельного slice.
     profile_parallel_slot: dict[int, int] = {}
+    profile_meta: dict[int, dict[str, str]] = {}
 
     def parallel_slice_index_for_profile(profile_idx: int) -> int:
         if profile_idx in profile_parallel_slot:
@@ -220,6 +230,11 @@ def run_supervised_gemini_workers(
         env = build_proc_env(profile_idx, slice_idx)
         if env is None:
             return False
+        profile_meta[profile_idx] = {
+            "user_data_dir": env.get("GEMINI_USER_DATA_DIR", ""),
+            "account_email": env.get("GEMINI_ACCOUNT_EMAIL", ""),
+            "gemini_url": env.get("GEMINI_URL", ""),
+        }
         cmd = [sys.executable, str(gemini_script)]
         creationflags = gemini_worker_subprocess_creationflags()
         _emit(
@@ -245,6 +260,43 @@ def run_supervised_gemini_workers(
         )
         return True
 
+    def terminate_active_workers() -> None:
+        for _idx, proc in list(active.items()):
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except OSError:
+                pass
+        for _idx, proc in list(active.items()):
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except OSError:
+                pass
+
+    def fail_fast_model_switch_report(profile_idx: int, code: int) -> dict[str, Any] | None:
+        log_path = (logs_dir / f"{stage_key}_worker_{profile_idx + 1}.log").resolve()
+        tail = read_text_tail(log_path)
+        if not has_model_switch_failure(tail):
+            return None
+        meta = profile_meta.get(profile_idx, {})
+        report_path = (logs_dir / "phase_a_gemini_error_report.json").resolve()
+        report = extract_model_switch_failure(
+            tail,
+            stage_key=stage_key,
+            worker_id=profile_idx + 1,
+            profile_index=profile_idx,
+            account_email=meta.get("account_email", ""),
+            user_data_dir=meta.get("user_data_dir", ""),
+            gemini_url=meta.get("gemini_url", ""),
+            log_path=str(log_path),
+            report_path=str(report_path),
+            next_action="Запустите python -m orchestrator site gemini-preflight --launch-name <launch> и проверьте указанный user_data профиль.",
+        )
+        report["exit_code"] = int(code)
+        write_json(report_path, report)
+        return report
+
     def try_fill_slots() -> None:
         if len(active) >= target:
             return
@@ -252,12 +304,42 @@ def run_supervised_gemini_workers(
         for profile_idx in range(profiles_total):
             if len(active) >= target:
                 return
+            if start_mode != "immediate" and profile_idx > max_spawn_profile:
+                continue
             if profile_idx in active and active[profile_idx].poll() is None:
                 continue
             pr = profiles[profile_idx]
             if pr.cooldown_until > now:
                 continue
             spawn(profile_idx)
+
+    def maybe_ramp_profile(profile_idx: int, code: int) -> None:
+        nonlocal max_spawn_profile
+        if start_mode != "staggered-first-result":
+            return
+        if profile_idx in profile_first_outcome:
+            return
+        profile_first_outcome.add(profile_idx)
+        if code == 0:
+            max_spawn_profile = max(max_spawn_profile, profile_idx + 1)
+            print(
+                f"[A3/supervisor] ramp-up: profile {profile_idx} first outcome ok → "
+                f"max_spawn_profile={max_spawn_profile}",
+                flush=True,
+            )
+            return
+        if not bool(getattr(options, "ramp_up_stop_on_system_fail", True)):
+            max_spawn_profile = max(max_spawn_profile, profile_idx + 1)
+            return
+        log_path = (logs_dir / f"{stage_key}_worker_{profile_idx + 1}.log").resolve()
+        reason = classify_from_text(text=read_text_tail(log_path), exit_code=code)
+        if reason and reason not in {"unknown_bridge_failure", "bridge_subprocess_failed"}:
+            print(
+                f"[A3/supervisor] ramp-up paused after profile {profile_idx} system fail: {reason}",
+                flush=True,
+            )
+            return
+        max_spawn_profile = max(max_spawn_profile, profile_idx + 1)
 
     degraded_logged = False
     progress_state: dict[str, Any] = {}
@@ -306,6 +388,7 @@ def run_supervised_gemini_workers(
             del active[idx]
             pr = profiles[idx]
             print(f"[A3/supervisor] profile={idx + 1} exited code={code}", flush=True)
+            maybe_ramp_profile(idx, int(code))
             if code == 0:
                 pr.consecutive_failures = 0
                 pr.last_error = ""
@@ -339,6 +422,24 @@ def run_supervised_gemini_workers(
                     payload={"profile_idx": idx, "cooldown_until": pr.cooldown_until},
                 )
             else:
+                model_report = fail_fast_model_switch_report(idx, int(code or 0))
+                if model_report is not None:
+                    terminate_active_workers()
+                    _write_state(state_path, snapshot())
+                    msg = (
+                        f"supervisor: fail-fast {model_report.get('failure_kind', 'gemini_model_failure')} "
+                        f"profile={idx + 1} story_id={model_report.get('story_id') or 'unknown'} "
+                        f"report={model_report.get('report_path')}"
+                    )
+                    _emit(
+                        events_file,
+                        run_id=run_id,
+                        action="worker_model_switch_failed",
+                        result="error",
+                        message=msg,
+                        payload=model_report,
+                    )
+                    return False, msg
                 pr.consecutive_failures += 1
                 pr.last_error = f"exit_code={code}"
                 _emit(

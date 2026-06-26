@@ -111,14 +111,24 @@ def first_existing(paths: list[Path]) -> Path | None:
     return None
 
 
+try:
+    from youtube_worker_notebook_mount import colab_safe_drive_mount_block
+except ImportError:
+    from tools.colab_launcher.youtube_worker_notebook_mount import colab_safe_drive_mount_block
+
+try:
+    from colab_worker_gpu_check import colab_worker_gpu_check_block
+except ImportError:
+    from tools.colab_launcher.colab_worker_gpu_check import colab_worker_gpu_check_block
+
+
 def build_worker_cell(email: str, require_t4: bool = False) -> str:
     require_t4_value = "1" if require_t4 else "0"
+    drive_mount_block = colab_safe_drive_mount_block(with_cf_boot=False)
     return f'''# === ContentFactory YouTube VIDEO Worker ===
 # Worker: {email}
 
-from google.colab import drive
-drive.mount("/content/drive")
-
+{drive_mount_block}
 !apt-get update -qq
 !apt-get install -y -qq ffmpeg
 
@@ -167,23 +177,7 @@ os.environ["CONTENT_FACTORY_SELF_RECLAIM_MAX_ATTEMPTS"] = "3"
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["CONTENT_FACTORY_REQUIRE_T4"] = "{require_t4_value}"
 
-gpu = subprocess.run(
-    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-    capture_output=True,
-    text=True,
-)
-gpu_name = gpu.stdout.strip().splitlines()[0].strip() if gpu.returncode == 0 and gpu.stdout.strip() else ""
-print("GPU:", gpu_name or "not available")
-if not gpu_name:
-    message = "GPU not available. In Colab use Runtime -> Change runtime type -> GPU."
-    if os.environ.get("CONTENT_FACTORY_REQUIRE_T4") == "1":
-        raise RuntimeError(message)
-    print("[WARN]", message)
-elif "T4" not in gpu_name.upper():
-    message = f"GPU is not T4: {{gpu_name}}. Continuing because CONTENT_FACTORY_REQUIRE_T4=0."
-    if os.environ.get("CONTENT_FACTORY_REQUIRE_T4") == "1":
-        raise RuntimeError(message)
-    print("[WARN]", message)
+{colab_worker_gpu_check_block()}
 
 %run "/content/drive/MyDrive/ContentFactory_YouTube/scripts/youtube_video_bootstrap_colab.py" --story-slug "{DEFAULT_STORY_SLUG}" --worker-email "{email}" --max-jobs-per-run "0" --idle-timeout-min "15" --poll-seconds "10"
 '''

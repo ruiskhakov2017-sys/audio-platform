@@ -17,6 +17,30 @@ class SiteTtsPaths:
     output_mp3: Path
 
     @classmethod
+    def from_isolated_resolver(cls, resolver, story_name: str) -> SiteTtsPaths:
+        """Isolated launch: human audio under 01_Сайт/…/06_Аудио; technical contract under 04_Технические_файлы/output/site."""
+        from orchestrator.isolated_launch_paths import LaunchPathResolver
+
+        r: LaunchPathResolver = resolver
+        sid = (story_name or "").strip()
+        tech_story = (r.technical_output_site_dir() / sid).resolve()
+        audio_dir = r.site_human_audio_dir(sid)
+        return cls(
+            story_folder=audio_dir,
+            cleaned_story_txt=tech_story / "cleaned_story.txt",
+            info_txt=tech_story / "info.txt",
+            output_mp3=audio_dir / "audio.mp3",
+        )
+
+    @classmethod
+    def voice_lock_path(cls, paths: SiteTtsPaths) -> Path:
+        return paths.story_folder / "voice_lock.json"
+
+    @classmethod
+    def tts_result_path(cls, paths: SiteTtsPaths) -> Path:
+        return paths.story_folder / "tts_result.json"
+
+    @classmethod
     def from_site_root(cls, site_output: Path, story_name: str) -> SiteTtsPaths:
         folder = (site_output / story_name).resolve()
         cleaned = resolve_cleaned_story_txt_path(folder, story_name)

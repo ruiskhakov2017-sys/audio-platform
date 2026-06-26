@@ -34,12 +34,18 @@ from orchestrator.youtube_visuals_runner import (
     reconcile_visuals_progress_from_filesystem,
     run_youtube_prompts_resume_audit,
 )
+from orchestrator.youtube_prompts_failure_reasons import (
+    PROMPTS_COUNT_TOLERANCE_ACCEPTED,
+    prompt_count_acceptable,
+    prompt_count_accepted_with_tolerance,
+)
 
 TEMP_PROMPTS_MISSING = "TEMP_PROMPTS_MISSING"
 TEMP_PROMPTS_EMPTY = "TEMP_PROMPTS_EMPTY"
 TEMP_PROMPTS_COUNT_MISMATCH = "TEMP_PROMPTS_COUNT_MISMATCH"
 TEMP_PROMPTS_STALE_OR_INVALID = "TEMP_PROMPTS_STALE_OR_INVALID"
 TEMP_PROMPTS_FORBIDDEN_TERMS = "TEMP_PROMPTS_FORBIDDEN_TERMS"
+TEMP_PROMPTS_ADULT_AGE_NORMALIZED = "TEMP_PROMPTS_ADULT_AGE_NORMALIZED"
 
 _SESSION_RE = re.compile(r"^\d{8}_\d{6}$")
 
@@ -49,6 +55,7 @@ class YoutubePromptsTempImportRepairOptions:
     youtube_run_id: str
     execute: bool = False
     run_session_id: str = ""
+    normalize_blocked_ages: bool = False
 
 
 def _normalize_key(value: str) -> str:
@@ -106,7 +113,43 @@ def _expected_prompts_for_story(story_dir: Path, manifest: dict[str, Any]) -> in
     return _prompt_estimate(story_dir)
 
 
-def _candidate_prompt_files(session_dir: Path) -> list[Path]:
+def _materialize_complete_partial(stage_dir: Path) -> Path | None:
+    final_path = stage_dir / "prompts_list.txt"
+    partial_path = stage_dir / "prompts_list.partial.txt"
+    checkpoint_path = stage_dir / "director_checkpoint.json"
+    checkpoint = _current_prompt_checkpoint(stage_dir)
+    try:
+        total_chunks = int(checkpoint.get("total_chunks") or 0)
+        next_chunk_index = int(checkpoint.get("current_chunk") or 0)
+    except (TypeError, ValueError):
+        return None
+    if final_path.is_file():
+        if total_chunks > 0 and next_chunk_index >= total_chunks:
+            partial_path.unlink(missing_ok=True)
+            checkpoint_path.unlink(missing_ok=True)
+        return final_path
+    if not partial_path.is_file() or total_chunks <= 0 or next_chunk_index < total_chunks:
+        return None
+    raw = partial_path.read_text(encoding="utf-8", errors="replace")
+    if not raw.strip():
+        return None
+    temp_path = final_path.with_suffix(".txt.tmp")
+    temp_path.write_text(raw, encoding="utf-8")
+    temp_path.replace(final_path)
+    partial_path.unlink(missing_ok=True)
+    checkpoint_path.unlink(missing_ok=True)
+    return final_path
+
+
+def _candidate_prompt_files(session_dir: Path, *, materialize_complete_partials: bool = False) -> list[Path]:
+    if materialize_complete_partials:
+        worker_dirs = [session_dir] if session_dir.name.startswith("worker_") else [
+            path for path in session_dir.iterdir() if path.is_dir() and path.name.startswith("worker_")
+        ]
+        for worker_dir in worker_dirs:
+            for stage_dir in worker_dir.iterdir():
+                if stage_dir.is_dir():
+                    _materialize_complete_partial(stage_dir)
     candidates: list[Path] = []
     if session_dir.name.startswith("worker_"):
         candidates.extend(path for path in session_dir.glob("*\\prompts_list.txt") if path.is_file())
@@ -126,19 +169,27 @@ def _canonical_prompts_ready(story_dir: Path, story_id: str, expected_count: int
     actual = int(validation.get("prompts_count") or len(_load_prompts(prompts_path)) or 0)
     if not validation.get("ok", False):
         return False, prompts_path, validation, actual
-    if expected_count not in (None, 0) and actual != int(expected_count):
+    if not prompt_count_acceptable(expected_count, actual):
         validation = dict(validation)
         validation["status"] = "count_mismatch"
         return False, prompts_path, validation, actual
     return True, prompts_path, validation, actual
 
 
-def _build_temp_index(ctx: Any, preferred_session_id: str = "") -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+def _build_temp_index(
+    ctx: Any,
+    preferred_session_id: str = "",
+    *,
+    materialize_complete_partials: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     sessions = _prompt_session_dirs(ctx, preferred_session_id=preferred_session_id)
     index: dict[str, list[dict[str, Any]]] = {}
     session_rows: list[dict[str, Any]] = []
     for session_dir in sessions:
-        files = _candidate_prompt_files(session_dir)
+        files = _candidate_prompt_files(
+            session_dir,
+            materialize_complete_partials=materialize_complete_partials,
+        )
         session_rows.append(
             {
                 "session_id": session_dir.name,
@@ -178,7 +229,34 @@ def _story_match_ok(story_dir: Path, manifest: dict[str, Any], temp_story_folder
     return _normalize_key(temp_story_folder) in aliases
 
 
-def _temp_prompt_validation(path: Path, *, expected_count: int | None) -> dict[str, Any]:
+def _adult_age_normalized_copy(path: Path) -> Path | None:
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    replacements = (
+        (r"\bteenage girls\b", "adult women in their early 20s"),
+        (r"\bteenage boys\b", "adult men in their early 20s"),
+        (r"\bteenage daughters?\b", "adult daughters in their early 20s"),
+        (r"\bteenage sons?\b", "adult sons in their early 20s"),
+        (r"\bteenagers?\b", "young adults in their early 20s"),
+        (r"\bteens\b", "young adults in their early 20s"),
+        (r"\bteenage\b", "adult"),
+        (r"\bteen\b", "young adult in their early 20s"),
+    )
+    normalized = raw
+    for pattern, replacement in replacements:
+        normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+    if normalized == raw:
+        return None
+    target = path.with_name("prompts_list.adult_safe.txt")
+    target.write_text(normalized, encoding="utf-8")
+    return target
+
+
+def _temp_prompt_validation(
+    path: Path,
+    *,
+    expected_count: int | None,
+    normalize_blocked_ages: bool = False,
+) -> dict[str, Any]:
     if not path.is_file():
         return {
             "ok": False,
@@ -197,12 +275,38 @@ def _temp_prompt_validation(path: Path, *, expected_count: int | None) -> dict[s
     validation = validate_visual_prompts_file(path)
     actual = int(validation.get("prompts_count") or len(_load_prompts(path)) or 0)
     if int(validation.get("forbidden_terms_total") or 0) > 0:
-        return {
-            "ok": False,
-            "reason": TEMP_PROMPTS_FORBIDDEN_TERMS,
-            "actual_count": actual,
-            "validation": validation,
+        forbidden_terms = {
+            str(term).casefold()
+            for finding in validation.get("findings") or []
+            for term in finding.get("terms") or []
         }
+        if normalize_blocked_ages and forbidden_terms and forbidden_terms <= {"teen", "teenage"}:
+            normalized_path = _adult_age_normalized_copy(path)
+            normalized_validation = validate_visual_prompts_file(normalized_path) if normalized_path else validation
+            normalized_actual = int(
+                normalized_validation.get("prompts_count")
+                or (len(_load_prompts(normalized_path)) if normalized_path else 0)
+                or 0
+            )
+            if normalized_path and normalized_validation.get("ok", False) and normalized_actual == actual:
+                validation = dict(normalized_validation)
+                validation["status"] = TEMP_PROMPTS_ADULT_AGE_NORMALIZED
+                validation["original_path"] = str(path)
+                path = normalized_path
+            else:
+                return {
+                    "ok": False,
+                    "reason": TEMP_PROMPTS_FORBIDDEN_TERMS,
+                    "actual_count": actual,
+                    "validation": normalized_validation,
+                }
+        else:
+            return {
+                "ok": False,
+                "reason": TEMP_PROMPTS_FORBIDDEN_TERMS,
+                "actual_count": actual,
+                "validation": validation,
+            }
     if not validation.get("ok", False):
         return {
             "ok": False,
@@ -210,17 +314,25 @@ def _temp_prompt_validation(path: Path, *, expected_count: int | None) -> dict[s
             "actual_count": actual,
             "validation": validation,
         }
-    if expected_count not in (None, 0) and actual != int(expected_count):
+    accepted_with_tolerance = prompt_count_accepted_with_tolerance(expected_count, actual)
+    if not prompt_count_acceptable(expected_count, actual):
         return {
             "ok": False,
             "reason": TEMP_PROMPTS_COUNT_MISMATCH,
             "actual_count": actual,
             "validation": validation,
         }
+    if accepted_with_tolerance:
+        validation = dict(validation)
+        validation["status"] = PROMPTS_COUNT_TOLERANCE_ACCEPTED
+        validation["expected_count_original"] = expected_count
+        validation["effective_expected_count"] = actual
     return {
         "ok": True,
-        "reason": "",
+        "reason": PROMPTS_COUNT_TOLERANCE_ACCEPTED if accepted_with_tolerance else "",
         "actual_count": actual,
+        "effective_expected_count": actual if accepted_with_tolerance else expected_count,
+        "validated_path": str(path),
         "validation": validation,
     }
 
@@ -343,6 +455,7 @@ def _repair_story_from_temp(
     story_dir: Path,
     temp_index: dict[str, list[dict[str, Any]]],
     execute: bool,
+    normalize_blocked_ages: bool = False,
 ) -> dict[str, Any]:
     manifest = _load_manifest(story_dir)
     story_id, title = _story_identity(story_dir, manifest)
@@ -438,7 +551,11 @@ def _repair_story_from_temp(
             candidate_row["reason"] = TEMP_PROMPTS_STALE_OR_INVALID
             row["candidates_checked"].append(candidate_row)
             continue
-        checked = _temp_prompt_validation(temp_path, expected_count=expected)
+        checked = _temp_prompt_validation(
+            temp_path,
+            expected_count=expected,
+            normalize_blocked_ages=bool(normalize_blocked_ages and execute),
+        )
         candidate_row["validation"] = checked["validation"].get("status", "")
         candidate_row["reason"] = checked["reason"] or ""
         candidate_row["actual"] = checked["actual_count"]
@@ -468,13 +585,14 @@ def _repair_story_from_temp(
             row.update({"ok": True, "action": "would_import", "reason": "", "final_status": "done"})
             return row
 
+        validated_temp_path = Path(str(checked.get("validated_path") or temp_path))
         imported = _import_valid_temp_prompts(
             config=config,
             launch_id=launch_id,
             story_id=story_id,
             story_dir=story_dir,
-            temp_path=temp_path,
-            expected_count=expected,
+            temp_path=validated_temp_path,
+            expected_count=checked.get("effective_expected_count", expected),
             actual_count=checked["actual_count"],
             validation=checked["validation"],
         )
@@ -544,7 +662,11 @@ def run_youtube_prompts_temp_import_repair(
 
     ctx = build_launch_context(config, launch_id=launch_id)
     with isolated_session(None, batch_launch_id=launch_id, config=config):
-        temp_sessions_found, temp_index = _build_temp_index(ctx, preferred_session_id=str(options.run_session_id or ""))
+        temp_sessions_found, temp_index = _build_temp_index(
+            ctx,
+            preferred_session_id=str(options.run_session_id or ""),
+            materialize_complete_partials=bool(options.execute),
+        )
         story_rows = [
             _repair_story_from_temp(
                 config=config,
@@ -553,6 +675,7 @@ def run_youtube_prompts_temp_import_repair(
                 story_dir=story_dir,
                 temp_index=temp_index,
                 execute=bool(options.execute),
+                normalize_blocked_ages=bool(options.normalize_blocked_ages),
             )
             for story_dir in _iter_launch_story_dirs(config, launch_id)
         ]

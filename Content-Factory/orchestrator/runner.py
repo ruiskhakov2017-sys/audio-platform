@@ -133,67 +133,140 @@ class Runner:
             ),
             "stages": [],
         }
-        if opts.stories_dir:
-            print("[RUN] stage length_filter: started", flush=True)
-            lf = run_length_filter(
-                config=self.config,
-                options=LengthFilterOptions(
-                    stories_dir=opts.stories_dir,
-                    short_dir=None,
-                    execute=opts.execute and self._is_stage_real_allowed("length_filter", opts),
-                    words_per_minute=self.config.pre_filter_words_per_minute,
-                    min_minutes=self.config.pre_filter_min_minutes,
-                    min_words=self.config.pre_filter_min_words,
-                    extensions=self.config.pre_filter_extensions,
-                ),
-                pipeline=opts.pipeline,
-                story_id=opts.story_id,
-            )
-            manifest["stages"].append(
-                {
-                    "stage": "length_filter",
-                    "branch": "common",
-                    "unsafe": True,
-                    "execute_allowed": opts.execute and self._is_stage_real_allowed("length_filter", opts),
-                    "state": "done" if lf.get("ok", False) else "failed",
-                    "message": lf.get("summary", lf.get("message", "")),
-                }
-            )
-            print(
-                f"[RUN] stage length_filter: {'done' if lf.get('ok', False) else 'failed'}",
-                flush=True,
-            )
-            if not lf.get("ok", False):
-                reports_dir = self.config.reports_dir
-                reports_dir.mkdir(parents=True, exist_ok=True)
-                manifest_path = reports_dir / f"run_manifest_{run_id}.json"
-                manifest_path.write_text(
-                    json.dumps(manifest, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
+
+        resolver = None
+        if opts.launch_dir is not None:
+            from orchestrator.isolated_launch_mode import is_isolated_launch, resolver_if_isolated
+
+            launch_path = opts.launch_dir.resolve()
+            if is_isolated_launch(self.config, launch_root=launch_path):
+                resolver = resolver_if_isolated(self.config, launch_root=launch_path)
+
+        from orchestrator.isolated_launch_context import (
+            isolated_session,
+            resolve_events_file,
+            resolve_reports_dir,
+            resolve_status_file,
+        )
+
+        with isolated_session(resolver, batch_launch_id=resolver.launch_id if resolver else None):
+            logger = EventLogger(resolve_events_file(self.config))
+            status = StatusStore(resolve_status_file(self.config))
+            reports_dir = resolve_reports_dir(self.config)
+
+            if opts.stories_dir:
+                print("[RUN] stage length_filter: started", flush=True)
+                lf = run_length_filter(
+                    config=self.config,
+                    options=LengthFilterOptions(
+                        stories_dir=opts.stories_dir,
+                        short_dir=None,
+                        execute=opts.execute and self._is_stage_real_allowed("length_filter", opts),
+                        words_per_minute=self.config.pre_filter_words_per_minute,
+                        min_minutes=self.config.pre_filter_min_minutes,
+                        min_words=self.config.pre_filter_min_words,
+                        extensions=self.config.pre_filter_extensions,
+                        artifacts_dir=reports_dir if resolver is not None else None,
+                    ),
+                    pipeline=opts.pipeline,
+                    story_id=opts.story_id,
                 )
-                print("[RUN] pipeline failed at length_filter", flush=True)
-                return run_id, False
-        for w in wrappers:
-            stage = w.contract.stage
-            allow_real = self._is_stage_real_allowed(stage, opts)
-            tts_adapter_message = self._check_tts_engine_adapter(stage)
-            if tts_adapter_message:
-                print(f"[RUN] stage {stage}: partial_connected ({tts_adapter_message})", flush=True)
-                self.status.append(
+                manifest["stages"].append(
+                    {
+                        "stage": "length_filter",
+                        "branch": "common",
+                        "unsafe": True,
+                        "execute_allowed": opts.execute and self._is_stage_real_allowed("length_filter", opts),
+                        "state": "done" if lf.get("ok", False) else "failed",
+                        "message": lf.get("summary", lf.get("message", "")),
+                    }
+                )
+                print(
+                    f"[RUN] stage length_filter: {'done' if lf.get('ok', False) else 'failed'}",
+                    flush=True,
+                )
+                if not lf.get("ok", False):
+                    reports_dir.mkdir(parents=True, exist_ok=True)
+                    manifest_path = reports_dir / f"run_manifest_{run_id}.json"
+                    manifest_path.write_text(
+                        json.dumps(manifest, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    print("[RUN] pipeline failed at length_filter", flush=True)
+                    return run_id, False
+            for w in wrappers:
+                stage = w.contract.stage
+                allow_real = self._is_stage_real_allowed(stage, opts)
+                tts_adapter_message = self._check_tts_engine_adapter(stage)
+                if tts_adapter_message:
+                    print(f"[RUN] stage {stage}: partial_connected ({tts_adapter_message})", flush=True)
+                    status.append(
+                        story_id=opts.story_id,
+                        pipeline=opts.pipeline,
+                        stage=stage,
+                        state="partial_connected",
+                        message=tts_adapter_message,
+                    )
+                    logger.emit(
+                        run_id=run_id,
+                        story_id=opts.story_id,
+                        pipeline=opts.pipeline,
+                        stage=stage,
+                        action="finish",
+                        result="partial_connected",
+                        message=tts_adapter_message,
+                    )
+                    manifest["stages"].append(
+                        {
+                            "stage": stage,
+                            "branch": w.contract.branch,
+                            "unsafe": w.contract.unsafe,
+                            "execute_allowed": allow_real,
+                            "state": "partial_connected",
+                            "message": tts_adapter_message,
+                        }
+                    )
+                    continue
+                print(f"[RUN] stage {stage}: started", flush=True)
+                status.append(
                     story_id=opts.story_id,
                     pipeline=opts.pipeline,
                     stage=stage,
-                    state="partial_connected",
-                    message=tts_adapter_message,
+                    state="running",
+                    message="stage started",
                 )
-                self.logger.emit(
+                logger.emit(
+                    run_id=run_id,
+                    story_id=opts.story_id,
+                    pipeline=opts.pipeline,
+                    stage=stage,
+                    action="start",
+                    result="ok",
+                    message="stage start",
+                )
+                result = w.run(
+                    story_id=opts.story_id,
+                    pipeline=opts.pipeline,
+                    execute=opts.execute,
+                    allow_real=allow_real,
+                    stories_dir=opts.stories_dir,
+                )
+                state = result.state
+                status.append(
+                    story_id=opts.story_id,
+                    pipeline=opts.pipeline,
+                    stage=stage,
+                    state=state,
+                    message=result.message,
+                )
+                logger.emit(
                     run_id=run_id,
                     story_id=opts.story_id,
                     pipeline=opts.pipeline,
                     stage=stage,
                     action="finish",
-                    result="partial_connected",
-                    message=tts_adapter_message,
+                    result=state,
+                    message=result.message,
                 )
                 manifest["stages"].append(
                     {
@@ -201,93 +274,40 @@ class Runner:
                         "branch": w.contract.branch,
                         "unsafe": w.contract.unsafe,
                         "execute_allowed": allow_real,
-                        "state": "partial_connected",
-                        "message": tts_adapter_message,
+                        "state": state,
+                        "message": result.message,
                     }
                 )
-                continue
-            print(f"[RUN] stage {stage}: started", flush=True)
-            self.status.append(
-                story_id=opts.story_id,
-                pipeline=opts.pipeline,
-                stage=stage,
-                state="running",
-                message="stage started",
+                print(f"[RUN] stage {stage}: {state}", flush=True)
+                if not result.ok:
+                    print(f"[RUN] stopped after stage failure: {stage}", flush=True)
+                    break
+            pipeline_ok = not any(str(s.get("state")) == "failed" for s in manifest["stages"])
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = reports_dir / f"run_manifest_{run_id}.json"
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            stage_counts: dict[str, int] = {}
+            for s in manifest["stages"]:
+                key = s["state"]
+                stage_counts[key] = stage_counts.get(key, 0) + 1
+            v1_report = {
+                "run_id": run_id,
+                "pipeline": opts.pipeline,
+                "profile": opts.run_profile,
+                "counts_by_state": stage_counts,
+                "real_working_stages": [s["stage"] for s in manifest["stages"] if s["state"] == "done"],
+                "partial_connected_stages": [
+                    s["stage"] for s in manifest["stages"] if s["state"] == "partial_connected"
+                ],
+                "blocked_stages": [s["stage"] for s in manifest["stages"] if s["state"] == "blocked_external"],
+                "failed_stages": [s["stage"] for s in manifest["stages"] if s["state"] == "failed"],
+            }
+            (reports_dir / f"v1_report_{run_id}.json").write_text(
+                json.dumps(v1_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
-            self.logger.emit(
-                run_id=run_id,
-                story_id=opts.story_id,
-                pipeline=opts.pipeline,
-                stage=stage,
-                action="start",
-                result="ok",
-                message="stage start",
-            )
-            result = w.run(
-                story_id=opts.story_id,
-                pipeline=opts.pipeline,
-                execute=opts.execute,
-                allow_real=allow_real,
-                stories_dir=opts.stories_dir,
-            )
-            state = result.state
-            self.status.append(
-                story_id=opts.story_id,
-                pipeline=opts.pipeline,
-                stage=stage,
-                state=state,
-                message=result.message,
-            )
-            self.logger.emit(
-                run_id=run_id,
-                story_id=opts.story_id,
-                pipeline=opts.pipeline,
-                stage=stage,
-                action="finish",
-                result=state,
-                message=result.message,
-            )
-            manifest["stages"].append(
-                {
-                    "stage": stage,
-                    "branch": w.contract.branch,
-                    "unsafe": w.contract.unsafe,
-                    "execute_allowed": allow_real,
-                    "state": state,
-                    "message": result.message,
-                }
-            )
-            print(f"[RUN] stage {stage}: {state}", flush=True)
-            if not result.ok:
-                print(f"[RUN] stopped after stage failure: {stage}", flush=True)
-                break
-        pipeline_ok = not any(str(s.get("state")) == "failed" for s in manifest["stages"])
-        reports_dir = self.config.reports_dir
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        manifest_path = reports_dir / f"run_manifest_{run_id}.json"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        stage_counts: dict[str, int] = {}
-        for s in manifest["stages"]:
-            key = s["state"]
-            stage_counts[key] = stage_counts.get(key, 0) + 1
-        v1_report = {
-            "run_id": run_id,
-            "pipeline": opts.pipeline,
-            "profile": opts.run_profile,
-            "counts_by_state": stage_counts,
-            "real_working_stages": [s["stage"] for s in manifest["stages"] if s["state"] == "done"],
-            "partial_connected_stages": [
-                s["stage"] for s in manifest["stages"] if s["state"] == "partial_connected"
-            ],
-            "blocked_stages": [s["stage"] for s in manifest["stages"] if s["state"] == "blocked_external"],
-            "failed_stages": [s["stage"] for s in manifest["stages"] if s["state"] == "failed"],
-        }
-        (reports_dir / f"v1_report_{run_id}.json").write_text(
-            json.dumps(v1_report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        if pipeline_ok:
-            print(f"[RUN] finished: run_id={run_id}", flush=True)
-        else:
-            print(f"[RUN] finished with failures: run_id={run_id}", flush=True)
-        return run_id, pipeline_ok
+            if pipeline_ok:
+                print(f"[RUN] finished: run_id={run_id}", flush=True)
+            else:
+                print(f"[RUN] finished with failures: run_id={run_id}", flush=True)
+            return run_id, pipeline_ok

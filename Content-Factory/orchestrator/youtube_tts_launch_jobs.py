@@ -119,8 +119,34 @@ def _local_audio_path(manifest: dict[str, Any], story_dir: Path) -> Path:
     return story_dir / "04_audio" / "narration.mp3"
 
 
-def _story_state(manifest: dict[str, Any], local_audio: Path, drive_audio: Path) -> str:
-    if local_audio.is_file() or drive_audio.is_file():
+def _audio_counts_as_done(audio_path: Path, *, manifest: dict[str, Any], story_dir: Path) -> bool:
+    if not audio_path.is_file():
+        return False
+    if audio_path.stat().st_size < 32_000:
+        return False
+    try:
+        from orchestrator.youtube_video_segments import get_media_duration
+
+        duration = float(get_media_duration(audio_path))
+    except Exception:
+        return True
+    if duration < 45.0:
+        return False
+    text_path = _resolve_input_text(manifest, story_dir)
+    if text_path.is_file():
+        import re
+
+        words = len(re.findall(r"[A-Za-z]{2,}", text_path.read_text(encoding="utf-8", errors="replace")))
+        if words >= 500 and duration < (words / 150 * 60 * 0.08):
+            return False
+    return True
+
+
+def _story_state(manifest: dict[str, Any], local_audio: Path, drive_audio: Path, *, story_dir: Path | None = None) -> str:
+    resolved_story_dir = story_dir or local_audio.parent.parent
+    if _audio_counts_as_done(local_audio, manifest=manifest, story_dir=resolved_story_dir) or _audio_counts_as_done(
+        drive_audio, manifest=manifest, story_dir=resolved_story_dir
+    ):
         return "done"
     for section_name in ("tts_kokoro_colab", "audio"):
         section = manifest.get(section_name)
@@ -156,7 +182,7 @@ def _load_story_rows(config: OrchestratorConfig, youtube_run_id: str, drive_root
         drive_text = drive_root / "texts" / f"{stem}.txt"
         drive_audio = drive_root / "audio" / f"{stem}.mp3"
         local_audio = _local_audio_path(manifest, story_dir)
-        state = _story_state(manifest, local_audio, drive_audio)
+        state = _story_state(manifest, local_audio, drive_audio, story_dir=story_dir)
         problems: list[str] = []
         if not input_text.is_file():
             problems.append("missing_input_text")
@@ -414,6 +440,35 @@ def preflight_launch_jobs(config: OrchestratorConfig, options: TtsLaunchOptions)
     for folder in (drive_root / "audio", drive_root / "logs", drive_root / "done", drive_root / "failed"):
         if not folder.is_dir():
             errors.append(f"missing_dir:{folder}")
+
+    promo_guard_failures: list[dict[str, Any]] = []
+    from orchestrator.youtube_tts_promo_guards import evaluate_tts_input_promo_guards
+
+    for item in job_items:
+        story_id = str(item.get("story_id") or item.get("canonical_basename") or "").strip()
+        text_path = Path(str(item.get("drive_text_path") or item.get("source_text_path") or ""))
+        if not text_path.is_file():
+            continue
+        story_dir = Path(str(item.get("story_dir") or ""))
+        safe_path = story_dir / "02_safe_story" / "safe_story.txt" if story_dir.is_dir() else Path()
+        tts_text = text_path.read_text(encoding="utf-8", errors="replace")
+        safe_text = safe_path.read_text(encoding="utf-8", errors="replace") if safe_path.is_file() else ""
+        guard = evaluate_tts_input_promo_guards(
+            config=config,
+            tts_text=tts_text,
+            safe_story_text=safe_text,
+        )
+        if not guard.get("ok"):
+            promo_guard_failures.append(
+                {
+                    "story_id": story_id,
+                    "errors": guard.get("errors") or [],
+                    "text_path": str(text_path),
+                }
+            )
+            for err in guard.get("errors") or []:
+                errors.append(f"promo_guard:{story_id}:{err}")
+
     return {
         "ok": not errors,
         "youtube_run_id": options.youtube_run_id,
@@ -423,6 +478,7 @@ def preflight_launch_jobs(config: OrchestratorConfig, options: TtsLaunchOptions)
         "job_path": str(job_path),
         "total_items": len(job_items),
         "partition_counts": partition_counts,
+        "promo_guard_failures": promo_guard_failures,
         "errors": errors,
         "warnings": warnings,
     }

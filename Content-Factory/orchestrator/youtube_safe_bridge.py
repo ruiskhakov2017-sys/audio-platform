@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
+from orchestrator.gemini_colab_proxy import apply_gemini_colab_proxy_env, gemini_colab_proxy_session
 from orchestrator.youtube_language import EXPECTED_YOUTUBE_LANGUAGE, detect_path_language
 from orchestrator.youtube_bridge_manifest import _legacy_bridge_paths
 from orchestrator.youtube_from_site import (
@@ -131,13 +132,51 @@ def _resolve_safe_input_file(*, root_dir: Path, story_dir: Path, manifest: dict[
     return None, "Нет входа: отсутствует 00_source/source_cleaned_story.txt и resolved_cleaned_path."
 
 
-def _staging_dir_from_manifest(manifest: dict[str, Any], root_dir: Path, youtube_run_id: str, story_id: str) -> Path:
+def _staging_dir_from_manifest(
+    manifest: dict[str, Any],
+    root_dir: Path,
+    youtube_run_id: str,
+    story_id: str,
+    *,
+    config: OrchestratorConfig | None = None,
+) -> Path:
     lb = manifest.get("legacy_bridge")
     if isinstance(lb, dict):
         raw = str(lb.get("youtube_safe_story_dir", "")).strip()
         if raw:
             return Path(raw).resolve()
+    from orchestrator.isolated_io import is_active_isolated
+    from orchestrator.isolated_launch_context import get_active_resolver
+
+    if config is not None and is_active_isolated(config):
+        resolver = get_active_resolver()
+        if resolver is not None:
+            safe = re.sub(r'[<>:"/\\|?*\r\n\t]+', "_", story_id).strip(" .") or "youtube_story"
+            return (resolver.technical_gemini_staging_dir() / "youtube_safe" / safe).resolve()
     return Path(_legacy_bridge_paths(root_dir, youtube_run_id, story_id)["youtube_safe_story_dir"]).resolve()
+
+
+def _bridge_copy2(
+    config: OrchestratorConfig,
+    src: Path | str,
+    dst: Path | str,
+    *,
+    function: str,
+) -> Path:
+    from orchestrator.isolated_io import copy2 as iso_copy2, is_active_isolated
+
+    if is_active_isolated(config):
+        return iso_copy2(
+            config,
+            src,
+            dst,
+            module="orchestrator.youtube_safe_bridge",
+            function=function,
+        )
+    target = Path(dst)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, target)
+    return target.resolve()
 
 
 def _safe_name_for_file(story_id: str) -> str:
@@ -298,7 +337,7 @@ def run_youtube_prepare_safe_bridge(*, config: OrchestratorConfig, options: Yout
     if inp is None:
         return {"ok": False, "message": inp_reason}
 
-    staging_dir = _staging_dir_from_manifest(manifest, root_dir, youtube_run_id, sid)
+    staging_dir = _staging_dir_from_manifest(manifest, root_dir, youtube_run_id, sid, config=config)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     stem = _safe_name_for_file(sid)
@@ -411,7 +450,7 @@ def run_youtube_import_safe_result(*, config: OrchestratorConfig, options: Youtu
         return {"ok": False, "message": "В manifest нет youtube_outputs.story_dir"}
 
     sid = str(manifest.get("story_id", "")).strip() or str(entry.get("story_id", "")).strip()
-    staging_dir = _staging_dir_from_manifest(manifest, root_dir, youtube_run_id, sid)
+    staging_dir = _staging_dir_from_manifest(manifest, root_dir, youtube_run_id, sid, config=config)
     status_path = story_dir / "logs" / "safe_bridge_status.json"
 
     if not staging_dir.is_dir():
@@ -486,12 +525,12 @@ def run_youtube_import_safe_result(*, config: OrchestratorConfig, options: Youtu
 
     safe_out.write_text(strip_youtube_prefilter_header(_read_text(clean_src)), encoding="utf-8", newline="\n")
     raw_paths: list[str] = []
-    shutil.copy2(clean_src, raw_dir / clean_src.name)
+    _bridge_copy2(config, clean_src, raw_dir / clean_src.name, function="run_youtube_import_safe_result")
     raw_paths.append(str(raw_dir / clean_src.name))
     info_staging = staging_dir / "info.txt"
     if info_staging.is_file():
         dst_info = raw_dir / "info.txt"
-        shutil.copy2(info_staging, dst_info)
+        _bridge_copy2(config, info_staging, dst_info, function="run_youtube_import_safe_result")
         raw_paths.append(str(dst_info))
 
     cn = clean_src.name
@@ -502,13 +541,13 @@ def run_youtube_import_safe_result(*, config: OrchestratorConfig, options: Youtu
         tmp_path = staging_dir / f"{clean_src.stem}_clean.tmp"
     if tmp_path.is_file():
         dst = raw_dir / tmp_path.name
-        shutil.copy2(tmp_path, dst)
+        _bridge_copy2(config, tmp_path, dst, function="run_youtube_import_safe_result")
         raw_paths.append(str(dst))
     for report_name in ("result_report.txt", "genre_report.txt"):
         rp = staging_dir / report_name
         if rp.is_file():
             dst = raw_dir / report_name
-            shutil.copy2(rp, dst)
+            _bridge_copy2(config, rp, dst, function="run_youtube_import_safe_result")
             raw_paths.append(str(dst))
 
     now = _now_iso()
@@ -696,7 +735,7 @@ def run_youtube_run_safe_bridge(*, config: OrchestratorConfig, options: YoutubeR
         return {"ok": False, "message": "В manifest нет youtube_outputs.story_dir"}
 
     sid = str(manifest.get("story_id", "")).strip() or str(entry.get("story_id", "")).strip()
-    staging_dir = _staging_dir_from_manifest(manifest, root_dir, youtube_run_id, sid)
+    staging_dir = _staging_dir_from_manifest(manifest, root_dir, youtube_run_id, sid, config=config)
     status_path = story_dir / "logs" / "safe_bridge_status.json"
     logs_dir = story_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -868,15 +907,19 @@ def run_youtube_run_safe_bridge(*, config: OrchestratorConfig, options: YoutubeR
             logf.write(f"[orchestrator] story_folders_preview_count={len(preview_folders)}\n")
             logf.write(f"[orchestrator] start_bot_index={bot_i} ({bot_note})\n")
             logf.flush()
-            proc = subprocess.run(
-                [sys.executable, str(gemini_auto)],
-                cwd=str(ltd),
-                env=env,
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=None,
-            )
+            with gemini_colab_proxy_session(root_dir) as proxy_session:
+                env = apply_gemini_colab_proxy_env(env, proxy_session)
+                logf.write(f"[orchestrator] GEMINI_PROXY_SERVER={env.get('GEMINI_PROXY_SERVER', '')}\n")
+                logf.flush()
+                proc = subprocess.run(
+                    [sys.executable, str(gemini_auto)],
+                    cwd=str(ltd),
+                    env=env,
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=None,
+                )
             exit_code = int(proc.returncode) if proc.returncode is not None else 0
     except Exception as exc:
         exit_code = -1

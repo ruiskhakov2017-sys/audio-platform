@@ -219,6 +219,41 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _colab_root_cfg(root: Path) -> Any:
+    class _RootCfg:
+        root_dir = root.resolve()
+
+    return _RootCfg()
+
+
+def _colab_resolver(root: Path, *, human_launch: Path | None = None) -> Any | None:
+    from orchestrator.isolated_launch_context import get_active_resolver
+    from orchestrator.isolated_launch_mode import is_isolated_launch, resolver_if_isolated
+
+    active = get_active_resolver()
+    if active is not None and active.isolated:
+        return active
+    if human_launch is not None:
+        hl = human_launch.resolve()
+        cfg = _colab_root_cfg(root)
+        if is_isolated_launch(cfg, launch_id=hl.name, launch_root=hl):
+            return resolver_if_isolated(cfg, launch_id=hl.name, launch_root=hl)
+    return None
+
+
+def _colab_config(root: Path) -> Any | None:
+    from orchestrator.config import load_config
+    from orchestrator.isolated_launch_context import get_active_config
+
+    cfg = get_active_config()
+    if cfg is not None:
+        return cfg
+    try:
+        return load_config(None)
+    except Exception:
+        return None
+
+
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -453,7 +488,17 @@ def _drive_root(root: Path, settings: Any) -> Path | None:
     return (p if p.is_absolute() else (root / p)).resolve()
 
 
-def _drive_dir_from(root: Path, settings: Any, key: str, default_sub: str) -> Path:
+def _drive_dir_from(
+    root: Path,
+    settings: Any,
+    key: str,
+    default_sub: str,
+    *,
+    human_launch: Path | None = None,
+) -> Path:
+    resolver = _colab_resolver(root, human_launch=human_launch)
+    if resolver is not None:
+        return (resolver.technical_drive_staging_dir() / default_sub).resolve()
     cli = ""
     if key == "texts":
         cli = str(getattr(settings, "google_drive_texts_dir", "") or "").strip()
@@ -590,14 +635,37 @@ def _read_colab_status(job_dir: Path) -> dict[str, Any]:
         return {}
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _write_json(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    root_dir: Path | None = None,
+    human_launch: Path | None = None,
+) -> None:
+    root = (root_dir or path.parent).resolve()
+    resolver = _colab_resolver(root, human_launch=human_launch)
+    cfg = _colab_config(root)
+    if resolver is not None and cfg is not None:
+        from orchestrator.isolated_io import write_json as iso_write_json
+
+        iso_write_json(
+            cfg,
+            path,
+            payload,
+            module="orchestrator.site_tts.colab_batch",
+            function="_write_json",
+        )
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
 
 
-def _local_reports_dir(root_dir: Path) -> Path:
+def _local_reports_dir(root_dir: Path, *, human_launch: Path | None = None) -> Path:
+    resolver = _colab_resolver(root_dir, human_launch=human_launch)
+    if resolver is not None:
+        return resolver.site_tts_reports_dir()
     return (root_dir.resolve() / "reports").resolve()
 
 
@@ -678,10 +746,17 @@ def _write_terminal_reports(
     root_dir: Path,
     job_dir: Path,
     payload: dict[str, Any],
+    human_launch: Path | None = None,
 ) -> None:
-    _write_json(job_dir / _TTS_TERMINAL_STATUS_JSON, payload)
-    _write_json(_local_reports_dir(root_dir) / "site_tts_drive_wait_report.json", payload)
-    _write_json(_local_reports_dir(root_dir) / "site_publish_tts_availability_report.json", payload)
+    _write_json(job_dir / _TTS_TERMINAL_STATUS_JSON, payload, root_dir=root_dir, human_launch=human_launch)
+    reports = _local_reports_dir(root_dir, human_launch=human_launch)
+    _write_json(reports / "site_tts_drive_wait_report.json", payload, root_dir=root_dir, human_launch=human_launch)
+    _write_json(
+        reports / "site_publish_tts_availability_report.json",
+        payload,
+        root_dir=root_dir,
+        human_launch=human_launch,
+    )
 
 
 def _drive_mp3_ready(mp3_dir: Path, mp3_name: str) -> bool:
@@ -745,11 +820,13 @@ def mark_drive_expected_skipped(
     names: list[str],
     reason: str,
     execute: bool = False,
+    human_launch: Path | None = None,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
-    job_dir = _drive_dir_from(root, settings, "job", "job")
-    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3")
+    hl = human_launch.resolve() if human_launch is not None else None
+    job_dir = _drive_dir_from(root, settings, "job", "job", human_launch=hl)
+    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3", human_launch=hl)
     expected = _load_expected_files(job_dir)
     expected_set = set(expected)
     cleaned_names = []
@@ -798,7 +875,7 @@ def mark_drive_expected_skipped(
         "skipped_not_expected": skipped_not_expected,
         "manual_skipped_json": str(job_dir / _MANUAL_SKIPPED_JSON),
         "manual_skipped_txt": str(job_dir / _MANUAL_SKIPPED_TXT),
-        "report_path": str(_local_reports_dir(root) / "site_tts_manual_skipped_report.json"),
+        "report_path": str(_local_reports_dir(root, human_launch=hl) / "site_tts_manual_skipped_report.json"),
         "written_at": now,
     }
     if execute:
@@ -821,8 +898,13 @@ def mark_drive_expected_skipped(
             mp3_dir=mp3_dir,
             job_dir=job_dir,
         )
-        _write_terminal_reports(root_dir=root, job_dir=job_dir, payload=terminal_payload)
-    _write_json(_local_reports_dir(root) / "site_tts_manual_skipped_report.json", report)
+        _write_terminal_reports(root_dir=root, job_dir=job_dir, payload=terminal_payload, human_launch=hl)
+    _write_json(
+        _local_reports_dir(root, human_launch=hl) / "site_tts_manual_skipped_report.json",
+        report,
+        root_dir=root,
+        human_launch=hl,
+    )
     return report
 
 
@@ -831,19 +913,26 @@ def mark_missing_drive_expected_skipped(
     *,
     reason: str = "manual skip missing expected mp3",
     execute: bool = False,
+    human_launch: Path | None = None,
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
-    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3")
-    job_dir = _drive_dir_from(root, settings, "job", "job")
+    hl = human_launch.resolve() if human_launch is not None else None
+    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3", human_launch=hl)
+    job_dir = _drive_dir_from(root, settings, "job", "job", human_launch=hl)
     expected = _load_expected_files(job_dir)
     expected_set = set(expected)
     resolution = _colab_expected_resolution(expected_set=expected_set, mp3_dir=mp3_dir, job_dir=job_dir)
     missing = sorted(list(resolution["unresolved"]), key=str.lower)
-    result = mark_drive_expected_skipped(root, names=missing, reason=reason, execute=execute)
+    result = mark_drive_expected_skipped(root, names=missing, reason=reason, execute=execute, human_launch=hl)
     result["missing_before_mark"] = missing
     result["missing_before_mark_count"] = len(missing)
-    _write_json(_local_reports_dir(root) / "site_tts_manual_skipped_report.json", result)
+    _write_json(
+        _local_reports_dir(root, human_launch=hl) / "site_tts_manual_skipped_report.json",
+        result,
+        root_dir=root,
+        human_launch=hl,
+    )
     return result
 
 
@@ -1242,16 +1331,16 @@ def export_drive_texts(
     target = (
         (texts_dir if texts_dir.is_absolute() else (root / texts_dir)).resolve()
         if texts_dir is not None
-        else _drive_dir_from(root, settings, "texts", "texts")
+        else _drive_dir_from(root, settings, "texts", "texts", human_launch=hl)
     )
     target.mkdir(parents=True, exist_ok=True)
     index_csv = target.parent / "STORIES_INDEX.csv"
     drive_root = target.parent
-    scripts_dir = _drive_dir_from(root, settings, "scripts", "scripts")
-    cache_dir = _drive_dir_from(root, settings, "cache", "cache")
-    logs_dir = _drive_dir_from(root, settings, "logs", "logs")
-    job_dir = _drive_dir_from(root, settings, "job", "job")
-    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3")
+    scripts_dir = _drive_dir_from(root, settings, "scripts", "scripts", human_launch=hl)
+    cache_dir = _drive_dir_from(root, settings, "cache", "cache", human_launch=hl)
+    logs_dir = _drive_dir_from(root, settings, "logs", "logs", human_launch=hl)
+    job_dir = _drive_dir_from(root, settings, "job", "job", human_launch=hl)
+    mp3_dir = _drive_dir_from(root, settings, "mp3", "mp3", human_launch=hl)
     scripts_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -1273,7 +1362,13 @@ def export_drive_texts(
             "message": f"human launch has no {D05_RASSKAZY}: {hl}",
         }
 
-    site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
+    from orchestrator.isolated_site_paths import resolve_site_tts_output_root
+
+    cfg = _colab_config(root)
+    if hl is not None and _colab_resolver(root, human_launch=hl) is not None and cfg is not None:
+        site_output_root = resolve_site_tts_output_root(cfg, launch_id=hl.name)
+    else:
+        site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
     allowed_story_keys: frozenset[str] | None = None
     _normalize_site_story_name = None
     if hl is None and stories_filter_dir is not None:
@@ -1644,7 +1739,7 @@ def export_drive_texts(
         "message": "TXT copied to Google Drive texts folder",
     }
     if hl is not None:
-        cdir, ctexts, cmp3 = _current_paths(root)
+        cdir, ctexts, cmp3 = _current_paths(root, human_launch=hl)
         out_ret["colab_current_dir"] = str(cdir)
         out_ret["colab_current_texts"] = str(ctexts)
         out_ret["colab_current_mp3"] = str(cmp3)
@@ -1661,18 +1756,24 @@ def import_drive_mp3(
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
+    hl = human_launch.resolve() if human_launch is not None else None
     source = (
         (mp3_dir if mp3_dir.is_absolute() else (root / mp3_dir)).resolve()
         if mp3_dir is not None
-        else _drive_dir_from(root, settings, "mp3", "mp3")
+        else _drive_dir_from(root, settings, "mp3", "mp3", human_launch=hl)
     )
     source.mkdir(parents=True, exist_ok=True)
-    job_dir = _drive_dir_from(root, settings, "job", "job")
+    job_dir = _drive_dir_from(root, settings, "job", "job", human_launch=hl)
     expected = set(_load_expected_files(job_dir))
     resolution = _colab_expected_resolution(expected_set=expected, mp3_dir=source, job_dir=job_dir) if expected else {}
     terminal_non_mp3 = set(resolution.get("failed_terminal") or []) | set(resolution.get("manual_skipped") or [])
-    site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
-    hl = human_launch.resolve() if human_launch is not None else None
+    from orchestrator.isolated_site_paths import resolve_site_tts_output_root
+
+    cfg = _colab_config(root)
+    if hl is not None and _colab_resolver(root, human_launch=hl) is not None and cfg is not None:
+        site_output_root = resolve_site_tts_output_root(cfg, launch_id=hl.name)
+    else:
+        site_output_root = (site_root if site_root is not None else (root / "output" / "site")).resolve()
 
     imported = 0
     skipped_existing = 0
@@ -1758,7 +1859,12 @@ def import_drive_mp3(
         "partial_import": bool(missing_after),
         "can_continue_to_site_publish": errors == 0,
     }
-    _write_json(_local_reports_dir(root) / "site_tts_drive_import_report.json", out)
+    _write_json(
+        _local_reports_dir(root, human_launch=hl) / "site_tts_drive_import_report.json",
+        out,
+        root_dir=root,
+        human_launch=hl,
+    )
     if hl is not None:
         try:
             tag = _utc_now_iso().replace(":", "-")
@@ -1996,12 +2102,13 @@ def wait_drive_mp3_and_import(
 ) -> dict[str, Any]:
     root = root_dir.resolve()
     settings = load_site_tts_settings(root)
+    hl = human_launch.resolve() if human_launch is not None else None
     source = (
         (mp3_dir if mp3_dir.is_absolute() else (root / mp3_dir)).resolve()
         if mp3_dir is not None
-        else _drive_dir_from(root, settings, "mp3", "mp3")
+        else _drive_dir_from(root, settings, "mp3", "mp3", human_launch=hl)
     )
-    job_dir = _drive_dir_from(root, settings, "job", "job")
+    job_dir = _drive_dir_from(root, settings, "job", "job", human_launch=hl)
     source.mkdir(parents=True, exist_ok=True)
     expected = _load_expected_files(job_dir)
     if not expected:
@@ -2044,7 +2151,7 @@ def wait_drive_mp3_and_import(
             mp3_dir=source,
             job_dir=job_dir,
         )
-        _write_terminal_reports(root_dir=root, job_dir=job_dir, payload=terminal_payload)
+        _write_terminal_reports(root_dir=root, job_dir=job_dir, payload=terminal_payload, human_launch=hl)
         last_status = {
             "expected": len(expected_set),
             "ready": len(ready_set),
@@ -2070,7 +2177,7 @@ def wait_drive_mp3_and_import(
             "elapsed_hours": round(elapsed_h, 2),
             "timeout_hours": max_hours,
             "mp3_dir": str(source),
-            "report_path": str(_local_reports_dir(root) / "site_tts_drive_wait_report.json"),
+            "report_path": str(_local_reports_dir(root, human_launch=hl) / "site_tts_drive_wait_report.json"),
         }
         print(
             f"expected={last_status['expected']} ready={last_status['ready']} missing={last_status['missing']} "
@@ -2182,8 +2289,12 @@ def wait_drive_mp3_and_import(
     }
 
 
-def _current_paths(root: Path) -> tuple[Path, Path, Path]:
-    current = (root / _CURRENT_ROOT).resolve()
+def _current_paths(root: Path, *, human_launch: Path | None = None) -> tuple[Path, Path, Path]:
+    resolver = _colab_resolver(root, human_launch=human_launch)
+    if resolver is not None:
+        current = (resolver.technical_temp_dir() / _CURRENT_ROOT).resolve()
+    else:
+        current = (root / _CURRENT_ROOT).resolve()
     texts = (current / _CURRENT_TEXTS).resolve()
     mp3 = (current / _CURRENT_MP3).resolve()
     return current, texts, mp3

@@ -30,7 +30,16 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.config import OrchestratorConfig
-from orchestrator.phase_a import _load_gemini_registry, _read_profile_email
+from orchestrator.gemini_colab_proxy import apply_gemini_colab_proxy_env, gemini_colab_proxy_session, proxy_report_fields
+from orchestrator.youtube_gemini_bot_picker import (
+    find_user_data_for_email,
+    legacy_runner_dir,
+    pick_selection_bot,
+)
+from orchestrator.youtube_full_auto.bridge_errors import (
+    classify_selection_bridge_result,
+    human_message_for_reason,
+)
 from orchestrator.youtube_from_site import (
     _append_status,
     _gemini_selection_dir,
@@ -44,16 +53,18 @@ from orchestrator.youtube_from_site import (
 )
 
 
-_GEMINI_URL_RE = re.compile(
-    r"^https://gemini\.google\.com(?:/u/\d+)?/gem/[A-Za-z0-9][A-Za-z0-9-]*$",
-    re.IGNORECASE,
-)
-_SELECTION_BOT_KEY = "youtube_selection"
 _LEGACY_RUNNER_SUBDIR = "legacy/youtube_selection"
 _BRIDGE_ROOT_SUBDIR = "_orchestrator_runs"
 _CHAIN_FILE = "gemini_bots_selection.json"
 _INFO_FILE_NAME = "info.txt"
 _NO_ACCOUNTS_SENTINEL = "_no_accounts.txt"
+
+
+def _read_bridge_log_tail(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
 
 
 def _safe_name_for_file(value: str) -> str:
@@ -62,36 +73,60 @@ def _safe_name_for_file(value: str) -> str:
 
 
 def _legacy_runner_dir(root_dir: Path) -> Path:
-    return (root_dir / _LEGACY_RUNNER_SUBDIR).resolve()
+    return legacy_runner_dir(root_dir)
 
 
-def _bridge_run_root(root_dir: Path, youtube_run_id: str) -> Path:
-    """Каталог под legacy/youtube_selection/_orchestrator_runs/<youtube_run_id>/ — все артефакты bridge живут тут."""
+def _bridge_run_root(
+    root_dir: Path, youtube_run_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    """Каталог bridge-run: legacy …/_orchestrator_runs/<id>/ или launch runs/youtube/<id>/selection_bridge."""
+    if config is not None:
+        from orchestrator.isolated_io import is_active_isolated
+        from orchestrator.youtube_path_resolver import resolve_youtube_run_root
+
+        if is_active_isolated(config):
+            return (resolve_youtube_run_root(config, youtube_run_id) / "selection_bridge").resolve()
     return (root_dir / _LEGACY_RUNNER_SUBDIR / _BRIDGE_ROOT_SUBDIR / youtube_run_id).resolve()
 
 
-def _bridge_stories_dir(root_dir: Path, youtube_run_id: str) -> Path:
-    return _bridge_run_root(root_dir, youtube_run_id) / "stories"
+def _bridge_stories_dir(
+    root_dir: Path, youtube_run_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    return _bridge_run_root(root_dir, youtube_run_id, config) / "stories"
 
 
-def _bridge_trash_dir(root_dir: Path, youtube_run_id: str) -> Path:
-    return _bridge_run_root(root_dir, youtube_run_id) / "trash"
+def _bridge_trash_dir(
+    root_dir: Path, youtube_run_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    return _bridge_run_root(root_dir, youtube_run_id, config) / "trash"
 
 
-def _bridge_user_data_dir(root_dir: Path, youtube_run_id: str, story_id: str) -> Path:
-    return _bridge_run_root(root_dir, youtube_run_id) / "user_data" / _safe_name_for_file(story_id)
+def _bridge_user_data_dir(
+    root_dir: Path, youtube_run_id: str, story_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    return _bridge_run_root(root_dir, youtube_run_id, config) / "user_data" / _safe_name_for_file(story_id)
 
 
-def _bridge_log_path(root_dir: Path, youtube_run_id: str, story_id: str) -> Path:
-    return _bridge_run_root(root_dir, youtube_run_id) / "logs" / f"legacy_selection__{_safe_name_for_file(story_id)}.log"
+def _bridge_log_path(
+    root_dir: Path, youtube_run_id: str, story_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    return (
+        _bridge_run_root(root_dir, youtube_run_id, config)
+        / "logs"
+        / f"legacy_selection__{_safe_name_for_file(story_id)}.log"
+    )
 
 
-def _bridge_parallel_state_dir(root_dir: Path, youtube_run_id: str) -> Path:
-    return _bridge_run_root(root_dir, youtube_run_id) / "parallel_state"
+def _bridge_parallel_state_dir(
+    root_dir: Path, youtube_run_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    return _bridge_run_root(root_dir, youtube_run_id, config) / "parallel_state"
 
 
-def _bridge_accounts_sentinel(root_dir: Path, youtube_run_id: str) -> Path:
-    return _bridge_run_root(root_dir, youtube_run_id) / _NO_ACCOUNTS_SENTINEL
+def _bridge_accounts_sentinel(
+    root_dir: Path, youtube_run_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    return _bridge_run_root(root_dir, youtube_run_id, config) / _NO_ACCOUNTS_SENTINEL
 
 
 def _legacy_user_data_dir(root_dir: Path) -> Path:
@@ -99,29 +134,14 @@ def _legacy_user_data_dir(root_dir: Path) -> Path:
 
 
 def _find_user_data_for_email(root_dir: Path, email: str) -> tuple[Path | None, str]:
-    """Подбирает user_data*-папку в legacy/youtube_selection/ под нужный email (по account_info из Chrome Preferences)."""
-    target = (email or "").strip().lower()
-    if not target:
-        return None, "empty_email"
-    base = _legacy_runner_dir(root_dir)
-    candidates: list[Path] = []
-    if base.is_dir():
-        for entry in sorted(base.iterdir(), key=lambda p: p.name.lower()):
-            if entry.is_dir() and (entry.name == "user_data" or entry.name.startswith("user_data_")):
-                candidates.append(entry)
-    for ud in candidates:
-        try:
-            em = _read_profile_email(ud).lower()
-        except Exception:
-            em = ""
-        if em == target:
-            return ud, em
-    return None, "no_match"
+    return find_user_data_for_email(root_dir, email)
 
 
-def _staging_story_dir(root_dir: Path, youtube_run_id: str, story_id: str) -> Path:
-    """Leaf story folder, ровно одна на bridge-run. legacy/youtube_selection/_orchestrator_runs/<run>/stories/<story>/"""
-    return _bridge_stories_dir(root_dir, youtube_run_id) / _safe_name_for_file(story_id)
+def _staging_story_dir(
+    root_dir: Path, youtube_run_id: str, story_id: str, config: OrchestratorConfig | None = None
+) -> Path:
+    """Leaf story folder, ровно одна на bridge-run."""
+    return _bridge_stories_dir(root_dir, youtube_run_id, config) / _safe_name_for_file(story_id)
 
 
 def _chain_dir(root_dir: Path, youtube_run_id: str) -> Path:
@@ -133,45 +153,13 @@ def _bridge_status_path(root_dir: Path, youtube_run_id: str) -> Path:
 
 
 def _registry_candidates(root_dir: Path) -> list[Path]:
-    return [
-        (root_dir / "configs" / "gemini_bots_registry.yaml").resolve(),
-        (root_dir / "configs" / "gemini_bots_registry.example.yaml").resolve(),
-    ]
+    from orchestrator.youtube_gemini_bot_picker import registry_candidates as _registry_candidates_impl
+
+    return _registry_candidates_impl(root_dir)
 
 
 def _pick_selection_bot(root_dir: Path, account_index: int) -> tuple[str, str, str, str]:
-    """(email, url, registry_path, key). account_index — индекс валидного аккаунта (0-based)."""
-    registry_path = ""
-    bots: list[dict[str, Any]] = []
-    for cand in _registry_candidates(root_dir):
-        if cand.is_file():
-            loaded = _load_gemini_registry(cand)
-            if loaded:
-                registry_path = str(cand)
-                bots = loaded
-                break
-    if not bots:
-        raise RuntimeError(
-            "Не найден или пуст gemini registry: configs/gemini_bots_registry.yaml / .example.yaml"
-        )
-
-    valid: list[tuple[str, str]] = []
-    for bot in bots:
-        if not isinstance(bot, dict):
-            continue
-        url = str(bot.get(_SELECTION_BOT_KEY, "")).strip()
-        if url and _GEMINI_URL_RE.fullmatch(url):
-            email = str(bot.get("email", "")).strip()
-            valid.append((email, url))
-
-    if not valid:
-        raise RuntimeError(
-            f"В {registry_path or 'registry'} нет ни одного валидного URL для ключа '{_SELECTION_BOT_KEY}'."
-        )
-
-    idx = max(0, min(account_index, len(valid) - 1))
-    email, url = valid[idx]
-    return email, url, registry_path, _SELECTION_BOT_KEY
+    return pick_selection_bot(root_dir, account_index)
 
 
 def _load_selection_input_manifest(root_dir: Path, youtube_run_id: str) -> tuple[Path, list[dict[str, Any]], str]:
@@ -269,7 +257,13 @@ def _is_legacy_generated_txt(name: str) -> bool:
 
 
 def _prepare_staging(
-    *, root_dir: Path, item: dict[str, Any], staging_dir: Path, force: bool
+    *,
+    config: OrchestratorConfig,
+    root_dir: Path,
+    item: dict[str, Any],
+    staging_dir: Path,
+    force: bool,
+    layout: str = "flat",
 ) -> tuple[Path | None, Path | None, str]:
     """Кладёт ровно один story.txt и возвращает (input_txt_path, effective_leaf_dir, error).
 
@@ -321,7 +315,32 @@ def _prepare_staging(
                 f"Удалите вручную или укажите другой --youtube-run-id."
             )
 
-    shutil.copy2(source_text_path, target_flat)
+    from orchestrator.isolated_io import copy2 as iso_copy2, is_active_isolated
+
+    if layout == "nested_leaf":
+        nested_dir.mkdir(parents=True, exist_ok=True)
+        if is_active_isolated(config):
+            iso_copy2(
+                config,
+                source_text_path,
+                target_nested,
+                module="orchestrator.youtube_selection_bridge",
+                function="_prepare_staging",
+            )
+        else:
+            shutil.copy2(source_text_path, target_nested)
+        return target_nested, nested_dir, ""
+
+    if is_active_isolated(config):
+        iso_copy2(
+            config,
+            source_text_path,
+            target_flat,
+            module="orchestrator.youtube_selection_bridge",
+            function="_prepare_staging",
+        )
+    else:
+        shutil.copy2(source_text_path, target_flat)
     return target_flat, staging_dir, ""
 
 
@@ -396,13 +415,22 @@ def _import_selection_output(
     staging_dir: Path,
     trash_dir: Path,
     story_safe_name: str,
+    info_path: Path | None = None,
+    require_processed_marker: bool = False,
 ) -> tuple[bool, str, Path | None, str]:
-    """Ищет info.txt в staging или trash, копирует в raw + expected_gemini_output_text. (ok, msg, out_path, verdict)."""
-    info_path, location = _find_info_after_run(
-        staging_dir=staging_dir, trash_dir=trash_dir, story_safe_name=story_safe_name
-    )
-    if info_path is None:
-        return False, "missing_info_txt", None, "unknown"
+    """Import info.txt only when correlation marker allows it (persistent live path)."""
+    if require_processed_marker and info_path is None:
+        return False, "missing_processed_marker_info_path", None, "unknown"
+    if info_path is not None:
+        if not info_path.is_file():
+            return False, "missing_info_txt", None, "unknown"
+        location = "processed_marker"
+    else:
+        info_path, location = _find_info_after_run(
+            staging_dir=staging_dir, trash_dir=trash_dir, story_safe_name=story_safe_name
+        )
+        if info_path is None:
+            return False, "missing_info_txt", None, "unknown"
 
     info_text = _read_text(info_path)
     verdict = _extract_verdict(info_text)
@@ -435,6 +463,12 @@ class YoutubeRunSelectionBridgeOptions:
     reuse_legacy_user_data: bool = False
     account_index: int = 0
     user_data_dir: str = ""
+    worker_id: str = ""
+    story_title: str = ""
+    live_logs: bool = True
+    max_story_runtime_minutes: int = 20
+    max_page_reloads: int = 2
+    max_attach_attempts: int = 3
 
 
 def run_youtube_run_selection_bridge(
@@ -498,12 +532,12 @@ def run_youtube_run_selection_bridge(
     if not gemini_auto.is_file():
         return {"ok": False, "message": f"Не найден legacy runner: {gemini_auto}"}
 
-    bridge_run_root = _bridge_run_root(root_dir, youtube_run_id)
-    bridge_stories = _bridge_stories_dir(root_dir, youtube_run_id)
-    bridge_trash = _bridge_trash_dir(root_dir, youtube_run_id)
-    bridge_parallel_state = _bridge_parallel_state_dir(root_dir, youtube_run_id)
-    bridge_accounts = _bridge_accounts_sentinel(root_dir, youtube_run_id)
-    bridge_log = _bridge_log_path(root_dir, youtube_run_id, story_id)
+    bridge_run_root = _bridge_run_root(root_dir, youtube_run_id, config)
+    bridge_stories = _bridge_stories_dir(root_dir, youtube_run_id, config)
+    bridge_trash = _bridge_trash_dir(root_dir, youtube_run_id, config)
+    bridge_parallel_state = _bridge_parallel_state_dir(root_dir, youtube_run_id, config)
+    bridge_accounts = _bridge_accounts_sentinel(root_dir, youtube_run_id, config)
+    bridge_log = _bridge_log_path(root_dir, youtube_run_id, story_id, config)
     bridge_run_root.mkdir(parents=True, exist_ok=True)
     bridge_stories.mkdir(parents=True, exist_ok=True)
     bridge_trash.mkdir(parents=True, exist_ok=True)
@@ -525,13 +559,17 @@ def run_youtube_run_selection_bridge(
             user_data = auto
             user_data_source = f"auto_match_email:{user_data.name}"
         else:
-            user_data = _bridge_user_data_dir(root_dir, youtube_run_id, story_id)
+            user_data = _bridge_user_data_dir(root_dir, youtube_run_id, story_id, config)
             user_data.mkdir(parents=True, exist_ok=True)
             user_data_source = "isolated_fallback"
 
-    staging = _staging_story_dir(root_dir, youtube_run_id, story_id)
+    staging = _staging_story_dir(root_dir, youtube_run_id, story_id, config)
     staged, effective_leaf, prep_err = _prepare_staging(
-        root_dir=root_dir, item=item, staging_dir=staging, force=bool(options.force)
+        config=config,
+        root_dir=root_dir,
+        item=item,
+        staging_dir=staging,
+        force=bool(options.force),
     )
     if staged is None or effective_leaf is None:
         return {"ok": False, "message": prep_err}
@@ -692,41 +730,138 @@ def run_youtube_run_selection_bridge(
     env["GEMINI_URL"] = gemini_url
     env["FILES_PER_DIALOG"] = "999"
     env["FILES_PER_ACCOUNT"] = "0"
+    env["GEMINI_DEBUG_DIR"] = str(bridge_log.parent / "debug")
+    env["GEMINI_INITIAL_LOAD_TIMEOUT_SEC"] = str(os.getenv("GEMINI_INITIAL_LOAD_TIMEOUT_SEC", "180"))
+    env["GEMINI_MAX_PAGE_RELOADS"] = str(int(options.max_page_reloads))
+    env["GEMINI_MAX_ATTACH_ATTEMPTS"] = str(int(options.max_attach_attempts))
+    env["GEMINI_POST_MODEL_STABILIZE_SEC"] = str(os.getenv("GEMINI_POST_MODEL_STABILIZE_SEC", "4"))
+    env["GEMINI_RELOAD_PAUSE_SEC"] = str(os.getenv("GEMINI_RELOAD_PAUSE_SEC", "45"))
     # selection-runner не читает GEMINI_NON_INTERACTIVE; subprocess.stdin=DEVNULL ниже превращает все
     # prompt_user в EOF → безопасный fallback.
 
     exit_code: int | None = None
+    proxy_meta: dict[str, Any] = {"proxy_enabled": False}
+    bridge_exc = ""
+    subprocess_timed_out = False
+    subprocess_log_text = ""
+    worker_id = str(options.worker_id or "").strip() or f"gemini-w{(options.account_index % 5) + 1}"
+    story_title = str(options.story_title or story_id).strip()
+    live_logs = bool(options.live_logs)
+
+    from orchestrator.youtube_full_auto.gemini_worker_trace import (
+        legacy_line_prefix,
+        refine_reason_from_log,
+        run_legacy_gemini_subprocess,
+    )
+    from orchestrator.youtube_full_auto.progress_reporter import get_reporter
+
+    reporter = get_reporter()
+    if reporter is not None:
+        reporter.emit_tag(
+            "OPEN",
+            stage="selection",
+            account_index=int(options.account_index),
+            worker=worker_id,
+            profile=gemini_user_data_dir,
+        )
+        reporter.set_worker_state(
+            account_index=int(options.account_index),
+            worker_id=worker_id,
+            state="starting_browser",
+            story_title=story_title,
+            story_key=story_id,
+            log_path=str(bridge_log),
+            chrome_profile=gemini_user_data_dir,
+            stage="selection",
+        )
+
+    header_lines = [
+        f"[orchestrator] cwd={runner_dir}",
+        f"[orchestrator] GEMINI_STORIES_DIR={gemini_stories_dir}",
+        f"[orchestrator] GEMINI_TRASH_DIR={gemini_trash_dir}",
+        f"[orchestrator] GEMINI_USER_DATA_DIR={gemini_user_data_dir}",
+        f"[orchestrator] GEMINI_LOG_FILE={gemini_log_file}",
+        f"[orchestrator] GEMINI_PARALLEL_STATE_DIR={gemini_parallel_state_dir}",
+        f"[orchestrator] GEMINI_ACCOUNTS_FILE={gemini_accounts_file}",
+        f"[orchestrator] GEMINI_URL={gemini_url}",
+        f"[orchestrator] bot_account_email={email}",
+        f"[orchestrator] account_index={options.account_index}",
+        f"[orchestrator] worker_id={worker_id}",
+        f"[orchestrator] staging_input={staged}",
+    ]
+    line_prefix = legacy_line_prefix(
+        account_index=int(options.account_index),
+        worker_id=worker_id,
+        story_title=story_title,
+    )
+
+    def _on_legacy_line(line: str, new_state: str | None) -> None:
+        if reporter is None:
+            return
+        reporter.on_legacy_line(
+            account_index=int(options.account_index),
+            worker_id=worker_id,
+            story_title=story_title,
+            line=line,
+            new_state=new_state,
+            stage="selection",
+        )
+
+    timeout_seconds = max(1.0, float(options.max_story_runtime_minutes) * 60.0)
     try:
-        with bridge_log.open("w", encoding="utf-8", errors="replace") as logf:
-            logf.write(f"[orchestrator] cwd={runner_dir}\n")
-            logf.write(f"[orchestrator] GEMINI_STORIES_DIR={gemini_stories_dir}\n")
-            logf.write(f"[orchestrator] GEMINI_TRASH_DIR={gemini_trash_dir}\n")
-            logf.write(f"[orchestrator] GEMINI_USER_DATA_DIR={gemini_user_data_dir}\n")
-            logf.write(f"[orchestrator] GEMINI_LOG_FILE={gemini_log_file}\n")
-            logf.write(f"[orchestrator] GEMINI_PARALLEL_STATE_DIR={gemini_parallel_state_dir}\n")
-            logf.write(f"[orchestrator] GEMINI_ACCOUNTS_FILE={gemini_accounts_file}\n")
-            logf.write(f"[orchestrator] GEMINI_URL={gemini_url}\n")
-            logf.write(f"[orchestrator] bot_account_email={email}\n")
-            logf.write(f"[orchestrator] staging_input={staged}\n")
-            logf.flush()
-            proc = subprocess.run(
+        with gemini_colab_proxy_session(root_dir) as proxy_session:
+            proxy_meta = proxy_report_fields(proxy_session)
+            env = apply_gemini_colab_proxy_env(env, proxy_session)
+            header_lines.append(f"[orchestrator] GEMINI_PROXY_SERVER={env.get('GEMINI_PROXY_SERVER', '')}")
+            header_lines.append(f"[orchestrator] proxy_enabled={proxy_meta.get('proxy_enabled')}")
+            if reporter is not None:
+                reporter.emit_tag(
+                    "PROXY",
+                    stage="selection",
+                    account_index=int(options.account_index),
+                    worker=worker_id,
+                    proxy="enabled" if proxy_meta.get("proxy_enabled") else "disabled",
+                    host=str(proxy_meta.get("proxy_host_masked") or proxy_meta.get("upstream_proxy_host_port") or "n/a"),
+                )
+                reporter.set_worker_state(
+                    account_index=int(options.account_index),
+                    worker_id=worker_id,
+                    state="opening_gemini",
+                    story_title=story_title,
+                    log_path=str(bridge_log),
+                    chrome_profile=gemini_user_data_dir,
+                    proxy_enabled=bool(proxy_meta.get("proxy_enabled")),
+                    proxy_host=str(proxy_meta.get("proxy_host_masked") or ""),
+                    stage="selection",
+                )
+            exit_code, subprocess_log_text, subprocess_timed_out = run_legacy_gemini_subprocess(
                 [sys.executable, str(gemini_auto)],
                 cwd=str(runner_dir),
                 env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=None,
+                log_path=bridge_log,
+                header_lines=header_lines,
+                live_logs=live_logs,
+                prefix=line_prefix,
+                on_line=_on_legacy_line,
+                timeout_seconds=timeout_seconds,
             )
-            exit_code = int(proc.returncode) if proc.returncode is not None else 0
     except Exception as exc:
         exit_code = -1
+        bridge_exc = str(exc)
         with bridge_log.open("a", encoding="utf-8", errors="replace") as logf:
             logf.write(f"\n[orchestrator] subprocess exception: {exc}\n")
+        if reporter is not None:
+            reporter.set_worker_state(
+                account_index=int(options.account_index),
+                worker_id=worker_id,
+                state="failed",
+                story_title=story_title,
+                log_path=str(bridge_log),
+                stage="selection",
+            )
 
     finished = _now_iso()
-    failed = exit_code != 0
+    failed = subprocess_timed_out or exit_code != 0
 
     post_leafs = _collect_leaf_story_folders(bridge_stories)
     import_staging = post_leafs[0] if len(post_leafs) == 1 else effective_leaf
@@ -755,11 +890,33 @@ def run_youtube_run_selection_bridge(
         "started_at": started,
         "finished_at": finished,
         "gemini_auto_exit_code": exit_code,
+        "account_index": int(options.account_index),
+        "chrome_profile": gemini_user_data_dir,
+        **proxy_meta,
         "selection_done": bool(ok),
         "imported_to": str(out_path) if out_path else "",
         "import_message": import_msg,
         "verdict": verdict,
     }
+    reason_code = ""
+    reason_code = classify_selection_bridge_result(
+        bridge={"ok": ok and not failed, "selection_done": ok, "gemini_auto_exit_code": exit_code, "imported_to": out_path},
+        log_path=bridge_log,
+        exc=bridge_exc,
+    )
+    if not (ok and not failed):
+        refined = refine_reason_from_log(
+            log_text=subprocess_log_text or _read_bridge_log_tail(bridge_log),
+            exit_code=exit_code,
+            exc=bridge_exc,
+            timed_out=subprocess_timed_out,
+            max_page_reloads=int(options.max_page_reloads),
+            max_attach_attempts=int(options.max_attach_attempts),
+        )
+        if refined:
+            reason_code = refined
+    if not (ok and not failed) and reason_code:
+        status_payload["reason_code"] = reason_code
     _write_bridge_status(bridge_status_path, status_payload)
     _append_status(
         status_jsonl,
@@ -779,13 +936,20 @@ def run_youtube_run_selection_bridge(
         "skipped_subprocess": False,
         **common_payload,
         "gemini_auto_exit_code": exit_code,
+        "account_index": int(options.account_index),
+        "chrome_profile": gemini_user_data_dir,
+        **proxy_meta,
         "imported_to": str(out_path) if out_path else "",
         "import_message": import_msg,
         "verdict": verdict,
+        "reason_code": reason_code if not (ok and not failed) else "",
         "selection_bridge_status": str(bridge_status_path),
+        "selection_bot_log": str(bridge_log),
         "message": (
             "Selection bridge завершён."
             if ok and not failed
+            else human_message_for_reason(reason_code)
+            if reason_code
             else "Selection bridge завершён с ошибкой или без output (см. selection_bot_log)."
         ),
     }

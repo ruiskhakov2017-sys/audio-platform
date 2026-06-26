@@ -307,6 +307,7 @@ echo [5] E. Open launch logs
 echo [6] F. [LEGACY / DANGEROUS] old site run - writes to global runs/output
 echo [7] Plan only ^(dry-run, no execute^)
 echo [8] G. Monitor launch progress sync loop
+echo [9] SITE INTAKE / CREATE SITE LAUNCH
 echo [0] Back
 echo.
 set /p FULL_CHOICE=Choice: 
@@ -319,6 +320,39 @@ if "%FULL_CHOICE%"=="5" goto :RUN_SITE_LAUNCH_OPEN_LOGS
 if "%FULL_CHOICE%"=="6" goto :RUN_SITE_PIPELINE_WARN_GLOBAL
 if "%FULL_CHOICE%"=="7" goto :RUN_SITE_LAUNCH_PLAN
 if "%FULL_CHOICE%"=="8" goto :RUN_SITE_LAUNCH_MONITOR
+if "%FULL_CHOICE%"=="9" goto :RUN_SITE_INTAKE_CREATE
+goto :RUN_SITE_FULL
+:RUN_SITE_INTAKE_CREATE
+cls
+echo ============================================================
+echo   SITE INTAKE / CREATE SITE LAUNCH
+echo ============================================================
+echo.
+set "SITE_INTAKE_SRC=%LIBRARY_SOURCE_DIR%"
+set /p SITE_INTAKE_SRC=Library source dir ^(Enter=%LIBRARY_SOURCE_DIR%^): 
+if "%SITE_INTAKE_SRC%"=="" set "SITE_INTAKE_SRC=%LIBRARY_SOURCE_DIR%"
+if "%SITE_INTAKE_SRC%"=="" (
+  echo [ERROR] source dir is empty.
+  pause
+  goto :RUN_SITE_FULL
+)
+set "SITE_INTAKE_N="
+set /p SITE_INTAKE_N=Stories per top-level folder ^(N^): 
+if "%SITE_INTAKE_N%"=="" goto :RUN_SITE_FULL
+echo.
+echo [DRY-RUN] Plan SITE intake
+%PY_CMD% -m orchestrator site intake --source-dir "%SITE_INTAKE_SRC%" --per-folder %SITE_INTAKE_N%
+if errorlevel 1 (
+  echo [ERROR] site intake dry-run failed.
+  pause
+  goto :RUN_SITE_FULL
+)
+echo.
+choice /c YN /n /m "Execute create launch and COPY selected stories? [Y/N]: "
+if errorlevel 2 goto :RUN_SITE_FULL
+%PY_CMD% -m orchestrator site intake --source-dir "%SITE_INTAKE_SRC%" --per-folder %SITE_INTAKE_N% --execute
+if errorlevel 1 echo [ERROR] site intake execute failed.
+pause
 goto :RUN_SITE_FULL
 :CHECKS_MENU
 cls

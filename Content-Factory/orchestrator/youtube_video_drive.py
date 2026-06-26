@@ -250,6 +250,8 @@ def _render_settings(config: OrchestratorConfig) -> dict[str, Any]:
         "future_workers_max": 10,
         "require_effects": False,
         "effects_assets": ["film.mp4", "dust.mp4", "images/start.*"],
+        "film_opacity": 0.23,
+        "film_blend_mode": "overlay",
         "local_output_root": "output/youtube",
         "render_mode": "segments_then_concat",
         "final_video_name": "final_video.mp4",
@@ -271,6 +273,8 @@ def _render_settings(config: OrchestratorConfig) -> dict[str, Any]:
     settings["future_workers_max"] = int(settings["future_workers_max"] or defaults["future_workers_max"])
     settings["require_effects"] = bool(settings["require_effects"])
     settings["effects_assets"] = list(settings.get("effects_assets") or defaults["effects_assets"])
+    settings["film_opacity"] = max(0.0, min(1.0, float(settings.get("film_opacity", defaults["film_opacity"]))))
+    settings["film_blend_mode"] = str(settings.get("film_blend_mode") or defaults["film_blend_mode"]).strip().lower()
     settings["local_output_root"] = str(settings["local_output_root"])
     settings["render_mode"] = str(settings["render_mode"])
     settings["final_video_name"] = str(settings["final_video_name"])
@@ -905,7 +909,58 @@ def _worker_commands(story_slug: str, settings: dict[str, Any]) -> list[str]:
     ]
 
 
-def _colab_bootstrap_cell(story_slug: str, worker_email: str, youtube_folder_id: str = "") -> str:
+def _colab_drive_mount_lines(config_root: Path | None = None) -> list[str]:
+    if config_root is not None:
+        mount_snippet_path = config_root / "colab" / "safe_colab_drive_mount.py"
+        if mount_snippet_path.is_file():
+            text = mount_snippet_path.read_text(encoding="utf-8")
+            marker = 'NOTEBOOK_SAFE_DRIVE_MOUNT_SNIPPET = """'
+            start = text.find(marker)
+            if start >= 0:
+                start += len(marker)
+                end = text.find('"""', start)
+                if end > start:
+                    return text[start:end].strip().splitlines()
+    return [
+        "import os",
+        "import shutil",
+        "import subprocess",
+        "import shlex",
+        "from google.colab import drive",
+        "",
+        "def _is_mountpoint(path: str) -> bool:",
+        "    return subprocess.run(",
+        '        ["bash", "-lc", f"mountpoint -q {shlex.quote(path)}"],',
+        "        capture_output=True,",
+        "        text=True,",
+        "    ).returncode == 0",
+        "",
+        'def safe_mount_google_drive(mountpoint: str = "/content/drive") -> None:',
+        '    print(f"[drive_mount] checking {mountpoint}")',
+        "    if _is_mountpoint(mountpoint):",
+        '        print(f"[drive_mount] Google Drive already mounted at {mountpoint}")',
+        "        return",
+        "    if os.path.exists(mountpoint):",
+        '        print(f"[drive_mount] {mountpoint} exists but is not a mountpoint; cleaning stale local folder")',
+        "        shutil.rmtree(mountpoint, ignore_errors=True)",
+        "    os.makedirs(mountpoint, exist_ok=True)",
+        '    print(f"[drive_mount] mounting Google Drive at {mountpoint}")',
+        "    drive.mount(mountpoint, force_remount=True)",
+        "    if not _is_mountpoint(mountpoint):",
+        '        raise RuntimeError(f"Google Drive mount failed: {mountpoint} is not a mountpoint after drive.mount")',
+        '    print("[drive_mount] Google Drive mount OK")',
+        "",
+        'safe_mount_google_drive("/content/drive")',
+    ]
+
+
+def _colab_bootstrap_cell(
+    story_slug: str,
+    worker_email: str,
+    youtube_folder_id: str = "",
+    *,
+    config_root: Path | None = None,
+) -> str:
     folder_id = youtube_folder_id.strip() or "PASTE_CONTENTFACTORY_YOUTUBE_FOLDER_ID_HERE"
     return "\n".join(
         [
@@ -920,8 +975,7 @@ def _colab_bootstrap_cell(story_slug: str, worker_email: str, youtube_folder_id:
             '# os.environ["CONTENT_FACTORY_SKIP_EFFECTS"] = "1"',
             '# os.environ["CONTENT_FACTORY_FFMPEG_PRESET"] = "veryfast"',
             "",
-            "from google.colab import drive",
-            "drive.mount('/content/drive')",
+            *_colab_drive_mount_lines(config_root),
             "",
             "root = Path('/content/drive/MyDrive/ContentFactory_YouTube')",
             "folder_id = os.environ.get('CONTENT_FACTORY_YOUTUBE_FOLDER_ID', '').strip()",
@@ -1488,8 +1542,10 @@ def run_youtube_video_setup_colab_workers(
     root_dirs = _root_compat_dirs(settings)
     source_script = config.root_dir / "colab" / "youtube_video_worker_colab.py"
     source_bootstrap = config.root_dir / "colab" / "youtube_video_bootstrap_colab.py"
+    source_drive_mount = config.root_dir / "colab" / "safe_colab_drive_mount.py"
     target_script = root_dirs["scripts"] / "youtube_video_worker_colab.py"
     target_bootstrap = root_dirs["scripts"] / "youtube_video_bootstrap_colab.py"
+    target_drive_mount = root_dirs["scripts"] / "safe_colab_drive_mount.py"
     readme = root_dirs["compat_queue_root"] / "README_CURRENT_VIDEO_QUEUE.txt"
     bootstrap_cell = root_dirs["scripts"] / "COLAB_YOUTUBE_VIDEO_BOOTSTRAP_CELL.py"
     migration = migrate_video_job_to_assigned_queue(job_root=job_root, settings=settings, execute=bool(options.execute)) if job_root.exists() else {}
@@ -1503,8 +1559,11 @@ def run_youtube_video_setup_colab_workers(
         if source_bootstrap.is_file():
             shutil.copy2(source_bootstrap, target_bootstrap)
             actions.append(f"{source_bootstrap} -> {target_bootstrap}")
+        if source_drive_mount.is_file():
+            shutil.copy2(source_drive_mount, target_drive_mount)
+            actions.append(f"{source_drive_mount} -> {target_drive_mount}")
         first_worker = list(settings["workers"])[0] if settings["workers"] else ""
-        _write_text(bootstrap_cell, _colab_bootstrap_cell(story_slug, first_worker, options.youtube_folder_id))
+        _write_text(bootstrap_cell, _colab_bootstrap_cell(story_slug, first_worker, options.youtube_folder_id, config_root=config.root_dir))
         actions.append(f"wrote {bootstrap_cell}")
         try:
             _write_text(
@@ -1520,6 +1579,16 @@ def run_youtube_video_setup_colab_workers(
         except OSError as exc:
             actions.append(f"warning: failed to update {readme}: {exc}")
         _ensure_assigned_dirs(job_root, list(settings["workers"]))
+        try:
+            launcher_dir = str((config.root_dir / "tools" / "colab_launcher").resolve())
+            if launcher_dir not in __import__("sys").path:
+                __import__("sys").path.insert(0, launcher_dir)
+            from youtube_video_prepared_notebooks import regenerate_youtube_video_prepared_notebooks
+
+            regenerated = regenerate_youtube_video_prepared_notebooks(project_root=config.root_dir)
+            actions.append(f"regenerated_prepared_notebooks count={len(regenerated)}")
+        except Exception as exc:
+            actions.append(f"warning: regenerate_prepared_notebooks_failed: {exc!r}")
     report = {
         "ok": source_script.is_file() and source_bootstrap.is_file() and (not options.execute or (target_script.is_file() and target_bootstrap.is_file())),
         "status": "setup" if options.execute else "dry_run",
@@ -1534,7 +1603,12 @@ def run_youtube_video_setup_colab_workers(
         "root_worker_script_exists": target_script.is_file(),
         "root_bootstrap_script_exists": target_bootstrap.is_file(),
         "colab_bootstrap_cell_path": str(bootstrap_cell),
-        "colab_bootstrap_cell": _colab_bootstrap_cell(story_slug, list(settings["workers"])[0] if settings["workers"] else "", options.youtube_folder_id),
+        "colab_bootstrap_cell": _colab_bootstrap_cell(
+            story_slug,
+            list(settings["workers"])[0] if settings["workers"] else "",
+            options.youtube_folder_id,
+            config_root=config.root_dir,
+        ),
         "youtube_folder_id_set": bool(options.youtube_folder_id.strip()),
         "root_compat_queue": str(root_dirs["compat_queue_pending"]),
         "root_compat_queue_exists": root_dirs["compat_queue_pending"].is_dir(),
@@ -1921,6 +1995,71 @@ def _classify_processing_stale(
     }
 
 
+def _segment_checkpoint_snapshot(job_root: Path, segment_id: str) -> dict[str, Any]:
+    """Summarize reusable checkpoints under work_segments/<segment_id> (never deleted on reclaim)."""
+    work_dir = _job_dirs(job_root)["work_segments"] / segment_id
+    raw_dir = work_dir / "raw"
+    clips_dir = work_dir / "clips"
+    effects_dir = work_dir / "effects"
+    raw_done = any(raw_dir.glob("*.raw.mp4.done.json")) if raw_dir.is_dir() else False
+    clips_done = 0
+    if clips_dir.is_dir():
+        for marker in clips_dir.glob("clip_*.mp4.done.json"):
+            mp4_name = marker.name.replace(".done.json", "")
+            if (clips_dir / mp4_name).is_file():
+                clips_done += 1
+    effects_done = any(effects_dir.glob("*.effects.mp4.done.json")) if effects_dir.is_dir() else False
+    checkpoint_available = raw_done or clips_done > 0 or effects_done
+    return {
+        "checkpoint_available": checkpoint_available,
+        "raw_done": raw_done,
+        "clips_done": clips_done,
+        "effects_done": effects_done,
+    }
+
+
+def _reclaim_runtime_disconnect_context(
+    *,
+    worker_status: dict[str, Any] | None,
+    payload: dict[str, Any],
+    job_root: Path,
+    segment_id: str,
+) -> dict[str, Any]:
+    ws = worker_status if isinstance(worker_status, dict) else {}
+    stage = str(
+        ws.get("stage_name")
+        or payload.get("stage_name")
+        or payload.get("last_failed_stage")
+        or ""
+    ).strip()
+    last_percent = str(ws.get("stage_percent") or payload.get("stage_percent") or "").strip()
+    last_message = str(ws.get("last_message") or payload.get("last_message") or "").upper()
+    cp = _segment_checkpoint_snapshot(job_root, segment_id)
+    had_activity = bool(stage) or last_message in {
+        "FFMPEG_HEARTBEAT",
+        "SEGMENT_PROCESSING",
+        "RENDERING SEGMENT",
+        "SEGMENT_ASSIGNED",
+    }
+    return {
+        "stage": stage,
+        "last_percent": last_percent,
+        "had_activity": had_activity,
+        **cp,
+    }
+
+
+def _apply_effects_mode_fallback(payload: dict[str, Any]) -> None:
+    try:
+        fail_count = int(payload.get("effects_fail_count") or 0)
+    except (TypeError, ValueError):
+        fail_count = 0
+    if fail_count >= 3:
+        payload["effects_mode"] = "off"
+    elif fail_count >= 2:
+        payload["effects_mode"] = "fast"
+
+
 def _delete_partial_segment_mp4(job_root: Path, segment_id: str, expected_duration: float | None) -> dict[str, Any]:
     """Удаляет partial output mp4, если он есть и не validated.
 
@@ -2061,12 +2200,40 @@ def run_youtube_video_reclaim_stale_segments(
             "path": str(_segment_output_path(job_root, segment_id)),
         }
 
+        worker_status = worker_status_by_email.get(worker)
+        reclaim_ctx = _reclaim_runtime_disconnect_context(
+            worker_status=worker_status if isinstance(worker_status, dict) else None,
+            payload=payload,
+            job_root=job_root,
+            segment_id=segment_id,
+        )
+        reclaim_reason = str(verdict.get("reason") or "stale")
+        if reclaim_ctx.get("had_activity"):
+            reclaim_reason = "RECLAIMED_AFTER_RUNTIME_DISCONNECT"
+        if str(reclaim_ctx.get("stage") or "").strip().lower() == "effects":
+            try:
+                payload["effects_fail_count"] = int(payload.get("effects_fail_count") or 0) + 1
+            except (TypeError, ValueError):
+                payload["effects_fail_count"] = 1
+            payload["last_failed_stage"] = "effects"
+        _apply_effects_mode_fallback(payload)
+        reclaim_diagnosis = {
+            "reason": reclaim_reason,
+            "stage": reclaim_ctx.get("stage") or "",
+            "last_percent": reclaim_ctx.get("last_percent") or "",
+            "checkpoint_available": bool(reclaim_ctx.get("checkpoint_available")),
+            "raw_done": bool(reclaim_ctx.get("raw_done")),
+            "clips_done": int(reclaim_ctx.get("clips_done") or 0),
+            "effects_done": bool(reclaim_ctx.get("effects_done")),
+        }
+
         new_attempt = attempt + 1
         common_update = {
             "attempt": new_attempt,
             "reclaim_count": reclaim_count + 1,
             "last_reclaimed_at": _now_iso(),
-            "last_reclaimed_reason": verdict["reason"],
+            "last_reclaimed_reason": reclaim_reason,
+            "reclaim_diagnosis": reclaim_diagnosis,
             "previous_worker_email": previous_worker,
             "reclaimed_from_worker": previous_worker,
             "reclaimed_age_seconds": verdict.get("age_seconds"),
@@ -2113,7 +2280,8 @@ def run_youtube_video_reclaim_stale_segments(
             "previous_worker_email": previous_worker,
             "age_seconds": verdict.get("age_seconds"),
             "heartbeat_at": verdict.get("heartbeat_at"),
-            "reason": verdict["reason"],
+            "reason": reclaim_reason,
+            "reclaim_diagnosis": reclaim_diagnosis,
             "partial_output_cleanup": partial_diag,
         }
         reclaimed.append(entry)
@@ -2675,6 +2843,13 @@ def run_youtube_video_watch_queue(
     stop_reason = "unspecified"
     interrupted = False
     final_status_field = "running"
+    from orchestrator.youtube_video_doctor import (
+        WatcherHumanLogger,
+        build_youtube_video_doctor_view,
+        print_watcher_doctor_summary,
+    )
+
+    human_logger = WatcherHumanLogger()
 
     def _emit_event(kind: str, payload: dict[str, Any]) -> None:
         event = {
@@ -2710,6 +2885,7 @@ def run_youtube_video_watch_queue(
             totals["moved_to_failed_count"] += moved_failed_count
             totals["marked_done_count"] += marked_done_count
             last_reclaim = reclaim_report
+            human_logger.on_reclaim(reclaim_report)
 
             asset_preflight_ok = True
             preflight_report: dict[str, Any] = {}
@@ -2757,6 +2933,7 @@ def run_youtube_video_watch_queue(
                 dispatched_count = int(dispatch_report.get("assigned_count") or 0)
             totals["dispatched_count"] += dispatched_count
             last_dispatch = dispatch_report
+            human_logger.on_dispatch(dispatch_report)
 
             status = _build_queue_status(
                 config,
@@ -2767,6 +2944,15 @@ def run_youtube_video_watch_queue(
                 preflight_report=preflight_report if not bool(options.skip_asset_preflight) else None,
             )
             last_status = status
+            human_logger.on_status(status, job_root=job_root)
+            doctor_view = build_youtube_video_doctor_view(
+                config=config,
+                story_id=story_id,
+                stale_minutes=stale_minutes,
+                quick=True,
+                status=status,
+            )
+            print_watcher_doctor_summary(doctor_view, tick=tick)
 
             expected = int(status.get("expected_segments") or 0)
             done_count = int(status.get("segments_done_count") or 0)
@@ -2781,12 +2967,13 @@ def run_youtube_video_watch_queue(
             line = _watcher_summary_line(tick, status, reclaim_count, dispatched_count)
             preflight_suffix = f" preflight_ok={asset_preflight_ok}" if not bool(options.skip_asset_preflight) else " preflight_ok=skipped"
             missing_asset_segments_total = int(status.get("missing_asset_segments_count") or 0)
-            print(
-                f"{line} can_import={can_import} can_assemble={can_assemble} "
-                f"assigned_pending_total={assigned_pending_total}{preflight_suffix} "
-                f"missing_asset_segments={missing_asset_segments_total}",
-                flush=True,
-            )
+            if os.environ.get("CONTENT_FACTORY_WATCH_VERBOSE") == "1":
+                print(
+                    f"{line} can_import={can_import} can_assemble={can_assemble} "
+                    f"assigned_pending_total={assigned_pending_total}{preflight_suffix} "
+                    f"missing_asset_segments={missing_asset_segments_total}",
+                    flush=True,
+                )
             _emit_event(
                 "tick",
                 {

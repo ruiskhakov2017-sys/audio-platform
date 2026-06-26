@@ -527,6 +527,17 @@ def mirror_legacy_pipeline_to_human(
     *,
     execute: bool,
 ) -> dict[str, Any]:
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+
+    if is_isolated_launch(config, launch_id=launch.name, launch_root=launch):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "isolated_launch_no_mirror",
+            "message": "mirror_legacy_pipeline_to_human disabled for isolated launch (no mirror-only)",
+            "copied": 0,
+            "execute": execute,
+        }
     plan = plan_mirror_legacy_pipeline_to_human(config, launch)
     if not plan.get("ok"):
         return {**plan, "copied": 0, "execute": execute}

@@ -6,9 +6,12 @@ from pathlib import Path
 from orchestrator.config import load_config
 from orchestrator.launch_contract import LAUNCHES_DIR_NAME
 from orchestrator.youtube_prompts_failure_reasons import (
+    GEM_BOT_DELETED,
     GEMINI_NO_RESPONSE,
     NO_TEMP_OUTPUT,
+    PROCESSED_MARKER_SKIPPED,
     PROMPTS_GENERATION_INCOMPLETE,
+    RAW_RESPONSE_MISSING_BUT_CHUNK_PARSED,
     TEMP_IMPORT_FAILED,
     classify_stage_prompts_failure,
     normalize_failure_reason,
@@ -56,6 +59,8 @@ def _write_story(tmp_path: Path, *, story_id: str, expected: int) -> Path:
 def test_normalize_failure_reason_rejects_vague_failed():
     assert normalize_failure_reason("failed") == "UNKNOWN_PROMPTS_FAILURE"
     assert normalize_failure_reason("NO_TEMP_OUTPUT") == "NO_TEMP_OUTPUT"
+    assert normalize_failure_reason("Gem bot was deleted; start a new chat") == GEM_BOT_DELETED
+    assert normalize_failure_reason("В этом чате участвовал Gem-бот, который был удален. Начните новый чат.") == GEM_BOT_DELETED
 
 
 def test_classify_stage_prompts_failure_cases(tmp_path):
@@ -67,10 +72,10 @@ def test_classify_stage_prompts_failure_cases(tmp_path):
     assert classify_stage_prompts_failure(stage_dir=stage) == GEMINI_NO_RESPONSE
 
     (stage / "prompts_list.partial.txt").write_text("1. scene\n", encoding="utf-8")
-    assert classify_stage_prompts_failure(stage_dir=stage) == PROMPTS_GENERATION_INCOMPLETE
+    assert classify_stage_prompts_failure(stage_dir=stage) == RAW_RESPONSE_MISSING_BUT_CHUNK_PARSED
 
     (stage / "prompts_list.txt").write_text("1. scene\n", encoding="utf-8")
-    assert classify_stage_prompts_failure(stage_dir=stage) == TEMP_IMPORT_FAILED
+    assert classify_stage_prompts_failure(stage_dir=stage) == PROCESSED_MARKER_SKIPPED
 
 
 def test_targeted_repair_forensic_reports_partial_and_staged(tmp_path, monkeypatch):

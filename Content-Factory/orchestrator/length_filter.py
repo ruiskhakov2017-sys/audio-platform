@@ -60,6 +60,48 @@ def _safe_destination(dest: Path) -> Path:
         idx += 1
 
 
+def _resolve_artifacts_root(
+    config: OrchestratorConfig,
+    options: LengthFilterOptions,
+) -> Path:
+    if options.artifacts_dir is not None:
+        return options.artifacts_dir.resolve()
+    from orchestrator.isolated_site_paths import resolve_length_filter_artifacts_dir
+
+    return resolve_length_filter_artifacts_dir(config)
+
+
+def _write_csv_report(
+    config: OrchestratorConfig,
+    path: Path,
+    fieldnames: list[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    import io
+
+    from orchestrator.isolated_io import is_active_isolated, write_text as iso_write_text
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    text = buffer.getvalue()
+    if is_active_isolated(config):
+        iso_write_text(
+            config,
+            path,
+            text,
+            module="orchestrator.length_filter",
+            function="_write_csv_report",
+        )
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def run_length_filter(
     *,
     config: OrchestratorConfig,
@@ -82,13 +124,14 @@ def run_length_filter(
         else:
             short_dir = preferred
     ext_set = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in options.extensions}
-    artifacts_root = options.artifacts_dir if options.artifacts_dir is not None else config.reports_dir
-    artifacts_root.mkdir(parents=True, exist_ok=True)
+    artifacts_root = _resolve_artifacts_root(config, options)
     report_path = artifacts_root / "length_filter_report.csv"
     manifest_path = artifacts_root / "length_filter_manifest.json"
 
-    logger = EventLogger(config.events_file)
-    status = StatusStore(config.status_file)
+    from orchestrator.isolated_launch_context import resolve_events_file, resolve_status_file
+
+    logger = EventLogger(resolve_events_file(config))
+    status = StatusStore(resolve_status_file(config))
     stage = "length_filter"
 
     status.append(
@@ -194,11 +237,22 @@ def run_length_filter(
                     }
                 )
                 if options.execute:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        src.replace(target)
-                    except OSError:
-                        shutil.move(str(src), str(target))
+                    from orchestrator.isolated_io import is_active_isolated, move_path as iso_move
+
+                    if is_active_isolated(config):
+                        iso_move(
+                            config,
+                            src,
+                            target,
+                            module="orchestrator.length_filter",
+                            function="run_length_filter",
+                        )
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            src.replace(target)
+                        except OSError:
+                            shutil.move(str(src), str(target))
                     result = "moved_to_short"
                     moved += 1
                 else:
@@ -237,10 +291,7 @@ def run_length_filter(
         "estimated_minutes",
         "result",
     ]
-    with report_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    _write_csv_report(config, report_path, fieldnames, rows)
 
     manifest = {
         "formula": "estimated_minutes = word_count / words_per_minute",
@@ -260,7 +311,19 @@ def run_length_filter(
         "planned_moves": planned_moves,
         "report_path": str(report_path),
     }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    from orchestrator.isolated_io import write_json as iso_write_json, is_active_isolated
+
+    if is_active_isolated(config):
+        iso_write_json(
+            config,
+            manifest_path,
+            manifest,
+            module="orchestrator.length_filter",
+            function="run_length_filter",
+        )
+    else:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     summary = (
         f"formula=word_count/{options.words_per_minute}; threshold={options.min_minutes}m; "

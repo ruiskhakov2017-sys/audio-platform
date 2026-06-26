@@ -22,6 +22,9 @@ from orchestrator.youtube_prompts_failure_reasons import (
     PROMPTS_GENERATION_INCOMPLETE,
     classify_stage_prompts_failure,
     normalize_failure_reason,
+    prompt_count_acceptable,
+    validate_prompts_terminal_results,
+    validate_prompts_worker_lifecycle,
 )
 from orchestrator.launch_contract import build_launch_context
 from orchestrator.youtube_video_segments import (
@@ -56,6 +59,7 @@ from orchestrator.youtube_visuals_bridge import (
     _prompts_staging_dir,
     _safe_story_path,
     _story_manifest_path,
+    classify_runpod_frame_error,
     run_youtube_characters_export,
     run_youtube_characters_import,
     run_youtube_director_prompts_export,
@@ -318,13 +322,8 @@ def _story_visual_readiness(config: OrchestratorConfig, story_dir: Path, story_i
     )
     expected_prompts = visual_prompts_meta.get("expected_prompts") or _prompt_estimate(story_dir)
     actual_prompts = int(prompts_validation.get("prompts_count") or len(prompts) or 0)
-    prompt_count_matches = True
     prompts_file_exists = _is_nonempty(prompts_path)
-    if prompts_file_exists and expected_prompts is not None:
-        try:
-            prompt_count_matches = int(expected_prompts) == actual_prompts
-        except (TypeError, ValueError):
-            prompt_count_matches = False
+    prompt_count_matches = prompt_count_acceptable(expected_prompts, actual_prompts) if prompts_file_exists else True
     legacy_prompts_done = (
         not visual_prompts_meta
         and str((manifest.get("director_prompts") or {}).get("status") if isinstance(manifest.get("director_prompts"), dict) else "").strip() == "done"
@@ -357,6 +356,33 @@ def _director_module_dir_for_visuals(config: OrchestratorConfig) -> Path:
 def _prompt_worker_profile_dir(config: OrchestratorConfig, worker_index: int) -> Path:
     director_dir = _director_module_dir_for_visuals(config)
     return director_dir / "worker_profiles" / f"prompts_worker_{worker_index}" / "user_data"
+
+
+def _read_chrome_local_state_email(user_data_dir: Path) -> str:
+    local_state_path = user_data_dir / "Local State"
+    if not local_state_path.is_file():
+        return ""
+    try:
+        data = json.loads(local_state_path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return ""
+    profile = data.get("profile") if isinstance(data, dict) else {}
+    if not isinstance(profile, dict):
+        return ""
+    info_cache = profile.get("info_cache")
+    if not isinstance(info_cache, dict):
+        return ""
+    preferred = str(profile.get("last_used") or "Default").strip() or "Default"
+    profile_names = [preferred] + [str(name) for name in info_cache.keys() if str(name) != preferred]
+    for name in profile_names:
+        meta = info_cache.get(name)
+        if not isinstance(meta, dict):
+            continue
+        for key in ("user_name", "email"):
+            value = str(meta.get(key) or "").strip()
+            if "@" in value:
+                return value
+    return ""
 
 
 def _scan_worker_config_candidates(config: OrchestratorConfig) -> list[dict[str, Any]]:
@@ -415,6 +441,7 @@ def _prompt_worker_mappings(config: OrchestratorConfig, worker_count: int) -> tu
             profile_email = _read_profile_email(profile_dir).strip() if profile_dir.is_dir() else ""
         except Exception:
             profile_email = ""
+        local_state_email = _read_chrome_local_state_email(profile_dir) if profile_dir.is_dir() else ""
         runtime_email = (profile_email or marker_email).strip().lower()
         resolved_item = by_email.get(runtime_email, {})
         resolved_email = str(resolved_item.get("email") or "").strip()
@@ -431,6 +458,7 @@ def _prompt_worker_mappings(config: OrchestratorConfig, worker_count: int) -> tu
                 "worker_root": str(worker_root),
                 "actual_email_marker": marker_email,
                 "actual_email_profile": profile_email,
+                "actual_email_local_state": local_state_email,
                 "runtime_email": runtime_email,
                 "resolved_registry_email": resolved_email,
                 "bot_url": resolved_url,
@@ -451,8 +479,10 @@ def _worker_status_row(mapping: dict[str, Any]) -> dict[str, Any]:
     cloned_marker = worker_root / ".orchestrator_clone_from_base"
     actual_email = account_marker.read_text(encoding="utf-8", errors="replace").strip() if account_marker.is_file() else ""
     prefs_email = str(mapping.get("actual_email_profile") or "").strip()
+    local_state_email = str(mapping.get("actual_email_local_state") or "").strip()
     resolved_email = str(mapping.get("resolved_registry_email") or "").strip()
     blockers: list[str] = []
+    warnings: list[str] = []
     if cloned_marker.exists() and resolved_email and actual_email.lower() != resolved_email.lower():
         blockers.append("profile is cloned from base and has no matching unique identity")
     if not profile_dir.is_dir():
@@ -462,7 +492,12 @@ def _worker_status_row(mapping: dict[str, Any]) -> dict[str, Any]:
     if prefs_email and actual_email and prefs_email.lower() != actual_email.lower():
         blockers.append(f"profile/marker email mismatch: profile={prefs_email} marker={actual_email}")
     elif profile_dir.is_dir() and not prefs_email:
-        blockers.append("chrome profile email unknown; login required in worker profile")
+        warnings.append("chrome profile email unknown; using account marker identity")
+    if profile_dir.is_dir() and actual_email and local_state_email.lower() != actual_email.lower():
+        if local_state_email:
+            blockers.append(f"chrome active login mismatch: local_state={local_state_email} marker={actual_email}")
+        else:
+            warnings.append("chrome active login missing from Local State; live UI will verify session")
     if not resolved_email:
         blockers.append("registry mapping missing for worker runtime email")
     if not str(mapping.get("bot_url") or "").strip():
@@ -473,11 +508,13 @@ def _worker_status_row(mapping: dict[str, Any]) -> dict[str, Any]:
         **mapping,
         "actual_email_marker": actual_email,
         "chrome_profile_email": prefs_email,
+        "chrome_active_email": local_state_email,
         "mapping_path": str(mapping_path),
         "cloned_profile": cloned_marker.exists(),
         "ready": not blockers,
         "blocker": "none" if not blockers else "; ".join(blockers),
         "blockers": blockers,
+        "warnings": warnings,
     }
 
 
@@ -726,6 +763,7 @@ def _run_worker_browser_preflight(
                 "user_data_dir": str(profile_dir),
                 "headless": False,
                 "viewport": None,
+                "chromium_sandbox": True,
                 "args": append_chrome_proxy_args(["--disable-blink-features=AutomationControlled"]),
             }
             for channel in ("chrome", "msedge", None):
@@ -920,6 +958,8 @@ def _print_gemini_workers_preflight(result: dict[str, Any]) -> None:
         print(f"  profile: {row.get('profile_dir')}", flush=True)
         print(f"  cloned_profile: {str(bool(row.get('cloned_profile'))).lower()}", flush=True)
         print(f"  status: {'OK' if row.get('ready') else 'BLOCKED'}", flush=True)
+        for warning in row.get("warnings") or []:
+            print(f"  warning: {warning}", flush=True)
         if not row.get("ready"):
             print(f"  blocker: {row.get('blocker')}", flush=True)
     print(f"GEMINI_WORKERS_READY = {str(bool(result.get('ready'))).lower()}", flush=True)
@@ -932,10 +972,31 @@ def _print_gemini_workers_preflight(result: dict[str, Any]) -> None:
 
 
 def _prepare_prompt_worker_profiles(config: OrchestratorConfig, worker_count: int) -> None:
+    _ready_prompt_worker_indexes(config, worker_count, require_all=True)
+
+
+def _ready_prompt_worker_indexes(config: OrchestratorConfig, worker_count: int, *, require_all: bool) -> list[int]:
     status = run_youtube_gemini_workers_status(config, YoutubeGeminiWorkersOptions(workers=worker_count))
     _print_gemini_workers_preflight(status)
-    if not status.get("ready"):
+    ready_indexes = [int(row.get("worker_id") or 0) for row in status.get("rows") or [] if row.get("ready")]
+    ready_indexes = [worker_id for worker_id in ready_indexes if worker_id > 0]
+    if require_all and not status.get("ready"):
         raise RuntimeError("Gemini workers preflight failed")
+    if not ready_indexes:
+        raise RuntimeError("Gemini workers preflight failed: no healthy workers")
+    if not require_all and len(ready_indexes) < max(1, int(worker_count or 1)):
+        blocked = [
+            f"worker_{row.get('worker_id')}: {row.get('blocker')}"
+            for row in status.get("rows") or []
+            if not row.get("ready")
+        ]
+        print(
+            "[prompts-workers] using healthy workers only: "
+            f"{','.join(f'worker_{worker_id}' for worker_id in ready_indexes)}; "
+            f"blocked={'; '.join(blocked)}",
+            flush=True,
+        )
+    return ready_indexes
 
 
 def _mapping_for_worker(config: OrchestratorConfig, worker_index: int) -> dict[str, Any]:
@@ -1222,12 +1283,7 @@ def _visual_prompts_status_row(config: OrchestratorConfig, story_dir: Path, *, a
     validation_status = "ok" if prompts_validation.get("ok") else str(prompts_validation.get("status") or "failed")
     manifest_done = str(visual_prompts.get("status") or "").strip() == "done" and str(visual_prompts.get("validation") or "").strip() == "ok"
     legacy_done = not visual_prompts and isinstance(manifest.get("director_prompts"), dict) and str(manifest["director_prompts"].get("status") or "") == "done"
-    count_matches = True
-    if expected is not None and actual:
-        try:
-            count_matches = int(expected) == actual
-        except (TypeError, ValueError):
-            count_matches = False
+    count_matches = prompt_count_acceptable(expected, actual)
     if validation_status == "ok" and not count_matches:
         validation_status = "count_mismatch"
     prompts_ready = bool(prompts_validation.get("ok") and count_matches and (manifest_done or legacy_done))
@@ -1449,10 +1505,14 @@ def _initialize_prompts_progress(
     selected: list[Path],
     skipped: list[dict[str, Any]],
     worker_batches: list[list[tuple[int, Path, str, str]]],
+    worker_ids: list[int] | None = None,
 ) -> dict[str, Any]:
+    resolved_worker_ids = list(worker_ids or range(1, len(worker_batches) + 1))
+    if len(resolved_worker_ids) != len(worker_batches):
+        raise RuntimeError("worker_ids count must match worker_batches count")
     assignments = {
-        f"worker_{worker_index}": [story_id for _index, _story_dir, story_id, _title in worker_jobs]
-        for worker_index, worker_jobs in enumerate(worker_batches, start=1)
+        f"worker_{worker_id}": [story_id for _index, _story_dir, story_id, _title in worker_jobs]
+        for worker_id, worker_jobs in zip(resolved_worker_ids, worker_batches)
     }
     assigned_story_ids = [story_id for worker_jobs in worker_batches for _index, _story_dir, story_id, _title in worker_jobs]
     blockers = _validate_prompt_assignments(assignments, assigned_story_ids)
@@ -1461,8 +1521,8 @@ def _initialize_prompts_progress(
     now = _now_iso()
     stories: dict[str, Any] = {}
     assignment_lookup = {
-        story_id: f"worker_{worker_index}"
-        for worker_index, worker_jobs in enumerate(worker_batches, start=1)
+        story_id: f"worker_{worker_id}"
+        for worker_id, worker_jobs in zip(resolved_worker_ids, worker_batches)
         for _index, _story_dir, story_id, _title in worker_jobs
     }
     for story_dir in selected:
@@ -1508,7 +1568,7 @@ def _initialize_prompts_progress(
         "pending": initial_pending,
         "remaining": initial_pending,
         "workers": {
-            f"worker_{worker_index}": {
+            f"worker_{worker_id}": {
                 "assigned_total": len(worker_jobs),
                 "done": 0,
                 "failed": 0,
@@ -1520,7 +1580,7 @@ def _initialize_prompts_progress(
                 "started_at": None,
                 "updated_at": None,
             }
-            for worker_index, worker_jobs in enumerate(worker_batches, start=1)
+            for worker_id, worker_jobs in zip(resolved_worker_ids, worker_batches)
         },
         "stories": stories,
         "last_completed": [],
@@ -1922,6 +1982,34 @@ def run_youtube_visuals_launch_status(
             prompts_path = _prompts_path(config, story_id, story_dir)
             prompts = _load_prompts(prompts_path)
             frames = _frame_status(_frames_dir(config, story_id, story_dir), prompts)
+            failed_frames_path = _frames_dir(config, story_id, story_dir) / "failed_frames.json"
+            failed_payload = _read_json_safe(failed_frames_path)
+            failed_rows = failed_payload.get("failed") if isinstance(failed_payload, dict) else []
+            retryable_frame_indexes: set[int] = set()
+            terminal_frame_indexes: set[int] = set()
+            for failed_row in failed_rows if isinstance(failed_rows, list) else []:
+                if not isinstance(failed_row, dict):
+                    continue
+                try:
+                    frame_index = int(failed_row.get("prompt_index") or 0)
+                except (TypeError, ValueError):
+                    continue
+                frame_path = _frames_dir(config, story_id, story_dir) / f"frame_{frame_index:04d}.png"
+                if frame_index <= 0 or frame_path.is_file():
+                    continue
+                reason_code = str(failed_row.get("reason_code") or "").strip()
+                retryable = failed_row.get("retryable")
+                if not reason_code or retryable is None:
+                    reason_code, retryable = classify_runpod_frame_error(str(failed_row.get("error") or ""))
+                (retryable_frame_indexes if retryable else terminal_frame_indexes).add(frame_index)
+            unclassified_missing = max(
+                0,
+                int(frames.get("pending") or 0)
+                - len(retryable_frame_indexes)
+                - len(terminal_frame_indexes),
+            )
+            retryable_frames = len(retryable_frame_indexes) + unclassified_missing + int(frames.get("failed") or 0)
+            terminal_frames = len(terminal_frame_indexes)
             audio_ready = _audio_ready_for_video(story_dir, manifest)
             prompts_row = _visual_prompts_status_row(
                 config,
@@ -1967,6 +2055,9 @@ def run_youtube_visuals_launch_status(
                 "images_ready": images_ready,
                 "frames_expected": int(frames.get("expected") or 0),
                 "frames_valid": int(frames.get("generated") or 0),
+                "frames_missing": int(frames.get("pending") or 0),
+                "frames_failed_retryable": retryable_frames,
+                "frames_failed_terminal": terminal_frames,
                 "audio_duration_sec": audio.get("duration_sec"),
                 "blocker": blocker,
                 "next_action": next_action,
@@ -1974,8 +2065,22 @@ def run_youtube_visuals_launch_status(
             rows.append(row)
 
     active_rows = [row for row in rows if not row["excluded_from_video"]]
+    stories_frames_ready = sum(1 for row in active_rows if row["images_ready"])
+    stories_frames_failed = sum(1 for row in active_rows if int(row.get("frames_failed_terminal") or 0) > 0)
+    stories_frames_pending = sum(
+        1
+        for row in active_rows
+        if not row["images_ready"] and int(row.get("frames_failed_terminal") or 0) == 0
+    )
+    frame_files_expected_total = sum(int(row.get("frames_expected") or 0) for row in active_rows)
+    frame_files_ready_total = sum(int(row.get("frames_valid") or 0) for row in active_rows)
+    frame_files_missing_total = sum(int(row.get("frames_missing") or 0) for row in active_rows)
+    frame_files_failed_retryable_total = sum(int(row.get("frames_failed_retryable") or 0) for row in active_rows)
+    frame_files_failed_terminal_total = sum(int(row.get("frames_failed_terminal") or 0) for row in active_rows)
     summary = {
         "total_stories": len(rows),
+        "stories_total": len(rows),
+        "active_stories": len(active_rows),
         "total_tts_imported": sum(1 for row in rows if row["audio_ready"] or row["excluded_from_video"]),
         "excluded_from_video": sum(1 for row in rows if row["excluded_from_video"]),
         "ready_for_video": sum(1 for row in active_rows if row["audio_ready"]),
@@ -1989,7 +2094,16 @@ def run_youtube_visuals_launch_status(
             "in_progress": sum(1 for row in active_rows if row.get("prompts_status") == "in_progress"),
             "ready_for_runpod": sum(1 for row in active_rows if row.get("ready_for_runpod")),
         },
-        "images_ready": sum(1 for row in active_rows if row["images_ready"]),
+        "images_ready": stories_frames_ready,
+        "stories_frames_ready": stories_frames_ready,
+        "stories_frames_failed": stories_frames_failed,
+        "stories_frames_pending": stories_frames_pending,
+        "frame_files_expected_total": frame_files_expected_total,
+        "frame_files_ready_total": frame_files_ready_total,
+        "frame_files_missing_total": frame_files_missing_total,
+        "frame_files_failed_retryable_total": frame_files_failed_retryable_total,
+        "frame_files_failed_terminal_total": frame_files_failed_terminal_total,
+        "stage_attempts_total": frame_files_ready_total + frame_files_failed_retryable_total + frame_files_failed_terminal_total,
         "blocked": sum(1 for row in active_rows if row["blocker"] and row["blocker"] != "ready_for_runpod"),
         "pending": sum(1 for row in active_rows if row["audio_ready"] and not row["visual_prompt_ready"]),
         "ready_for_frames": sum(1 for row in active_rows if row["visual_prompt_ready"] and not row["images_ready"]),
@@ -1997,10 +2111,11 @@ def run_youtube_visuals_launch_status(
     }
     not_ready_for_runpod = sum(1 for row in active_rows if not row.get("ready_for_runpod"))
     summary["not_ready_for_runpod"] = not_ready_for_runpod
-    summary["next_stage_allowed"] = bool(
+    summary["prompts_next_stage_allowed"] = bool(
         not_ready_for_runpod == 0
         and (summary["ready_for_frames"] > 0 or summary["images_ready"] > 0)
     )
+    summary["next_stage_allowed"] = bool(active_rows and stories_frames_ready == len(active_rows))
     ctx = build_launch_context(config, launch_id=launch_id)
     report = {
         "ok": True,
@@ -2296,7 +2411,7 @@ def run_youtube_visuals_run_all(
                             flush=True,
                         )
                 else:
-                    worker_count = min(prompt_workers, len(prompt_jobs))
+                    worker_count = max(1, prompt_workers)
                     _prepare_prompt_worker_profiles(config, worker_count)
                     worker_batches: list[list[tuple[int, Path, str, str]]] = [[] for _ in range(worker_count)]
                     for job_number, job in enumerate(prompt_jobs):
@@ -2648,10 +2763,17 @@ def run_youtube_visuals_run_all(
                                 ),
                             )
                         except Exception as exc:
+                            reason_code, retryable = classify_runpod_frame_error(str(exc) or repr(exc))
                             run_result = {
                                 "ok": False,
-                                "status": "failed",
-                                "next_action": repr(exc),
+                                "status": "retryable" if retryable else "failed",
+                                "reason_code": reason_code,
+                                "next_action": (
+                                    "retry only missing/retryable frames"
+                                    if retryable
+                                    else "inspect RunPod frame failure log"
+                                ),
+                                "error": repr(exc),
                                 "story_dir": str(story_dir),
                                 "blockers": [type(exc).__name__],
                             }
@@ -2670,7 +2792,12 @@ def run_youtube_visuals_run_all(
                             flush=True,
                         )
                         if label == "FAILED":
-                            print(f"[{index}/{len(frames_queue)}] FAILED reason={run_result.get('next_action') or run_result.get('status')}", flush=True)
+                            print(
+                                f"[{index}/{len(frames_queue)}] FAILED "
+                                f"reason_code={run_result.get('reason_code') or 'UNKNOWN_RUNTIME_ERROR_WITH_LOG'} "
+                                f"reason={run_result.get('next_action') or run_result.get('status')}",
+                                flush=True,
+                            )
                     results.append(
                         {
                             "stage": "frames",
@@ -2679,6 +2806,9 @@ def run_youtube_visuals_run_all(
                             "status": run_result.get("status"),
                             "ok": bool(run_result.get("ok")) or str(run_result.get("status") or "") == "prepared",
                             "next_action": run_result.get("next_action"),
+                            "reason_code": run_result.get("reason_code") or (
+                                None if bool(run_result.get("ok")) else "UNKNOWN_RUNTIME_ERROR_WITH_LOG"
+                            ),
                             "blockers": run_result.get("blockers") or run_result.get("missing") or [],
                             "story_dir": run_result.get("story_dir"),
                         }
@@ -2718,11 +2848,15 @@ def run_youtube_visuals_run_all(
     print(f"total stories:        {len(_iter_launch_story_dirs(config, launch_id))}", flush=True)
     print(f"excluded_from_video:  {sum(1 for row in skipped if row.get('reason') == 'excluded_from_video')}", flush=True)
     print(f"active queue:         {active_queue_count}", flush=True)
-    print(f"done:                 {sum(1 for row in results if row.get('ok'))}", flush=True)
-    print(f"failed:               {len(failed_rows)}", flush=True)
-    print(f"blocked:              {len(blocked_rows)}", flush=True)
-    print(f"pending:              {summary.get('pending', 0)}", flush=True)
-    print(f"ready_for_frames:     {summary.get('ready_for_frames', 0)}", flush=True)
+    print(f"stories_frames_ready: {summary.get('stories_frames_ready', 0)}", flush=True)
+    print(f"stories_frames_failed:{summary.get('stories_frames_failed', 0)}", flush=True)
+    print(f"stories_frames_pending:{summary.get('stories_frames_pending', 0)}", flush=True)
+    print(f"frame_files_expected: {summary.get('frame_files_expected_total', 0)}", flush=True)
+    print(f"frame_files_ready:    {summary.get('frame_files_ready_total', 0)}", flush=True)
+    print(f"frame_files_missing:  {summary.get('frame_files_missing_total', 0)}", flush=True)
+    print(f"frames_retryable:     {summary.get('frame_files_failed_retryable_total', 0)}", flush=True)
+    print(f"frames_terminal:      {summary.get('frame_files_failed_terminal_total', 0)}", flush=True)
+    print(f"stage_attempts_total: {len(results)}", flush=True)
     print("excluded:", flush=True)
     excluded_rows = [row for row in skipped if row.get("reason") == "excluded_from_video"]
     if excluded_rows:
@@ -2736,26 +2870,41 @@ def run_youtube_visuals_run_all(
             print(f"- {row.get('story_id')} -> {row.get('next_action')}", flush=True)
     else:
         print("- none", flush=True)
+    progress_for_state = _read_json_safe(_prompts_progress_path(ctx))
+    prompt_state_violations = []
+    if isinstance(progress_for_state, dict) and progress_for_state:
+        prompt_state_violations.extend(validate_prompts_worker_lifecycle(progress_for_state))
+    prompt_state_violations.extend(validate_prompts_terminal_results(results))
+    if prompt_state_violations:
+        summary["next_stage_allowed"] = False
+        print("state_machine_violations:", flush=True)
+        for row in prompt_state_violations:
+            print(f"- {row.get('code')} {row.get('story_id') or row.get('worker') or ''}", flush=True)
     print(f"next_stage_allowed: {str(bool(summary.get('next_stage_allowed'))).lower()}", flush=True)
     print("==========================================================", flush=True)
-    payload = {
-        "ok": all(
+    payload_ok = (
+        all(
             bool(row.get("ok"))
             or row.get("status") in {"ready_for_runpod", "blocked", "dry_run", "already_ready"}
             for row in results
         )
         if results
-        else True,
+        else True
+    ) and not prompt_state_violations
+    payload = {
+        "ok": payload_ok,
         "execute": bool(options.execute),
         "launch_id": ctx.launch_id,
         "selected_count": len(selected),
         "processed_count": len(results),
+        "stage_attempts_total": len(results),
         "skipped_count": len(skipped),
         "promo_issues_accepted": bool(options.accept_known_promo_issues),
         "stage_status_path": str(ctx.launch_root / "queue" / "stage_status.json"),
         "skipped": skipped,
         "stories": results,
         "status": status,
+        "prompt_state_violations": prompt_state_violations,
         "next_stage_allowed": bool(summary.get("next_stage_allowed")),
         "elapsed_sec": round(time.monotonic() - started_at, 3),
         "generated_at": _now_iso(),

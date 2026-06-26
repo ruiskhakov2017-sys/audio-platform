@@ -14,26 +14,31 @@ yandex:
     - email: goegoeseijin@gmail.com
       profile_dir: "D:/Cursor AI/Content-Factory/.browser_profiles/youtube_colab/yandex/goegoeseijin_gmail_com"
       notebook_path: "colab_workers/youtube_video/YouTube_Video_Worker__goegoeseijin_gmail_com.ipynb"
+      drive_notebook_url: "https://colab.research.google.com/drive/1iEsnjksXVrKd9Zo62lC3Sd46IUWZdnqS"
       notebook_url: "https://colab.research.google.com/github/ruiskhakov2017-sys/audio-platform/blob/main/Content-Factory/colab_workers/youtube_video/YouTube_Video_Worker__goegoeseijin_gmail_com.ipynb"
       require_t4: false
     - email: iheuko119@gmail.com
       profile_dir: "D:/Cursor AI/Content-Factory/.browser_profiles/youtube_colab/yandex/iheuko119_gmail_com"
       notebook_path: "colab_workers/youtube_video/YouTube_Video_Worker__iheuko119_gmail_com.ipynb"
+      drive_notebook_url: "https://colab.research.google.com/drive/1TSDESLYN5oXTeoSwUgcsvBS_x1pvIpUx"
       notebook_url: "https://colab.research.google.com/github/ruiskhakov2017-sys/audio-platform/blob/main/Content-Factory/colab_workers/youtube_video/YouTube_Video_Worker__iheuko119_gmail_com.ipynb"
       require_t4: false
     - email: isi.cordeiro@gmail.com
       profile_dir: "D:/Cursor AI/Content-Factory/.browser_profiles/youtube_colab/yandex/isi_cordeiro_gmail_com"
       notebook_path: "colab_workers/youtube_video/YouTube_Video_Worker__isi_cordeiro_gmail_com.ipynb"
+      drive_notebook_url: "https://colab.research.google.com/drive/1_SKNNPEvUDi39r6b7sU95eJJ5-tUZcAu"
       notebook_url: "https://colab.research.google.com/github/ruiskhakov2017-sys/audio-platform/blob/main/Content-Factory/colab_workers/youtube_video/YouTube_Video_Worker__isi_cordeiro_gmail_com.ipynb"
       require_t4: false
     - email: ru.iskhakov2017@gmail.com
       profile_dir: "D:/Cursor AI/Content-Factory/.browser_profiles/youtube_colab/yandex/ru_iskhakov2017_gmail_com"
       notebook_path: "colab_workers/youtube_video/YouTube_Video_Worker__ru_iskhakov2017_gmail_com.ipynb"
+      drive_notebook_url: "https://colab.research.google.com/drive/1pfbOATalUdkI-6ah8fhq1rqgr4zvBQnu"
       notebook_url: "https://colab.research.google.com/github/ruiskhakov2017-sys/audio-platform/blob/main/Content-Factory/colab_workers/youtube_video/YouTube_Video_Worker__ru_iskhakov2017_gmail_com.ipynb"
       require_t4: false
     - email: suteadodesun6@gmail.com
       profile_dir: "D:/Cursor AI/Content-Factory/.browser_profiles/youtube_colab/yandex/suteadodesun6_gmail_com"
       notebook_path: "colab_workers/youtube_video/YouTube_Video_Worker__suteadodesun6_gmail_com.ipynb"
+      drive_notebook_url: "https://colab.research.google.com/drive/1lDqzYd-2ou6ctekENs-zI3wLtK8koUf3"
       notebook_url: "https://colab.research.google.com/github/ruiskhakov2017-sys/audio-platform/blob/main/Content-Factory/colab_workers/youtube_video/YouTube_Video_Worker__suteadodesun6_gmail_com.ipynb"
       require_t4: false
 

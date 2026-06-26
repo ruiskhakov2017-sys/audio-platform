@@ -1,5 +1,18 @@
+# Gemini bot registry — indices 0–4 are Gemini Pro / YouTube Gemini stages.
+# Indices 5–9 are Colab-only (see configs/youtube_video_colab_workers.yaml).
+
+account_pools:
+  gemini_account_pool: [0, 1, 2, 3, 4]
+  colab_account_pool: [5, 6, 7, 8, 9]
+
 gemini_bots:
   - email: ru.iskhakov2017@gmail.com
+    account_index: 0
+    capabilities:
+      gemini: true
+      gemini_pro: true
+      gemini_bots: true
+      colab: false
     general_selection: https://gemini.google.com/gem/ada3e736032c
     site_info_builder: https://gemini.google.com/gem/ef342be5afa7
     youtube_selection: https://gemini.google.com/gem/58c69ffea8d6

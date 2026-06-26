@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 from orchestrator.contracts import StageContract
+from orchestrator.isolated_launch_context import get_batch_launch_id
+from orchestrator.reports_path_resolver import resolve_site_publish_results_jsonl
 from orchestrator.site_publish.env_doctor import _read_env_file, run_site_publish_env_doctor
 from orchestrator.wrappers.base import WrapperResult
 from orchestrator.wrappers.base import BaseWrapper
@@ -113,7 +115,7 @@ class AutopublisherWrapper(BaseWrapper):
                             f"stories={stub_hits[:20]}"
                         ),
                     )
-        result_jsonl = (self._root / ".orchestrator" / "logs" / "site_publish_results.jsonl").resolve()
+        result_jsonl = resolve_site_publish_results_jsonl(self._root, launch_id=get_batch_launch_id()).resolve()
         cmd = [
             sys.executable,
             str(self.entrypoint),

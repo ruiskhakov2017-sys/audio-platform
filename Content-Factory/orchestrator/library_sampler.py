@@ -22,6 +22,7 @@ class LibrarySamplerOptions:
     seed: str | None = None
     allow_nonempty_target: bool = False
     copy_mode: bool = False
+    write_reports: bool = True
 
 
 def _hash8(value: str) -> str:
@@ -79,8 +80,9 @@ def run_library_sampler(*, config: OrchestratorConfig, options: LibrarySamplerOp
 
     manifests_dir = (config.service_dir / "manifests").resolve()
     reports_dir = config.reports_dir.resolve()
-    manifests_dir.mkdir(parents=True, exist_ok=True)
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    if options.write_reports:
+        manifests_dir.mkdir(parents=True, exist_ok=True)
+        reports_dir.mkdir(parents=True, exist_ok=True)
 
     if options.execute:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -184,26 +186,27 @@ def run_library_sampler(*, config: OrchestratorConfig, options: LibrarySamplerOp
     report_csv_path = reports_dir / f"library_sample_{batch_id}.csv"
     target_manifest_path = target_dir / "_batch_manifest.json"
 
-    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    with report_csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "source_path_original",
-                "target_path",
-                "source_folder",
-                "original_filename",
-                "selected_filename",
-                "renamed_due_to_collision",
-                "collision_hash",
-                "action",
-                "error",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+    if options.write_reports:
+        manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with report_csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "source_path_original",
+                    "target_path",
+                    "source_folder",
+                    "original_filename",
+                    "selected_filename",
+                    "renamed_due_to_collision",
+                    "collision_hash",
+                    "action",
+                    "error",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
 
-    if options.execute:
+    if options.execute and options.write_reports:
         target_manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {

@@ -7,12 +7,19 @@ workers:
   - "iheuko119@gmail.com"
   - "goegoeseijin@gmail.com"
   - "suteadodesun6@gmail.com"
+  - "simoaci@gmail.com"
+  - "danonmuaythai@gmail.com"
+  - "m.properzi@gmail.com"
+  - "docomo1227@gmail.com"
+  - "pgumis@gmail.com"
 future_workers_max: 10
 require_effects: false
 effects_assets:
   - "film.mp4"
   - "dust.mp4"
   - "images/start.*"
+film_opacity: 0.23
+film_blend_mode: "overlay"
 local_output_root: "output/youtube"
 render_mode: "segments_then_concat"
 final_video_name: "final_video.mp4"

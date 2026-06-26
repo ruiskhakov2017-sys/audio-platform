@@ -15,12 +15,15 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from orchestrator.account_capabilities import assert_gemini_capable
 from orchestrator.config import OrchestratorConfig
+from orchestrator.gemini_colab_proxy import apply_gemini_colab_proxy_env, gemini_colab_proxy_session
 from orchestrator.phase_a import _load_gemini_registry
 from orchestrator.youtube_language import EXPECTED_YOUTUBE_LANGUAGE, build_youtube_safe_status, detect_text_language
 
@@ -65,21 +68,54 @@ class YoutubePromoRunOptions:
     force: bool = False
     fresh_gemini_session: bool = True
     account_index: int = 0
+    youtube_run_id: str = ""
     gemini_registry_path: Path | None = None
+    user_data_dir: Path | None = None
+
+
+@dataclass
+class YoutubePromoBatchRunOptions:
+    story_ids: list[str]
+    execute: bool = False
+    force: bool = False
+    account_index: int = 0
+    youtube_run_id: str = ""
+    gemini_registry_path: Path | None = None
+    user_data_dir: Path | None = None
+    batch_staging_dir: Path | None = None
 
 
 @dataclass
 class YoutubePromoStatusOptions:
     story_id: str
+    youtube_run_id: str = ""
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+def _write_json(config: OrchestratorConfig, path: Path, payload: Any) -> None:
+    from orchestrator.isolated_io import write_json as isolated_write_json
+
+    isolated_write_json(
+        config,
+        path,
+        payload,
+        module="orchestrator.youtube_promo_bridge",
+        function="_write_json",
+    )
+
+
+def _legacy_write_path(
+    config: OrchestratorConfig,
+    story_id: str,
+    legacy_relative: str,
+    fallback: Path,
+) -> Path:
+    from orchestrator.youtube_path_resolver import resolve_bridge_legacy_write_path
+
+    return resolve_bridge_legacy_write_path(config, story_id, legacy_relative, fallback)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -119,29 +155,13 @@ def _story_manifest_path(story_dir: Path) -> Path:
 
 
 def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
-    root = (config.root_dir / "output" / "youtube").resolve()
-    direct = root / story_id
-    if direct.is_dir():
-        return direct.resolve()
+    from orchestrator.youtube_path_resolver import resolve_bridge_story_dir
 
-    key = story_id.strip()
-    matches: list[Path] = []
-    if root.is_dir():
-        for child in root.iterdir():
-            manifest = _load_json(child / "youtube_story_manifest.json")
-            if not manifest:
-                continue
-            sid = str(manifest.get("story_id", "")).strip()
-            canonical = str(manifest.get("canonical_basename", "")).strip()
-            if key in {sid, canonical} or canonical.casefold() == key.casefold() or sid.casefold() == key.casefold():
-                matches.append(child)
-    if len(matches) == 1:
-        return matches[0].resolve()
-    return direct.resolve()
+    return resolve_bridge_story_dir(config, story_id)
 
 
-def _safe_story_path(story_dir: Path) -> Path:
-    return story_dir / "02_safe_story" / "safe_story.txt"
+def _safe_story_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(config, story_id, "02_safe_story/safe_story.txt", story_dir / "02_safe_story" / "safe_story.txt")
 
 
 def _promo_dir(story_dir: Path) -> Path:
@@ -152,16 +172,31 @@ def _fallback_source_path(story_dir: Path) -> Path:
     return _promo_dir(story_dir) / "source_for_promo.txt"
 
 
-def _promo_output_path(story_dir: Path) -> Path:
-    return _promo_dir(story_dir) / READY_FILE_NAME
+def _promo_output_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(
+        config,
+        story_id,
+        f"03_promo/{READY_FILE_NAME}",
+        _promo_dir(story_dir) / READY_FILE_NAME,
+    )
 
 
-def _climax_snippet_path(story_dir: Path) -> Path:
-    return _promo_dir(story_dir) / SNIPPET_FILE_NAME
+def _climax_snippet_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(
+        config,
+        story_id,
+        f"03_promo/{SNIPPET_FILE_NAME}",
+        _promo_dir(story_dir) / SNIPPET_FILE_NAME,
+    )
 
 
-def _promo_report_path(story_dir: Path) -> Path:
-    return _promo_dir(story_dir) / PROMO_REPORT_NAME
+def _promo_report_path(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    return _legacy_write_path(
+        config,
+        story_id,
+        f"03_promo/{PROMO_REPORT_NAME}",
+        _promo_dir(story_dir) / PROMO_REPORT_NAME,
+    )
 
 
 def _narration_path(story_dir: Path) -> Path:
@@ -174,6 +209,44 @@ def _legacy_staging_dir(story_dir: Path) -> Path:
 
 def _fresh_user_data_dir(story_dir: Path) -> Path:
     return _legacy_staging_dir(story_dir) / "user_data_fresh"
+
+
+def _promo_proxy_enabled() -> bool:
+    raw = os.getenv("GEMINI_PROMO_USE_PROXY") or os.getenv("PROMO_USE_PROXY") or "1"
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _promo_browser_closed_error(log_text: str) -> bool:
+    low = str(log_text or "").lower()
+    return any(
+        marker in low
+        for marker in (
+            "target page, context or browser has been closed",
+            "targetclosederror",
+            "browser has been closed",
+            "context has been closed",
+            "page.goto: target page",
+        )
+    )
+
+
+def _classify_promo_subprocess_failure(log_text: str, returncode: int) -> tuple[str, bool]:
+    low = str(log_text or "").lower()
+    if _promo_browser_closed_error(low):
+        return "promo_browser_closed", True
+    if "gemini browser launch blocked" in low or "gemini_proxy_required=1" in low:
+        return "promo_proxy_missing", True
+    if "старый ответ" in low or "old response" in low or "stale response" in low:
+        return "promo_stale_response", True
+    if "не удалось прикрепить" in low or "без вложения insert_text обрежет" in low:
+        return "promo_attach_failed", True
+    if "ui gemini не готов" in low or "не удалось открыть gem" in low or "не найдено поле ввода gemini" in low:
+        return "promo_ui_not_ready", True
+    if "лимит gem-бота" in low or "quota" in low or "rate limit" in low:
+        return "promo_gemini_limit", True
+    if returncode == 0:
+        return "missing_promo_output", False
+    return "legacy_promo_failed", False
 
 
 def _raw_dir(story_dir: Path) -> Path:
@@ -223,6 +296,26 @@ def _legacy_contract(config: OrchestratorConfig) -> dict[str, Any]:
     }
 
 
+def _config_promo_blocks(config: OrchestratorConfig) -> dict[str, str] | None:
+    from orchestrator.youtube_promo_contract import english_promo_texts, load_promo_config
+
+    try:
+        cfg = load_promo_config(config)
+    except Exception:
+        return None
+    en = english_promo_texts(cfg)
+    intro = str(en.get("intro") or "").strip()
+    mid = str(en.get("mid") or "").strip()
+    outro = str(en.get("outro") or "").strip()
+    if not intro or not mid or not outro:
+        return None
+    return {
+        "intro_text": f"{intro}\n\n",
+        "mid_text": f"\n\n{mid}\n\n",
+        "outro_text": f"\n\n{outro}",
+    }
+
+
 def _effective_contract(config: OrchestratorConfig) -> dict[str, Any]:
     contract = _legacy_contract(config)
     languages = {
@@ -231,10 +324,17 @@ def _effective_contract(config: OrchestratorConfig) -> dict[str, Any]:
         "outro": detect_text_language(str(contract.get("outro_text") or "")),
     }
     if any(lang not in {EXPECTED_YOUTUBE_LANGUAGE, "unknown"} for lang in languages.values()):
-        contract = {**contract, **ENGLISH_PROMO_PLACEHOLDERS}
-        contract["placeholder_ads_used"] = True
-        contract["legacy_promo_blocks_language"] = languages
-        contract["promo_blocks_source"] = "english_placeholders"
+        config_blocks = _config_promo_blocks(config)
+        if config_blocks:
+            contract = {**contract, **config_blocks}
+            contract["placeholder_ads_used"] = False
+            contract["legacy_promo_blocks_language"] = languages
+            contract["promo_blocks_source"] = "youtube_promo_config"
+        else:
+            contract = {**contract, **ENGLISH_PROMO_PLACEHOLDERS}
+            contract["placeholder_ads_used"] = True
+            contract["legacy_promo_blocks_language"] = languages
+            contract["promo_blocks_source"] = "english_placeholders"
     else:
         contract["placeholder_ads_used"] = False
         contract["legacy_promo_blocks_language"] = languages
@@ -263,6 +363,7 @@ def _registry_candidates(config: OrchestratorConfig, explicit: Path | None = Non
 
 
 def _pick_promo_bot(config: OrchestratorConfig, account_index: int, explicit_registry: Path | None = None) -> dict[str, str]:
+    assert_gemini_capable(int(account_index))
     registry_path = ""
     bots: list[dict[str, Any]] = []
     for cand in _registry_candidates(config, explicit_registry):
@@ -289,7 +390,9 @@ def _pick_promo_bot(config: OrchestratorConfig, account_index: int, explicit_reg
             "account_index": str(account_index),
             "source": "legacy_fallback",
         }
-    idx = max(0, min(int(account_index or 0), len(valid) - 1))
+    idx = int(account_index)
+    if idx >= len(valid):
+        raise ValueError(f"ACCOUNT_NOT_GEMINI_CAPABLE: account_index={idx}")
     email, url = valid[idx]
     return {
         "email": email,
@@ -301,8 +404,8 @@ def _pick_promo_bot(config: OrchestratorConfig, account_index: int, explicit_reg
     }
 
 
-def _source_for_promo(story_dir: Path) -> Path:
-    safe = _safe_story_path(story_dir)
+def _source_for_promo(config: OrchestratorConfig, story_id: str, story_dir: Path) -> Path:
+    safe = _safe_story_path(config, story_id, story_dir)
     if safe.is_file():
         return safe
     return _fallback_source_path(story_dir)
@@ -353,11 +456,11 @@ def _build_status(config: OrchestratorConfig, story_id: str) -> dict[str, Any]:
     story_dir = _story_dir(config, story_id)
     manifest = _load_json(_story_manifest_path(story_dir))
     contract = _effective_contract(config)
-    source = _source_for_promo(story_dir)
-    safe = _safe_story_path(story_dir)
-    ready = _promo_output_path(story_dir)
-    snippet = _climax_snippet_path(story_dir)
-    report = _load_json(_promo_report_path(story_dir))
+    source = _source_for_promo(config, story_id, story_dir)
+    safe = _safe_story_path(config, story_id, story_dir)
+    ready = _promo_output_path(config, story_id, story_dir)
+    snippet = _climax_snippet_path(config, story_id, story_dir)
+    report = _load_json(_promo_report_path(config, story_id, story_dir))
 
     source_hash = _sha256_file(source)
     output_hash = _sha256_file(ready)
@@ -459,7 +562,7 @@ def _build_status(config: OrchestratorConfig, story_id: str) -> dict[str, Any]:
         "audio": audio,
         "current_blocker": current_blocker,
         "next_action": next_action,
-        "report_path": str(_promo_report_path(story_dir)),
+        "report_path": str(_promo_report_path(config, story_id, story_dir)),
         "legacy": {
             k: v
             for k, v in contract.items()
@@ -473,6 +576,12 @@ def run_youtube_promo_status(
     config: OrchestratorConfig,
     options: YoutubePromoStatusOptions,
 ) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id, isolated_session
+
+    batch_id = str(options.youtube_run_id or get_batch_launch_id() or "").strip()
+    if batch_id and get_batch_launch_id() != batch_id:
+        with isolated_session(None, batch_launch_id=batch_id, config=config):
+            return _build_status(config, str(options.story_id).strip())
     return _build_status(config, str(options.story_id).strip())
 
 
@@ -526,6 +635,7 @@ def _write_legacy_runner(
 
 def _patch_manifest_after_promo(
     *,
+    config: OrchestratorConfig,
     story_dir: Path,
     promo_result: dict[str, Any],
     audio_stale: bool,
@@ -581,7 +691,7 @@ def _patch_manifest_after_promo(
         manifest["audio"] = audio
     manifest["tts_kokoro_colab"] = tts
     manifest["updated_at"] = now
-    _write_json(manifest_path, manifest)
+    _write_json(config, manifest_path, manifest)
     return manifest_path
 
 
@@ -590,12 +700,30 @@ def run_youtube_promo_run(
     config: OrchestratorConfig,
     options: YoutubePromoRunOptions,
 ) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id, isolated_launch_context, isolated_session
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+
+    batch_id = str(options.youtube_run_id or get_batch_launch_id() or "").strip()
+    if batch_id and is_isolated_launch(config, launch_id=batch_id):
+        with isolated_launch_context(config, batch_id):
+            return _run_youtube_promo_run_body(config=config, options=options)
+    if batch_id:
+        with isolated_session(None, batch_launch_id=batch_id, config=config):
+            return _run_youtube_promo_run_body(config=config, options=options)
+    return _run_youtube_promo_run_body(config=config, options=options)
+
+
+def _run_youtube_promo_run_body(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubePromoRunOptions,
+) -> dict[str, Any]:
     story_key = str(options.story_id).strip()
     status = _build_status(config, story_key)
     story_dir = Path(str(status["story_dir"]))
     source = Path(str(status["source_path"]))
-    ready = _promo_output_path(story_dir)
-    snippet = _climax_snippet_path(story_dir)
+    ready = _promo_output_path(config, story_key, story_dir)
+    snippet = _climax_snippet_path(config, story_key, story_dir)
     staging = _legacy_staging_dir(story_dir)
     raw = _raw_dir(story_dir)
     legacy_story_dir = staging / "promo_stories" / _safe_stem(str(status.get("canonical_basename") or story_key))
@@ -603,7 +731,13 @@ def run_youtube_promo_run(
     legacy_snippet = legacy_story_dir / SNIPPET_FILE_NAME
     legacy_log = staging / "promo_inserter.log"
     runner = staging / "run_legacy_promo_inserter.py"
-    user_data_dir = _fresh_user_data_dir(story_dir) if options.fresh_gemini_session else _legacy_dir(config) / "user_data"
+    user_data_dir = (
+        Path(options.user_data_dir).resolve()
+        if options.user_data_dir is not None
+        else _fresh_user_data_dir(story_dir)
+        if options.fresh_gemini_session
+        else _legacy_dir(config) / "user_data"
+    )
     promo_bot = _pick_promo_bot(config, options.account_index, options.gemini_registry_path)
     contract = _effective_contract(config)
 
@@ -613,6 +747,8 @@ def run_youtube_promo_run(
         "force": bool(options.force),
         "fresh_gemini_session": bool(options.fresh_gemini_session),
         "user_data_dir": str(user_data_dir),
+        "user_data_source": "explicit" if options.user_data_dir is not None else "fresh" if options.fresh_gemini_session else "legacy",
+        "promo_proxy_enabled": _promo_proxy_enabled(),
         "gemini_account_email": promo_bot.get("email", ""),
         "gemini_url": promo_bot.get("url", ""),
         "gemini_registry_path": promo_bot.get("registry_path", ""),
@@ -659,8 +795,12 @@ def run_youtube_promo_run(
     ):
         if stale_generated.exists():
             stale_generated.unlink()
-    shutil.copy2(source, legacy_story_dir / SOURCE_FILE_NAME)
-    shutil.copy2(source, raw / SOURCE_FILE_NAME)
+    from orchestrator.isolated_io import copy2 as iso_copy2, is_active_isolated
+
+    iso = is_active_isolated(config)
+    copy_fn = lambda s, d: iso_copy2(config, s, d, module="orchestrator.youtube_promo_bridge", function="run_promo") if iso else __import__("shutil").copy2(s, d)
+    copy_fn(source, legacy_story_dir / SOURCE_FILE_NAME)
+    copy_fn(source, raw / SOURCE_FILE_NAME)
     _write_legacy_runner(
         runner,
         legacy_dir=_legacy_dir(config),
@@ -681,12 +821,50 @@ def run_youtube_promo_run(
     env["PROMO_FRESH_GEMINI_SESSION"] = "1" if options.fresh_gemini_session else "0"
     env["PROMO_USER_DATA_DIR"] = str(user_data_dir)
 
-    proc = subprocess.run(
-        [sys.executable, str(runner)],
-        cwd=str(_legacy_dir(config)),
-        env=env,
-        text=True,
-    )
+    max_launch_attempts = max(1, int(os.getenv("PROMO_BROWSER_LAUNCH_ATTEMPTS") or "2"))
+    proc: subprocess.CompletedProcess[str] | None = None
+    for launch_attempt in range(1, max_launch_attempts + 1):
+        print(
+            f"[PROMO_BROWSER_LAUNCH] story={story_key} attempt={launch_attempt}/{max_launch_attempts} "
+            f"user_data_dir=\"{user_data_dir}\" proxy_enabled={str(_promo_proxy_enabled()).lower()}",
+            flush=True,
+        )
+        attempt_env = dict(env)
+        if _promo_proxy_enabled():
+            with gemini_colab_proxy_session(config.root_dir) as proxy_session:
+                attempt_env = apply_gemini_colab_proxy_env(attempt_env, proxy_session)
+                print(
+                    f"[PROMO_PROXY] story={story_key} server={attempt_env.get('GEMINI_PROXY_SERVER', '')}",
+                    flush=True,
+                )
+                proc = subprocess.run(
+                    [sys.executable, str(runner)],
+                    cwd=str(_legacy_dir(config)),
+                    env=attempt_env,
+                    text=True,
+                )
+        else:
+            attempt_env["GEMINI_PROXY_REQUIRED"] = "0"
+            proc = subprocess.run(
+                [sys.executable, str(runner)],
+                cwd=str(_legacy_dir(config)),
+                env=attempt_env,
+                text=True,
+            )
+        if proc.returncode == 0:
+            break
+        log_tail = _read_text(legacy_log)[-5000:] if legacy_log.is_file() else ""
+        if launch_attempt < max_launch_attempts and _promo_browser_closed_error(log_tail):
+            print(
+                f"[PROMO_BROWSER_RETRY] story={story_key} reason=browser_closed "
+                f"next_attempt={launch_attempt + 1}/{max_launch_attempts}",
+                flush=True,
+            )
+            time.sleep(3.0)
+            continue
+        break
+    if proc is None:
+        raise RuntimeError("promo subprocess did not start")
     changed_files = [
         str(legacy_story_dir / SOURCE_FILE_NAME),
         str(raw / SOURCE_FILE_NAME),
@@ -695,17 +873,25 @@ def run_youtube_promo_run(
     ]
 
     if proc.returncode != 0:
+        log_tail = _read_text(legacy_log)[-5000:] if legacy_log.is_file() else ""
+        reason_code, retryable = _classify_promo_subprocess_failure(log_tail, int(proc.returncode))
         report = {
             **plan,
             "ok": False,
             "status": "failed",
             "message": "legacy promo_inserter failed",
+            "reason_code": reason_code,
             "returncode": proc.returncode,
+            "retryable": retryable,
+            "terminal_story": not retryable,
+            "queue_persist": not retryable,
             "changed_files": changed_files,
             "updated_at": _now_iso(),
         }
-        _write_json(_promo_report_path(story_dir), report)
-        report["changed_files"].append(str(_promo_report_path(story_dir)))
+        if log_tail:
+            report["legacy_log_tail"] = log_tail
+        _write_json(config, _promo_report_path(config, story_key, story_dir), report)
+        report["changed_files"].append(str(_promo_report_path(config, story_key, story_dir)))
         return report
 
     if not legacy_ready.is_file():
@@ -718,14 +904,14 @@ def run_youtube_promo_run(
             "changed_files": changed_files,
             "updated_at": _now_iso(),
         }
-        _write_json(_promo_report_path(story_dir), report)
-        report["changed_files"].append(str(_promo_report_path(story_dir)))
+        _write_json(config, _promo_report_path(config, story_key, story_dir), report)
+        report["changed_files"].append(str(_promo_report_path(config, story_key, story_dir)))
         return report
 
-    shutil.copy2(legacy_ready, ready)
+    copy_fn(legacy_ready, ready)
     changed_files.append(str(ready))
     if legacy_snippet.is_file():
-        shutil.copy2(legacy_snippet, snippet)
+        copy_fn(legacy_snippet, snippet)
         changed_files.append(str(snippet))
 
     final_status = _build_status(config, story_key)
@@ -756,9 +942,14 @@ def run_youtube_promo_run(
         "changed_files": changed_files,
         "updated_at": _now_iso(),
     }
-    _write_json(_promo_report_path(story_dir), report)
-    report["changed_files"].append(str(_promo_report_path(story_dir)))
-    manifest_path = _patch_manifest_after_promo(story_dir=story_dir, promo_result=report, audio_stale=audio_stale)
+    _write_json(config, _promo_report_path(config, story_key, story_dir), report)
+    report["changed_files"].append(str(_promo_report_path(config, story_key, story_dir)))
+    manifest_path = _patch_manifest_after_promo(
+        config=config,
+        story_dir=story_dir,
+        promo_result=report,
+        audio_stale=audio_stale,
+    )
     report["manifest_path"] = str(manifest_path)
     report["changed_files"].append(str(manifest_path))
     if audio_stale:
@@ -768,3 +959,360 @@ def run_youtube_promo_run(
         report["current_blocker"] = "youtube_audio_stale_after_promo_change"
         report["next_action"] = "rerun YouTube TTS from updated 03_promo/text_ready_for_audio.txt"
     return report
+
+
+def run_youtube_promo_batch_run(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubePromoBatchRunOptions,
+) -> dict[str, Any]:
+    from orchestrator.isolated_launch_context import get_batch_launch_id, isolated_launch_context, isolated_session
+    from orchestrator.isolated_launch_mode import is_isolated_launch
+
+    batch_id = str(options.youtube_run_id or get_batch_launch_id() or "").strip()
+    if batch_id and is_isolated_launch(config, launch_id=batch_id):
+        with isolated_launch_context(config, batch_id):
+            return _run_youtube_promo_batch_run_body(config=config, options=options)
+    if batch_id:
+        with isolated_session(None, batch_launch_id=batch_id, config=config):
+            return _run_youtube_promo_batch_run_body(config=config, options=options)
+    return _run_youtube_promo_batch_run_body(config=config, options=options)
+
+
+def _run_youtube_promo_batch_run_body(
+    *,
+    config: OrchestratorConfig,
+    options: YoutubePromoBatchRunOptions,
+) -> dict[str, Any]:
+    story_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_story_id in options.story_ids:
+        story_id = str(raw_story_id).strip()
+        key = story_id.casefold()
+        if story_id and key not in seen:
+            story_ids.append(story_id)
+            seen.add(key)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    staging = (
+        Path(options.batch_staging_dir).resolve()
+        if options.batch_staging_dir is not None
+        else (config.root_dir / "runs" / "youtube_promo_batch" / f"promo_batch_{timestamp}").resolve()
+    )
+    promo_stories_dir = staging / "promo_stories"
+    legacy_log = staging / "promo_inserter.log"
+    runner = staging / "run_legacy_promo_inserter.py"
+    user_data_dir = (
+        Path(options.user_data_dir).resolve()
+        if options.user_data_dir is not None
+        else _legacy_dir(config) / "user_data"
+    )
+    promo_bot = _pick_promo_bot(config, options.account_index, options.gemini_registry_path)
+    contract = _effective_contract(config)
+    results: dict[str, dict[str, Any]] = {}
+    launch_items: list[dict[str, Any]] = []
+    used_folder_names: dict[str, int] = {}
+
+    from orchestrator.isolated_io import copy2 as iso_copy2, is_active_isolated
+
+    iso = is_active_isolated(config)
+
+    def copy_fn(src: Path, dst: Path) -> Path:
+        if iso:
+            return iso_copy2(
+                config,
+                src,
+                dst,
+                module="orchestrator.youtube_promo_bridge",
+                function="run_promo_batch",
+            )
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        return dst.resolve()
+
+    for story_key in story_ids:
+        status = _build_status(config, story_key)
+        story_dir = Path(str(status["story_dir"]))
+        source = Path(str(status["source_path"]))
+        ready = _promo_output_path(config, story_key, story_dir)
+        snippet = _climax_snippet_path(config, story_key, story_dir)
+        raw = _raw_dir(story_dir)
+        plan = {
+            **status,
+            "execute": bool(options.execute),
+            "force": bool(options.force),
+            "fresh_gemini_session": False,
+            "user_data_dir": str(user_data_dir),
+            "user_data_source": "explicit" if options.user_data_dir is not None else "legacy",
+            "promo_proxy_enabled": _promo_proxy_enabled(),
+            "gemini_account_email": promo_bot.get("email", ""),
+            "gemini_url": promo_bot.get("url", ""),
+            "gemini_registry_path": promo_bot.get("registry_path", ""),
+            "gemini_bot_key": promo_bot.get("bot_key", ""),
+            "gemini_account_index": promo_bot.get("account_index", str(options.account_index)),
+            "gemini_bot_source": promo_bot.get("source", ""),
+            "legacy_staging_dir": str(staging),
+            "legacy_log_path": str(legacy_log),
+            "runner_path": str(runner),
+            "changed_files": [],
+        }
+
+        if status["status"] in {"missing_story_dir", "missing_source"}:
+            results[story_key] = {
+                **plan,
+                "ok": False,
+                "status": status["status"],
+                "message": "Missing promo source",
+                "reason_code": status["status"],
+            }
+            continue
+        if status["status"] == "wrong_language" and status.get("source_language") != EXPECTED_YOUTUBE_LANGUAGE:
+            results[story_key] = {
+                **plan,
+                "ok": False,
+                "status": "blocked_wrong_language",
+                "message": "promo-run blocked: safe_story/text_ready_for_audio must be English for YouTube pipeline",
+                "reason_code": "blocked_wrong_language",
+            }
+            continue
+        if status["status"] == "done" and not options.force:
+            results[story_key] = {
+                **plan,
+                "ok": True,
+                "status": "done",
+                "message": "promo already inserted",
+                "output_path": str(ready),
+            }
+            continue
+        if not options.execute:
+            results[story_key] = {
+                **plan,
+                "ok": True,
+                "status": "would_run",
+                "message": "dry-run only; no files written and legacy Gemini was not launched",
+            }
+            continue
+
+        stem = _safe_stem(str(status.get("canonical_basename") or story_key))
+        used_folder_names[stem] = used_folder_names.get(stem, 0) + 1
+        folder_name = stem if used_folder_names[stem] == 1 else f"{stem}_{used_folder_names[stem]}"
+        legacy_story_dir = promo_stories_dir / folder_name
+        legacy_ready = legacy_story_dir / READY_FILE_NAME
+        legacy_snippet = legacy_story_dir / SNIPPET_FILE_NAME
+
+        _promo_dir(story_dir).mkdir(parents=True, exist_ok=True)
+        raw.mkdir(parents=True, exist_ok=True)
+        legacy_story_dir.mkdir(parents=True, exist_ok=True)
+        for stale_generated in (
+            legacy_ready,
+            legacy_snippet,
+            legacy_story_dir / "climax_snippet.tmp",
+        ):
+            if stale_generated.exists():
+                stale_generated.unlink()
+        copy_fn(source, legacy_story_dir / SOURCE_FILE_NAME)
+        copy_fn(source, raw / SOURCE_FILE_NAME)
+        changed_files = [
+            str(legacy_story_dir / SOURCE_FILE_NAME),
+            str(raw / SOURCE_FILE_NAME),
+            str(runner),
+            str(legacy_log),
+        ]
+        launch_items.append(
+            {
+                "story_key": story_key,
+                "plan": {
+                    **plan,
+                    "legacy_story_dir": str(legacy_story_dir),
+                    "changed_files": changed_files,
+                },
+                "story_dir": story_dir,
+                "ready": ready,
+                "snippet": snippet,
+                "legacy_ready": legacy_ready,
+                "legacy_snippet": legacy_snippet,
+                "changed_files": changed_files,
+            }
+        )
+
+    if not launch_items:
+        return {
+            "ok": all(bool(result.get("ok")) for result in results.values()),
+            "status": "done",
+            "stories": results,
+            "processed": len(results),
+            "launched": 0,
+            "legacy_staging_dir": str(staging),
+        }
+
+    _write_legacy_runner(
+        runner,
+        legacy_dir=_legacy_dir(config),
+        promo_stories_dir=promo_stories_dir,
+        user_data_dir=user_data_dir,
+        log_path=legacy_log,
+        fresh_gemini_session=False,
+        promo_texts={
+            "intro_text": str(contract.get("intro_text") or ""),
+            "mid_text": str(contract.get("mid_text") or ""),
+            "outro_text": str(contract.get("outro_text") or ""),
+        },
+    )
+
+    env = os.environ.copy()
+    if promo_bot.get("url"):
+        env["GEMINI_URL"] = str(promo_bot["url"])
+    env["PROMO_FRESH_GEMINI_SESSION"] = "0"
+    env["PROMO_USER_DATA_DIR"] = str(user_data_dir)
+
+    max_launch_attempts = max(1, int(os.getenv("PROMO_BROWSER_LAUNCH_ATTEMPTS") or "2"))
+    proc: subprocess.CompletedProcess[str] | None = None
+    print(
+        f"[PROMO_BATCH_BEGIN] stories={len(launch_items)} user_data_dir=\"{user_data_dir}\" "
+        f"proxy_enabled={str(_promo_proxy_enabled()).lower()}",
+        flush=True,
+    )
+    for launch_attempt in range(1, max_launch_attempts + 1):
+        print(
+            f"[PROMO_BATCH_BROWSER_LAUNCH] attempt={launch_attempt}/{max_launch_attempts} "
+            f"stories={len(launch_items)} staging=\"{staging}\"",
+            flush=True,
+        )
+        attempt_env = dict(env)
+        if _promo_proxy_enabled():
+            with gemini_colab_proxy_session(config.root_dir) as proxy_session:
+                attempt_env = apply_gemini_colab_proxy_env(attempt_env, proxy_session)
+                print(
+                    f"[PROMO_BATCH_PROXY] server={attempt_env.get('GEMINI_PROXY_SERVER', '')}",
+                    flush=True,
+                )
+                proc = subprocess.run(
+                    [sys.executable, str(runner)],
+                    cwd=str(_legacy_dir(config)),
+                    env=attempt_env,
+                    text=True,
+                )
+        else:
+            attempt_env["GEMINI_PROXY_REQUIRED"] = "0"
+            proc = subprocess.run(
+                [sys.executable, str(runner)],
+                cwd=str(_legacy_dir(config)),
+                env=attempt_env,
+                text=True,
+            )
+        if proc.returncode == 0:
+            break
+        log_tail = _read_text(legacy_log)[-5000:] if legacy_log.is_file() else ""
+        if launch_attempt < max_launch_attempts and _promo_browser_closed_error(log_tail):
+            print(
+                f"[PROMO_BATCH_BROWSER_RETRY] reason=browser_closed "
+                f"next_attempt={launch_attempt + 1}/{max_launch_attempts}",
+                flush=True,
+            )
+            time.sleep(3.0)
+            continue
+        break
+    if proc is None:
+        raise RuntimeError("promo batch subprocess did not start")
+
+    log_tail = _read_text(legacy_log)[-5000:] if legacy_log.is_file() else ""
+    browser_closed = _promo_browser_closed_error(log_tail)
+
+    for meta in launch_items:
+        story_key = str(meta["story_key"])
+        plan = dict(meta["plan"])
+        story_dir = Path(meta["story_dir"])
+        ready = Path(meta["ready"])
+        snippet = Path(meta["snippet"])
+        legacy_ready = Path(meta["legacy_ready"])
+        legacy_snippet = Path(meta["legacy_snippet"])
+        changed_files = list(meta["changed_files"])
+
+        if legacy_ready.is_file():
+            copy_fn(legacy_ready, ready)
+            changed_files.append(str(ready))
+            if legacy_snippet.is_file():
+                copy_fn(legacy_snippet, snippet)
+                changed_files.append(str(snippet))
+
+            final_status = _build_status(config, story_key)
+            final_status["status"] = (
+                "done"
+                if final_status.get("status") != "wrong_language"
+                and all(bool(final_status.get(k)) for k in ("intro_inserted", "mid_inserted", "outro_inserted"))
+                else str(final_status.get("status") or "failed_incomplete_promo")
+            )
+            audio_stale = bool(_narration_path(story_dir).is_file())
+            report = {
+                **final_status,
+                "ok": final_status["status"] == "done",
+                "execute": True,
+                "force": bool(options.force),
+                "fresh_gemini_session": False,
+                "user_data_dir": str(user_data_dir),
+                "gemini_account_email": promo_bot.get("email", ""),
+                "gemini_url": promo_bot.get("url", ""),
+                "gemini_registry_path": promo_bot.get("registry_path", ""),
+                "gemini_bot_key": promo_bot.get("bot_key", ""),
+                "gemini_account_index": promo_bot.get("account_index", str(options.account_index)),
+                "gemini_bot_source": promo_bot.get("source", ""),
+                "returncode": proc.returncode,
+                "legacy_staging_dir": str(staging),
+                "legacy_story_dir": str(plan.get("legacy_story_dir") or ""),
+                "legacy_log_path": str(legacy_log),
+                "changed_files": changed_files,
+                "updated_at": _now_iso(),
+            }
+            _write_json(config, _promo_report_path(config, story_key, story_dir), report)
+            report["changed_files"].append(str(_promo_report_path(config, story_key, story_dir)))
+            manifest_path = _patch_manifest_after_promo(
+                config=config,
+                story_dir=story_dir,
+                promo_result=report,
+                audio_stale=audio_stale,
+            )
+            report["manifest_path"] = str(manifest_path)
+            report["changed_files"].append(str(manifest_path))
+            if audio_stale:
+                report["audio"]["status"] = "stale"
+                report["audio"]["stale"] = True
+                report["audio"]["reason"] = "youtube_audio_stale_after_promo_change"
+                report["current_blocker"] = "youtube_audio_stale_after_promo_change"
+                report["next_action"] = "rerun YouTube TTS from updated 03_promo/text_ready_for_audio.txt"
+            results[story_key] = report
+            continue
+
+        reason_code, retryable = _classify_promo_subprocess_failure(log_tail, int(proc.returncode))
+        report = {
+            **plan,
+            "ok": False,
+            "status": "failed",
+            "message": "legacy promo_inserter did not produce text_ready_for_audio.txt",
+            "reason_code": reason_code,
+            "returncode": proc.returncode,
+            "retryable": retryable,
+            "terminal_story": not retryable,
+            "queue_persist": not retryable,
+            "changed_files": changed_files,
+            "updated_at": _now_iso(),
+        }
+        if log_tail:
+            report["legacy_log_tail"] = log_tail
+        _write_json(config, _promo_report_path(config, story_key, story_dir), report)
+        report["changed_files"].append(str(_promo_report_path(config, story_key, story_dir)))
+        results[story_key] = report
+
+    ok_count = sum(1 for result in results.values() if result.get("ok"))
+    failed_count = len(results) - ok_count
+    print(f"[PROMO_BATCH_END] processed={len(results)} ok={ok_count} failed={failed_count}", flush=True)
+    return {
+        "ok": failed_count == 0,
+        "status": "done" if failed_count == 0 else "partial",
+        "stories": results,
+        "processed": len(results),
+        "ok_count": ok_count,
+        "failed_count": failed_count,
+        "returncode": proc.returncode,
+        "legacy_staging_dir": str(staging),
+        "legacy_log_path": str(legacy_log),
+    }

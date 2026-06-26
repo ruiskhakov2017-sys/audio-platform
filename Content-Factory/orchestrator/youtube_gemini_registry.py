@@ -90,12 +90,13 @@ def _gem_id(url: str) -> str:
 
 
 def _gem_url(gem_id_or_url: str, account_index: int | None = None) -> str:
+    del account_index
     gem_id = _gem_id(gem_id_or_url) or str(gem_id_or_url or "").strip()
     if not gem_id:
         return ""
-    if account_index is None:
-        return f"https://gemini.google.com/gem/{gem_id}"
-    return f"https://gemini.google.com/u/{account_index}/gem/{gem_id}"
+    # Visuals workers run in separate Chrome profiles. In that model the logged-in
+    # account is the profile's /u/0, so forcing /u/N redirects to the wrong slot.
+    return f"https://gemini.google.com/gem/{gem_id}"
 
 
 def _authuser_from_url(url: str) -> int | None:
@@ -234,7 +235,7 @@ def resolve_youtube_gemini_bots(config: OrchestratorConfig) -> dict[str, Any]:
                 profile_path=profile_path,
                 character_url=character_url,
                 director_url=director_url,
-                app_url=f"https://gemini.google.com/u/{account_index}/app",
+                app_url="https://gemini.google.com/app",
             )
         )
 
@@ -269,6 +270,7 @@ def _entry_payload(entry: GeminiRegistryEntry | None, stage_key: str) -> dict[st
         "account_index": entry.account_index,
         "profile_path": str(entry.profile_path),
         "gem_url": url,
+        "app_url": entry.app_url,
         "source": "configs/gemini_bots_registry.yaml",
     }
 
@@ -305,7 +307,7 @@ def sync_youtube_gemini_legacy_files(config: OrchestratorConfig, *, story_dir: P
             {
                 "email": str(item.get("email", "")),
                 "url": str(item.get("gem_url", "")),
-                "app": f"https://gemini.google.com/u/{int(item.get('account_index', idx))}/app",
+                "app": str(item.get("app_url") or "https://gemini.google.com/app"),
             }
             for idx, item in enumerate(director_chain)
             if isinstance(item, dict)

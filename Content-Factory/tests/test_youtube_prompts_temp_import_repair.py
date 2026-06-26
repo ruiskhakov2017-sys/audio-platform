@@ -167,6 +167,74 @@ def test_count_mismatch_temp_rejected(tmp_path, monkeypatch) -> None:
     assert row["action"] == "rejected"
 
 
+def test_small_complete_run_count_shortage_imported_with_actual_expected(tmp_path, monkeypatch) -> None:
+    cfg = _cfg(tmp_path, monkeypatch)
+    story_dir = _write_story(tmp_path, story_id="Who You Love", expected=96)
+    _write_temp_prompts(tmp_path, worker="worker_2", story_id="Who You Love", text=_prompt_text(94))
+
+    result = run_youtube_prompts_temp_import_repair(
+        config=cfg,
+        options=YoutubePromptsTempImportRepairOptions(youtube_run_id=LAUNCH_ID, run_session_id=SESSION_ID, execute=True),
+    )
+
+    row = next(item for item in result["stories"] if item["story"] == "Who You Love")
+    manifest = json.loads((story_dir / "youtube_story_manifest.json").read_text(encoding="utf-8"))
+    assert row["action"] == "imported"
+    assert manifest["visual_prompts"]["expected_prompts"] == 94
+    assert manifest["visual_prompts"]["actual_prompts"] == 94
+
+
+def test_complete_partial_checkpoint_is_materialized_and_imported(tmp_path, monkeypatch) -> None:
+    cfg = _cfg(tmp_path, monkeypatch)
+    story_dir = _write_story(tmp_path, story_id="Who You Love", expected=96)
+    final_path = _write_temp_prompts(tmp_path, worker="worker_2", story_id="Who You Love", text=None)
+    stage_dir = final_path.parent
+    (stage_dir / "prompts_list.partial.txt").write_text(_prompt_text(94), encoding="utf-8")
+    (stage_dir / "director_checkpoint.json").write_text(
+        json.dumps({"total_chunks": 27, "next_chunk_index": 27}),
+        encoding="utf-8",
+    )
+
+    result = run_youtube_prompts_temp_import_repair(
+        config=cfg,
+        options=YoutubePromptsTempImportRepairOptions(
+            youtube_run_id=LAUNCH_ID,
+            run_session_id=SESSION_ID,
+            execute=True,
+        ),
+    )
+
+    row = next(item for item in result["stories"] if item["story"] == "Who You Love")
+    assert row["action"] == "imported"
+    assert (stage_dir / "prompts_list.txt").is_file()
+    assert (story_dir / "06_prompts" / "prompts_list.txt").is_file()
+
+
+def test_incomplete_partial_checkpoint_is_not_materialized(tmp_path, monkeypatch) -> None:
+    cfg = _cfg(tmp_path, monkeypatch)
+    _write_story(tmp_path, story_id="Who You Love", expected=96)
+    final_path = _write_temp_prompts(tmp_path, worker="worker_2", story_id="Who You Love", text=None)
+    stage_dir = final_path.parent
+    (stage_dir / "prompts_list.partial.txt").write_text(_prompt_text(94), encoding="utf-8")
+    (stage_dir / "director_checkpoint.json").write_text(
+        json.dumps({"total_chunks": 27, "next_chunk_index": 26}),
+        encoding="utf-8",
+    )
+
+    result = run_youtube_prompts_temp_import_repair(
+        config=cfg,
+        options=YoutubePromptsTempImportRepairOptions(
+            youtube_run_id=LAUNCH_ID,
+            run_session_id=SESSION_ID,
+            execute=True,
+        ),
+    )
+
+    row = next(item for item in result["stories"] if item["story"] == "Who You Love")
+    assert row["reason"] == TEMP_PROMPTS_MISSING
+    assert not (stage_dir / "prompts_list.txt").exists()
+
+
 def test_stale_forbidden_temp_rejected(tmp_path, monkeypatch) -> None:
     cfg = _cfg(tmp_path, monkeypatch)
     _write_story(tmp_path, story_id="Do You Want To Know A Secret", expected=2)
@@ -179,6 +247,34 @@ def test_stale_forbidden_temp_rejected(tmp_path, monkeypatch) -> None:
     row = next(item for item in result["stories"] if item["story"] == "Do You Want To Know A Secret")
     assert row["reason"] == TEMP_PROMPTS_FORBIDDEN_TERMS
     assert row["action"] == "rejected"
+
+
+def test_blocked_age_terms_can_be_normalized_to_explicit_adults(tmp_path, monkeypatch) -> None:
+    cfg = _cfg(tmp_path, monkeypatch)
+    story_dir = _write_story(tmp_path, story_id="Do You Want To Know A Secret", expected=2)
+    source = _write_temp_prompts(
+        tmp_path,
+        worker="worker_1",
+        story_id="Do You Want To Know A Secret",
+        text=_prompt_text(2, forbidden=True),
+    )
+
+    result = run_youtube_prompts_temp_import_repair(
+        config=cfg,
+        options=YoutubePromptsTempImportRepairOptions(
+            youtube_run_id=LAUNCH_ID,
+            run_session_id=SESSION_ID,
+            normalize_blocked_ages=True,
+            execute=True,
+        ),
+    )
+
+    row = next(item for item in result["stories"] if item["story"] == "Do You Want To Know A Secret")
+    canonical = (story_dir / "06_prompts" / "prompts_list.txt").read_text(encoding="utf-8").lower()
+    assert row["action"] == "imported"
+    assert "teen" not in canonical
+    assert "adult" in canonical
+    assert "teenage" in source.read_text(encoding="utf-8").lower()
 
 
 def test_next_stage_allowed_false_when_blocked_and_no_failed_ok_true(tmp_path, monkeypatch) -> None:

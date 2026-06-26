@@ -1,222 +1,308 @@
-# Content-Factory — Implementation Backlog
+# Automation Readiness Backlog
 
-Связан с `docs/AUTOMATION_READINESS_AUDIT.md`.
+Связано с `docs/AUTOMATION_READINESS_AUDIT.md`.
 
-Приоритеты:
+## Phase 1 — Site Full Auto Stabilization
 
-- **P0** — обязательно до чистового запуска 400–500 рассказов.
-- **P1** — важно, но допустимо после первого controlled production run.
-- **P2** — улучшения / удобство.
+Цель: сделать `SITE FULL AUTO` реальной production-командой от source/library до site publish report.
 
-Acceptance criteria — проверяемые. Нет «вообще лучше».
+Файлы:
 
----
+- `Content-Factory-Запуск.bat`
+- `orchestrator/cli.py`
+- `orchestrator/human_launch_site_flow_bat.py`
+- `orchestrator/human_launch_site_bootstrap.py`
+- `orchestrator/site_publish/collect_assets.py`
+- `orchestrator/site_publish/prepare.py`
+- `orchestrator/site_publish/publish.py`
+- `orchestrator/wrappers/autopublisher.py`
+- `orchestrator/wrappers/site_tts_stage.py`
 
-## P0 — обязательно до чистового запуска
+Что менять:
 
-### P0-1. Вшить `site-publish collect-assets + prepare` в `run-site-flow`
+- Встроить `site-publish collect-assets --launch-dir <launch> --allow-partial-tts --execute` после TTS import и перед publish.
+- Встроить `site-publish prepare --launch-dir <launch> --allow-partial-tts --execute` перед autopublisher.
+- Передавать launch-scoped publish root в autopublisher wrapper, чтобы не полагаться на global `output/site`.
+- Автоматически запускать `launch final-report --execute` в конце успешного/partial site flow.
+- Сделать `sample-library --per-folder N` optional pre-stage в Site full auto. Важно: текущий `per-folder` означает top-level library folder, не metadata genre.
+- Параметризовать per-genre count: `--source-dir`, `--per-genre`, `--sample-mode copy|move`.
+- Добавить preflight блокеры для site env, Drive root, required Python deps, ffmpeg only if needed.
 
-| Поле | Значение |
-|---|---|
-| Why needed | Сейчас после `run-site-flow` пакеты `output/site/<story>/{text,info,mp3,image}` собираются руками. Это причина `prepare scanned=0`. Без этого one-button не работает. |
-| Files likely affected | `orchestrator/human_launch_site_flow_bat.py`, `orchestrator/site_publish/collect_assets.py`, `orchestrator/wrappers/autopublisher.py` |
-| Acceptance criteria | После `run-site-flow --bat-profile kokoro-drive --execute` без ручных команд: `output/site/<story>/<story>.mp3 + info.txt + *.jpg + *__M/F/U.txt` собраны для каждого ready рассказа. `site_publish_collect_assets_report.json.packages_ready` равен числу ready stories. `autopublisher` wrapper не возвращает `scanned=0`. |
+Команды после phase:
 
-### P0-2. Telegram stage (raw text + post + image + URL)
+- `python -m orchestrator site full-auto --launch-name <name> --source-dir <library> --per-genre 5 --execute`
+- `python -m orchestrator site resume --launch-name <name> --execute`
+- `python -m orchestrator site publish --launch-name <name> --execute`
 
-| Поле | Значение |
-|---|---|
-| Why needed | Пользователь хочет, чтобы рассказ ушёл в Telegram одновременно с публикацией на сайт. Сейчас отсутствует. |
-| Files likely affected | `orchestrator/wrappers/telegram_publish.py` (new), `orchestrator/site_publish/...`, `orchestrator/human_launch_layout.py` (добавить `D04_TELEGRAM` в `top_level_dirs`), `orchestrator/cli.py` (add `telegram` subcommand), `configs/orchestrator.example.yaml` (telegram block), `.env.telegram` |
-| Acceptance criteria | (1) `python -m orchestrator telegram prepare --launch-name X` показывает план без отправки. (2) `telegram send --launch-name X --execute` отправляет N рассказов в `TELEGRAM_CHANNEL_ID`. (3) повторный `telegram send` skips уже отправленные (`telegram_sent.json` per story). (4) `Запуски/<name>/04_Telegram/<story>/{post.txt, image.jpg, sent.json}` создаётся. (5) `published_telegram` counter в `launch status.json` увеличивается. См. `docs/TELEGRAM_STAGE_SPEC.md`. |
+Как тестировать:
 
-### P0-3. Перенести `output/site/<story>/` под `Запуски/<name>/...` (partially implemented)
+- Smoke: 2 stories, one with missing cover, one complete.
+- Controlled: 5 stories per genre from library with `--sample-mode copy`.
+- Crash test: stop during phase-a, rerun same launch.
+- TTS partial: mark one expected mp3 skipped, verify publish continues for ready packages.
 
-| Поле | Значение |
-|---|---|
-| Why needed | Сейчас 836 рассказов в `output/site/` — пересечение всех запусков. Удалить папку запуска не получается «чисто». |
-| Files likely affected | `orchestrator/site_publish/paths.py` (NEW), `orchestrator/site_publish/{prepare,collect_assets,publish}.py`, `orchestrator/cli.py`. ВНЕ ЗАДАЧИ (для следующего шага): `wrappers/autopublisher.py` через Runner и `youtube_from_site.py`. |
-| Acceptance criteria | После `run-site-flow --bat-profile kokoro-drive --execute` все site story packages лежат в `Запуски/<LAUNCH>/02_Сайт/05_Публикация_на_сайт/<story>/`. `output/site/` в корне репо НЕ обновляется. `delete launch --execute` удаляет все site артефакты этого запуска. |
-| Status (2026-05-27) | **partially implemented** (запрошено как P0-4: run-scoped paths для site-publish output). Реализовано: единый resolver `orchestrator/site_publish/paths.py::resolve_site_publish_output_dir(launch_name, story_id, launch_dir)`. `site-publish collect-assets / prepare / publish` приняли `--launch-name`/`--launch-dir`. При флаге пишут в `Запуски/<LAUNCH>/02_Сайт/05_Публикация_на_сайт/<story>/`, без флага — legacy fallback `output/site/<story>/`. To_Publish bridge в run-scoped режиме: `…/05_Публикация_на_сайт/_to_publish/<story>/`. Манифест `site_publish_manifest.json` пишется на каждом stage. Осталось: интеграция в `run-site-flow` (P0-1) и `autopublisher` wrapper (передача `--launch-dir` через Runner). |
+Готовность:
 
-### P0-4. Перенести `output/youtube/<story>/` под `Запуски/<name>/...`
+- No manual shell command between launch start and final report.
+- `status.json` shows completed or partially_completed with exact reasons.
+- `06_Отчёты/ФИНАЛЬНЫЙ_ОТЧЁТ.json` and `cleanup_manifest.json` are written.
+- `site_publish_manifest.json` exists and points to run-scoped package root.
 
-| Поле | Значение |
-|---|---|
-| Why needed | YouTube story tree (00..09) сейчас в `output/youtube/<story>/`, не isolated. |
-| Files likely affected | `orchestrator/youtube_visuals_runner.py`, `youtube_video_drive.py`, `youtube_video_segments.py`, `youtube_from_site.py`, `youtube_tts_kokoro_bridge.py`, `wrappers/autovideo.py`, `wrappers/director20.py` |
-| Acceptance criteria | YouTube артефакты пишутся в `Запуски/<LAUNCH>/03_YouTube/<story>/00_source ... 08_video/`. `delete launch --execute` чистит и YouTube артефакты. Drive артефакты (`G:\Мой диск\ContentFactory_YouTube\video_jobs\<story>\`) остаются external, но их путь записан в `<launch>/03_YouTube/<story>/_drive_binding.json`. |
+## Phase 2 — Artifact Structure / Launch Folder Cleanup
 
-### P0-5. Production меню в bat (separate Production / Smoke / Maintenance)
+Цель: один launch folder должен содержать все локальные артефакты запуска или ссылки на explicit external bindings.
 
-| Поле | Значение |
-|---|---|
-| Why needed | Сейчас [1] legacy danger и [2] production рядом. Можно нажать не туда и записать в global runs/output. |
-| Files likely affected | `Content-Factory-Запуск.bat` |
-| Acceptance criteria | Новое главное меню: Production (Site / YouTube / TTS / Status / Reports), Smoke / Diagnostics, Maintenance. Legacy [1] и [6] недоступны без переключения в Maintenance. См. `docs/BAT_MENU_TARGET.md`. |
+Файлы:
 
-### P0-6. Idempotent batch YouTube flow
+- `orchestrator/human_launch_layout.py`
+- `orchestrator/human_launch_lifecycle.py`
+- `orchestrator/human_launch_legacy_sync.py`
+- `orchestrator/site_publish/paths.py`
+- `orchestrator/youtube_from_site.py`
+- `orchestrator/youtube_visuals_runner.py`
+- `orchestrator/youtube_video_drive.py`
+- `orchestrator/youtube_video_segments.py`
+- `orchestrator/runner.py`
 
-| Поле | Значение |
-|---|---|
-| Why needed | YouTube сейчас per-story. Чтобы публиковать 50 видео в неделю одной кнопкой — нужен batch. |
-| Files likely affected | `orchestrator/cli.py`, `orchestrator/youtube_from_site.py`, новый `orchestrator/youtube_batch_flow.py` |
-| Acceptance criteria | `python -m orchestrator youtube run-batch --youtube-run-id <id> --site-run-id <id> --execute` идёт по списку YES-stories из `_gemini_selection/output` и для каждого: safe-english-run → promo-run → visuals-run --auto-gemini → tts-export → wait → tts-import → video prepare-segments → export-job → wait workers → import-results → assemble-final. Re-run скипает завершённые. Все промежуточные команды — те же что и сейчас. |
+Что менять:
 
-### P0-7. `final-report` + `published_telegram` в `run-site-flow`
+- Сделать run-scoped site publish root default для `run-site-flow`.
+- Ввести `Запуски/<launch>/03_YouTube/<story>` как primary output для YouTube.
+- Зеркалировать `.orchestrator/events/status/reports` в `Запуски/<launch>/07_Логи`.
+- Записывать Drive bindings:
+  - `10_Временные_файлы/drive_bindings/site_tts.json`
+  - `03_YouTube/<story>/_drive_video_job.json`
+- Обновить `delete launch --execute` так, чтобы он проверял external bindings и писал, что не удалено без `--drive-cleanup`.
 
-| Поле | Значение |
-|---|---|
-| Why needed | Сейчас `final-report` руками. Без него `cleanup_manifest.json` не пишется и `delete launch --execute` блокируется. |
-| Files likely affected | `orchestrator/human_launch_site_flow_bat.py`, `orchestrator/human_launch_lifecycle.py::generate_final_report_launch` |
-| Acceptance criteria | После успешного `run-site-flow`: `Запуски/<name>/06_Отчёты/{ФИНАЛЬНЫЙ_ОТЧЁТ.json, cleanup_manifest.json}` существуют. `published_site + published_telegram` правильно посчитаны. |
+Команды после phase:
 
-### P0-8. `delete launch` чистит Drive (опционально, с подтверждением)
+- `python -m orchestrator launch cleanup-plan --name <launch>`
+- `python -m orchestrator launch delete --name <launch> --execute`
+- `python -m orchestrator launch delete --name <launch> --execute --drive-cleanup`
 
-| Поле | Значение |
-|---|---|
-| Why needed | Сейчас `delete launch --execute` чистит только локальную папку. Drive copies остаются. |
-| Files likely affected | `orchestrator/human_launch_lifecycle.py::delete_launch`, новый helper в `site_tts/colab_batch.py` и `youtube_video_drive.py` для drive cleanup |
-| Acceptance criteria | `delete launch --execute --drive-cleanup` дополнительно удаляет `G:\Мой диск\ContentFactory_TTS\<run_id>\` (если cleanup_after_success=true в config) и `G:\Мой диск\ContentFactory_YouTube\video_jobs\<story>\` для всех stories запуска. Без `--drive-cleanup` — только local. |
+Как тестировать:
 
-### P0-9. Watcher loop для youtube_video assigned queues
+- Создать launch, прогнать 2 stories, удалить dry-run.
+- Проверить, что root `output/site` и `output/youtube` не обновились в run-scoped mode.
+- Проверить, что cleanup-plan честно перечисляет Drive external leftovers.
 
-| Поле | Значение |
-|---|---|
-| Why needed | Сейчас reclaim-stale запускается руками. При 5 Colab workers и десятках сегментов — будут зависания. |
-| Files likely affected | `orchestrator/youtube_video_drive.py`, `Content-Factory-Запуск.bat` |
-| Acceptance criteria | `python -m orchestrator youtube video watcher --story-id X --interval-min 5 --reclaim-stale-min 30` запускает бесконечный loop: каждые 5 мин `queue-status`, каждые 30 мин `reclaim-stale-segments --execute`. Корректно ловит Ctrl+C. |
+Готовность:
 
-### P0-10. Stable resume гарантия для phase-a (recovery_queue_map.json всегда)
+- Удаление `Запуски/<launch>` удаляет все локальные временные файлы запуска.
+- External Drive leftovers известны и управляются отдельным explicit флагом.
 
-| Поле | Значение |
-|---|---|
-| Why needed | При отсутствии `recovery_queue_map.json` `run-site-flow` может проиграть весь `stories/input` повторно. |
-| Files likely affected | `orchestrator/human_launch_site_bootstrap.py`, `orchestrator/human_launch_legacy_sync.py`, `orchestrator/launch start-site`. |
-| Acceptance criteria | После первого успешного `phase-a` запуска `Запуски/<name>/10_Временные_файлы/recovery_queue_map.json` создаётся. При resume `run-site-flow` уважает его строки и не повторно отправляет уже `selection_done=true` рассказы. |
+## Phase 3 — Telegram Stage
 
----
+Цель: site publish автоматически отправляет Telegram announcement и пишет report.
 
-## P1 — важно, но можно после первого controlled run
+Файлы:
 
-### P1-1. Mirror `.orchestrator/{events,status,reports,logs}` → `Запуски/<name>/07_Логи/`
+- new `orchestrator/telegram_publish.py`
+- new `orchestrator/wrappers/telegram_publish.py`
+- `orchestrator/cli.py`
+- `orchestrator/human_launch_layout.py`
+- `orchestrator/human_launch_lifecycle.py`
+- `orchestrator/site_publish/publish.py`
+- `orchestrator/wrappers/__init__.py`
+- new `.env.telegram.example`
 
-| Why needed | Логи `.orchestrator/` сейчас в корне репо. Хочется иметь все логи запуска в его папке. |
-| Files | `orchestrator/events.py`, `orchestrator/status.py`, `orchestrator/runner.py` |
-| Acceptance | Запуск с `--launch-dir <X>` дублирует append в `<X>/07_Логи/events.jsonl` и `status.jsonl`. Главные reports тоже копируются в `<X>/07_Логи/reports/`. |
+Что менять:
 
-### P1-2. Automatic mark-missing-skipped после `max_wait_hours`
+- Добавить `04_Telegram` в top-level launch dirs.
+- Добавить `telegram prepare/status/send`.
+- Взять из story package: title, cover, description/post text, site URL, optional audio preview.
+- Ввести marker `telegram_sent.json` per story.
+- Редактировать status aggregation: `published_telegram`.
+- Добавить env-doctor с redaction для токена.
 
-| Why needed | Сейчас при зависании TTS пользователь ждёт сутки или жмёт `mark-missing-skipped` руками. |
-| Files | `orchestrator/site_tts/colab_batch.py` |
-| Acceptance | `site-tts kokoro-colab wait-drive --auto-mark-missing-skipped-after-hours 12` после 12 часов без прогресса помечает оставшиеся как `manual_skipped` с reason `auto_timeout_12h`. Site publish продолжает с partial. |
+Команды после phase:
 
-### P1-3. Smoke-режим в новом меню
+- `python -m orchestrator telegram prepare --launch-name <launch>`
+- `python -m orchestrator telegram send --launch-name <launch> --execute`
+- `python -m orchestrator telegram status --launch-name <launch>`
 
-| Why needed | `smoke-site-cycle`, `init-bridge-fixture`, `phase-b --allow-scaffold` нужны для тестов, но не должны быть рядом с production. |
-| Files | `Content-Factory-Запуск.bat` |
-| Acceptance | Smoke / Diagnostics секция в меню содержит smoke-site-cycle, init-bridge-fixture, scaffold phase-b, preflight, dry-run audits. Production меню их не показывает. |
+Как тестировать:
 
-### P1-4. Status / progress dashboard
+- Dry-run without token -> blocked with clear env report.
+- Execute with test channel -> sends one story.
+- Re-run -> skips sent story.
+- Simulated Telegram API failure -> site publish remains successful, Telegram report says failed/retryable.
 
-| Why needed | Сейчас прогресс — это `sync-progress` или `queue-status`. Нет единой команды «как идёт запуск». |
-| Files | новый `orchestrator/launch dashboard` |
-| Acceptance | `python -m orchestrator launch dashboard --name X` показывает: stories total, ready_to_publish, published, telegram_sent, youtube_video_assembled, errors. Read-only. |
+Готовность:
 
-### P1-5. Cover auto-prepare через Gemini
+- Telegram stage does not duplicate messages.
+- Site final report includes Telegram sent/skipped/failed counts.
 
-| Why needed | Сейчас пользователь руками кладёт обложки. Можно через site_info.visual_prompt + flux/SDXL generate. |
-| Files | новый `orchestrator/site_visual/auto_generate.py`, `wrappers/...` |
-| Acceptance | Опциональная команда `site-visual auto-generate --launch X --execute` для рассказов без image. Создаёт `<story>.jpg`. Не блокирует pipeline, но если включена в run-site-flow — пропуск рассказов с missing image снижается. |
+## Phase 4 — YouTube Full Auto Stabilization
 
-### P1-6. YouTube upload stage
+Цель: одна команда доводит хотя бы один site-approved story до `final_video.mp4`.
 
-| Why needed | После `assemble-final` видео руками заливается на YouTube. Можно автоматизировать. |
-| Files | новый `orchestrator/youtube_upload/...`, `runtime_modes.youtube_publish=api` |
-| Acceptance | `youtube upload --story-id X --execute` через YouTube Data API заливает `final_video.mp4`, ставит title/description/tags из safe story + site_info. Idempotent (per-story marker). |
+Файлы:
 
-### P1-7. Live YouTube launch status в `Запуски/<name>/03_YouTube/`
+- `orchestrator/cli.py`
+- new `orchestrator/youtube_full_flow.py`
+- `orchestrator/youtube_from_site.py`
+- `orchestrator/youtube_safe_english_bridge.py`
+- `orchestrator/youtube_promo_bridge.py`
+- `orchestrator/youtube_visuals_runner.py`
+- `orchestrator/youtube_tts_kokoro_bridge.py`
+- `orchestrator/youtube_video_segments.py`
+- `orchestrator/youtube_video_drive.py`
 
-| Why needed | YouTube артефакты не зеркалируются в launch. |
-| Files | `orchestrator/youtube_visuals_runner.py`, новый `youtube_launch_sync.py` |
-| Acceptance | После `visuals-run` / `video assemble-final` финальные артефакты копируются в `Запуски/<name>/03_YouTube/<story>/{02_safe_story.txt, final_video.mp4, characters.txt, prompts_list.txt}`. |
+Что менять:
 
-### P1-8. Drive disk space pre-check
+- Добавить `youtube full-auto --from-site-launch <launch> --story-limit N`.
+- Добавить batch loop по selected stories.
+- Убрать ручной `story_id` из production flow, оставить per-story commands как debug.
+- Ввести YouTube launch manifest/status per story.
+- После watcher completion automatically call `import-results` and `assemble-final`.
+- Параметризовать RunPod URL once per batch.
+- Не использовать legacy `[6] YouTube full pipeline` как основу production flow: текущий production-grade video route живёт в `output/youtube/<story>` + `youtube_video_drive.py`.
 
-| Why needed | Site TTS / YouTube video Drive могут переполнить квоту 15GB. |
-| Files | `site_tts/colab_batch.py + youtube_video_drive.py` (preflight) |
-| Acceptance | Перед export job — оценка размера; warning если total > 80% бесплатной квоты Drive.  |
+Команды после phase:
 
-### P1-9. Атомарная отметка `published_site_url` в результат
+- `python -m orchestrator youtube full-auto --from-site-launch <launch> --story-limit 1 --execute`
+- `python -m orchestrator youtube resume --launch-name <launch> --execute`
+- `python -m orchestrator youtube status --launch-name <launch>`
 
-| Why needed | Чтобы Telegram мог послать URL, нужно сохранить site URL после publish. |
-| Files | `legacy/autopublisher/publish_stories.py` (если можно патчить) или `wrappers/autopublisher.py` парсит stdout и пишет `output/site/<story>/published.json` |
-| Acceptance | После publish для каждого `<story>` создаётся `published.json` с `{site_url, supabase_record_id, r2_audio_key, published_at}`. Telegram читает оттуда. |
+Как тестировать:
 
-### P1-10. CI / pre-flight static checks в bat
+- One story with existing safe text/audio/frames -> prepare/export/import/assemble.
+- One story from site selection -> full route to `final_video.mp4`.
+- Missing frames -> blocked with next action.
 
-| Why needed | Сейчас preflight — отдельный пункт. Можно автоматом перед run-site-flow. |
-| Files | `Content-Factory-Запуск.bat`, `orchestrator/preflight.py` |
-| Acceptance | `[Site Production] → Full Run` сначала вызывает `preflight --pipeline site --run-profile dry-run-all` и если есть blockers — спрашивает «продолжить?». |
+Готовность:
 
----
+- One command can produce `final_video.mp4` for at least one story when external Colab/RunPod workers complete.
+- Resume does not repeat completed safe/promo/audio/video stages.
 
-## P2 — удобства
+## Phase 5 — Colab / RunPod Render Production Hardening
 
-### P2-1. Web UI вместо bat
+Цель: сделать Drive render queue устойчивой для 10 workers.
 
-| Why needed | bat-меню не масштабируется. |
-| Files | новый `app/` (FastAPI или streamlit) |
-| Acceptance | Запуск через одну кнопку в браузере; статус на той же странице. Опционально. |
+Файлы:
 
-### P2-2. Параллельные launch (Site + YouTube одновременно)
+- `START_YOUTUBE_VIDEO_PRODUCTION_10COLAB.bat`
+- `START_YOUTUBE_VIDEO_WATCHER.bat`
+- `START_COLAB_ALL.bat`
+- `tools/colab_launcher/launch_colab_group.py`
+- `configs/youtube_video_colab_workers.yaml`
+- `orchestrator/youtube_video_drive.py`
+- `colab_workers/youtube_video/*.ipynb`
 
-| Why needed | Сейчас один launch блокирует второй (Chrome user_data конфликты). |
-| Files | `orchestrator/phase_a_gemini_supervisor.py` |
-| Acceptance | Можно одновременно держать Site phase-a и YouTube safe-english-run, если использовать разные account profiles. |
+Что менять:
 
-### P2-3. Анти-throttling для Google Drive
+- Убрать hardcoded story id из BAT, принимать `%1` или prompt.
+- Перед запуском workers делать `validate-job-assets`.
+- Watcher должен по completion вызывать import + assemble.
+- `queue-status` должен ясно показывать permanent_failed и next retry command.
+- Добавить worker health preflight по prepared notebook URL/profile.
+- Добавить max-attempt policy для failed segments: `requeue-failed --segment-id` или `requeue-failed --all`.
+- Синхронизировать смысл workers: `configs/youtube_video_render.yaml` сейчас содержит 5 render workers, а `configs/youtube_video_colab_workers.yaml` описывает 10 prepared browser workers.
 
-| Why needed | На больших batch Drive копирует мееедленно или 0-byte файлы. |
-| Files | `site_publish/collect_assets.py`, `youtube_video_drive.py` |
-| Acceptance | Retry/backoff с экспоненциальной задержкой; predict Drive cache delay. |
+Команды после phase:
 
-### P2-4. Поддержка нескольких Telegram каналов / групп
+- `python -m orchestrator youtube video production --story-id <id> --workers 10 --execute`
+- `python -m orchestrator youtube video requeue-failed --story-id <id> --all --execute`
 
-| Why needed | Можно публиковать разные жанры в разные каналы. |
-| Files | `configs/telegram_channels.yaml` |
-| Acceptance | `telegram send --channel <slug>` берёт `bot_token / channel_id` из registry. |
+Как тестировать:
 
-### P2-5. Лог-метрики через JSON Schema
+- 3 segments, 2 workers, kill one worker mid-processing.
+- Verify stale reclaim returns segment to pending.
+- Verify failed after max attempts appears in report.
 
-| Why needed | `events.jsonl` сейчас free-form. Хочется чёткой схемы. |
-| Files | `orchestrator/events.py` |
-| Acceptance | каждый event валидируется против `events.schema.json`; pre-commit hook. |
+Готовность:
 
-### P2-6. История запусков с поиском
+- 10 worker launcher is parameterized.
+- No hardcoded production story.
+- Queue can recover stale and report failed deterministically.
 
-| Why needed | `История_запусков/` сейчас плоский список csv. |
-| Files | `orchestrator/human_launch_lifecycle.py::delete_launch` + новая команда `history list/search` |
-| Acceptance | `launch history list --status completed --published-gt 100` — отчёт по архивным запускам. |
+## Phase 6 — Final BAT Menu And Docs
 
-### P2-7. Cleanup quarantine auto-old (>30 days)
+Цель: top-level menu должен быть понятным и безопасным.
 
-| Why needed | `Запуски/_Карантин_старых_запусков/` копится. |
-| Files | `orchestrator/cleanup.py` |
-| Acceptance | `quarantine purge --older-than-days 30 --execute` удаляет старый карантин. |
+Файлы:
 
----
+- `Content-Factory-Запуск.bat`
+- `START_*.bat`
+- `docs/*.md`
 
-## Risk register (extended)
+Что менять:
 
-См. секцию 7 в `docs/AUTOMATION_READINESS_AUDIT.md` + дополнительно:
+- Разделить меню на Production / Smoke / Maintenance.
+- Скрыть legacy dangerous `[1]` и deprecated YouTube `[6]` за Maintenance confirmation.
+- Добавить:
+  - `SITE FULL AUTO`
+  - `SITE RESUME`
+  - `SITE STATUS`
+  - `YOUTUBE FULL AUTO`
+  - `YOUTUBE RESUME`
+  - `YOUTUBE VIDEO RENDER`
+  - `QUEUE STATUS`
+  - `CLEANUP / RETRY`
+- В меню показывать exact command before execution.
+- Явно показать, что complete `YOUTUBE RESUME` и named `CLEANUP / RETRY` пока должны появиться как production wrappers; сейчас есть только частичные команды (`phase-a --resume`, `watch-queue`, `reclaim-stale-segments`, `cleanup-partial-checkpoints`).
 
-| Risk | Pipeline | Severity | Symptom | Recommended fix priority |
-|---|---|---|---|---|
-| Pip env drift (boto3 / tinytag / kokoro missing) | site / publish | high | publish `blocked: missing dependency` | P0 (env-doctor уже есть; добавить в preflight Production) |
-| .env.site_publish missing or wrong | site publish | high | env-doctor returns blockers | P0 (env-doctor вызывается; UI улучшить) |
-| Chrome user_data corrupted | site / youtube | high | Gemini login loop | P1 (auto-reset user_data per profile) |
-| RunPod URL expired mid-run | youtube | medium | frames-runpod fails | P1 (один раз спросить и reuse в batch) |
-| 5 Colab workers одновременно стартуют разные jobs одной story | youtube | medium | duplicate processing | P1 (assigned queues решают, но dispatch должен учитывать concurrency) |
-| ffmpeg crash / GPU OOM на Colab | youtube | medium | segment failed | P1 (auto-retry в reclaim-stale, если worker logger показывает OOM — переставить) |
-| Tokens leak в `events.jsonl` | telegram (future) | high | secrets in repo logs | P0 при подключении telegram (redact + safety rule) |
+Команды после phase:
+
+- BAT production menu mirrors CLI production commands.
+
+Как тестировать:
+
+- Dry-run click-through for every menu item.
+- Confirm dangerous legacy path requires extra confirmation.
+
+Готовность:
+
+- Expert user can run production flow without remembering manual CLI commands.
+
+## Phase 7 — End-To-End Smoke Tests
+
+Цель: доказать, что проект завершён не на словах.
+
+Файлы:
+
+- new `tests/smoke/test_site_full_auto.py` or script under `tools/smoke/`
+- new `tests/smoke/test_youtube_one_story.py`
+- `docs/FINAL_PRODUCTION_CRITERIA.md`
+
+Что менять:
+
+- Добавить fixture stories.
+- Добавить dry-run test and controlled execute test with mocked external calls where possible.
+- Добавить real smoke checklist for Colab/RunPod/manual external boundary.
+
+Команды после phase:
+
+- `python -m orchestrator smoke site --stories 2 --execute`
+- `python -m orchestrator smoke youtube --story-id <id> --execute`
+
+Как тестировать:
+
+- Run before release.
+- Verify reports exist and no unexpected root `output/*` changes in run-scoped mode.
+
+Готовность:
+
+- Smoke passes from clean launch folder.
+- Docs reflect actual commands.
+
+## Top 10 Blockers
+
+1. Telegram stage отсутствует.
+2. YouTube full-auto batch command отсутствует.
+3. YouTube upload/publish отсутствует.
+4. YouTube artifacts are not run-scoped under `Запуски/<launch>`.
+5. Site visual covers still require manual upload.
+6. Site/YouTube Colab execution still requires manual OAuth/run.
+7. `START_YOUTUBE_VIDEO_*` scripts hardcode one story id.
+8. `.orchestrator` status/reports are global, not launch-scoped.
+9. `output/site` / `output/youtube` can mix multiple launches.
+10. `final-report` / cleanup preconditions are not automatically completed by full flows.
+
+## Current Observed Failure To Use As Regression Fixture
+
+- `Запуски/SITE_FULL_20260513_1309/status.json`: `status=failed`, `current_stage=02_Сайт/03_Визуал_для_сайта`, `can_resume=true`.
+- Trace for the same launch reports `site_flow_site_run_failed` and site run exit `2`.
+- Add this launch shape as a regression fixture for Phase 1/2: resume must not replay already completed selection/TTS/publish markers, and status must explain whether the next action is visual cover import, site publish asset collection, or repair.
+

@@ -80,9 +80,11 @@ def test_syncs_legacy_visuals_gemini_files_from_registry(tmp_path: Path) -> None
     assert result["ok"]
     assert not result["old_urls_found_in_active_legacy"]
     synced_config = json.loads((director / "config.json").read_text(encoding="utf-8"))
-    assert synced_config["characters_gemini_url"] == "https://gemini.google.com/u/0/gem/char2"
-    assert synced_config["gemini_url"] == "https://gemini.google.com/u/0/gem/dir2"
+    assert synced_config["characters_gemini_url"] == "https://gemini.google.com/gem/char2"
+    assert synced_config["gemini_url"] == "https://gemini.google.com/gem/dir2"
     synced_chain = json.loads((director / "gemini_bots.json").read_text(encoding="utf-8"))
     assert synced_chain[0]["email"] == "second@example.com"
-    assert synced_chain[0]["url"] == "https://gemini.google.com/u/0/gem/dir2"
+    assert synced_chain[0]["url"] == "https://gemini.google.com/gem/dir2"
+    assert synced_chain[0]["app"] == "https://gemini.google.com/app"
+    assert all("/u/" not in row["url"] for row in synced_chain)
     assert (story_dir / "logs" / "youtube_gemini_bots_preflight.json").is_file()

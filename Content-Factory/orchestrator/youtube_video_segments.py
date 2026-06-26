@@ -68,7 +68,9 @@ def _read_json(path: Path) -> Any:
 
 
 def _story_dir(config: OrchestratorConfig, story_id: str) -> Path:
-    return (config.root_dir / "output" / "youtube" / story_id).resolve()
+    from orchestrator.youtube_path_resolver import resolve_youtube_technical_story_dir
+
+    return resolve_youtube_technical_story_dir(config, story_id)
 
 
 def _video_dirs(story_dir: Path) -> dict[str, Path]:

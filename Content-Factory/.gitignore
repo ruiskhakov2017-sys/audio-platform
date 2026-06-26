@@ -51,6 +51,7 @@ models/
 .env.*
 **/.env
 **/.env.*
+secrets/
 !**/.env.example
 !**/.env.template
 
@@ -61,9 +62,31 @@ models/
 legacy/Gemini_Auto/user_data/
 legacy/Gemini_Auto/user_data_*/
 
-# Gemini / browser live profiles - do not commit
-legacy/Gemini_Auto/user_data/
-legacy/Gemini_Auto/user_data_*/
-
 # Local browser profiles for Colab automation
 .browser_profiles/
+.browser_profiles/_proxy_auth_extensions/
+configs/local/*.local.yaml
+
+# Huge legacy publish archives (very long paths on Windows)
+legacy/content_combiner/autopublisher/Published_Archive/
+legacy/autopublisher/Published_Archive/
+legacy/content_combiner/
+legacy/autopublisher/
+
+# Local scratch/test artifacts in repo root
+_COLAB_EXPORTS/
+_TEST_GDRIVE/
+_audit/
+_drive_sim/
+_drive_sim2/
+_e2e_input_3stories_may10/
+reports/
+COLAB_TTS_CURRENT/
+MP3
+short_under_15m
+stories/
+--story-id
+_bat_plus_only.txt
+_bat_recovered_snip.txt
+START_COLAB_SMOKE_1.bat
+TEST_*.bat

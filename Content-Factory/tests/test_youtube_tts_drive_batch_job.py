@@ -69,7 +69,7 @@ def _write_story(root: Path, launch_id: str, name: str, *, audio_done: bool = Fa
     text = promo / "text_ready_for_audio.txt"
     text.write_text(f"This is the production TTS text for {name}.", encoding="utf-8")
     if audio_done:
-        (audio / "narration.mp3").write_bytes(b"x" * 300)
+        (audio / "narration.mp3").write_bytes(b"x" * 40_000)
     manifest = {
         "story_id": name,
         "canonical_basename": name,

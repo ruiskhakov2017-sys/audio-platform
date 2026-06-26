@@ -186,6 +186,18 @@ from orchestrator.youtube_prompts_targeted_repair import (
     YoutubePromptsTargetedRepairOptions,
     run_youtube_prompts_targeted_repair,
 )
+from orchestrator.youtube_prompts_pipeline_forensic import (
+    YoutubePromptsPipelineForensicOptions,
+    run_youtube_prompts_pipeline_forensic,
+)
+from orchestrator.youtube_prompts_pipeline_acceptance import (
+    YoutubePromptsPipelineAcceptanceOptions,
+    run_youtube_prompts_pipeline_acceptance,
+)
+from orchestrator.youtube_prompts_run_until_ready import (
+    YoutubePromptsRunUntilReadyOptions,
+    run_youtube_prompts_run_until_ready,
+)
 from orchestrator.youtube_visual_prompts_audit import (
     YoutubeVisualPromptsAuditOptions,
     run_youtube_visual_prompts_audit,
@@ -193,6 +205,10 @@ from orchestrator.youtube_visual_prompts_audit import (
 from orchestrator.youtube_frames_reset import (
     YoutubeFramesResetOptions,
     run_youtube_frames_reset,
+)
+from orchestrator.youtube_frames_backfill import (
+    YoutubeFramesBackfillOptions,
+    run_youtube_frames_backfill,
 )
 from orchestrator.youtube_visuals_clean import (
     YoutubeVisualsCleanOptions,
@@ -1133,6 +1149,16 @@ def _parser() -> argparse.ArgumentParser:
         help="Call RunPod/ComfyUI and generate missing frames.",
     )
 
+    yt_frames_backfill = yt_sub.add_parser(
+        "frames-backfill-missing",
+        help="Forensic and targeted RunPod retry for missing/invalid/retryable launch frames.",
+    )
+    yt_frames_backfill.add_argument("--youtube-run-id", required=True)
+    yt_frames_backfill.add_argument("--story-id", action="append", default=[])
+    yt_frames_backfill.add_argument("--runpod-url", default="")
+    yt_frames_backfill.add_argument("--workflow", default="")
+    yt_frames_backfill.add_argument("--execute", action="store_true")
+
     yt_visuals_run = yt_sub.add_parser(
         "visuals-run",
         help="Run single-story YouTube visuals state machine through characters/prompts/frames/segment prep.",
@@ -1213,6 +1239,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     yt_prompts_temp_repair.add_argument("--youtube-run-id", required=True)
     yt_prompts_temp_repair.add_argument("--run-session-id", default="")
+    yt_prompts_temp_repair.add_argument("--normalize-blocked-ages", action="store_true")
     yt_prompts_temp_repair.add_argument("--execute", action="store_true")
 
     yt_prompts_targeted_repair = yt_sub.add_parser(
@@ -1225,6 +1252,32 @@ def _parser() -> argparse.ArgumentParser:
     yt_prompts_targeted_repair.add_argument("--preferred-session-id", default="20260618_082047")
     yt_prompts_targeted_repair.add_argument("--accept-known-promo-issues", action="store_true")
     yt_prompts_targeted_repair.add_argument("--execute", action="store_true")
+
+    yt_prompts_pipeline_forensic = yt_sub.add_parser(
+        "prompts-pipeline-forensic",
+        help="Read-only RCA analytics for launch-level YouTube prompts pipeline lifecycle and artifacts.",
+    )
+    yt_prompts_pipeline_forensic.add_argument("--youtube-run-id", required=True)
+    yt_prompts_pipeline_forensic.add_argument("--accept-known-promo-issues", action="store_true")
+    yt_prompts_pipeline_forensic.add_argument("--execute", action="store_true")
+
+    yt_prompts_pipeline_acceptance = yt_sub.add_parser(
+        "prompts-pipeline-acceptance",
+        help="Browserless acceptance harness for YouTube prompts pipeline state-machine invariants.",
+    )
+    yt_prompts_pipeline_acceptance.add_argument("--youtube-run-id", required=True)
+    yt_prompts_pipeline_acceptance.add_argument("--execute", action="store_true")
+
+    yt_prompts_run_until_ready = yt_sub.add_parser(
+        "prompts-run-until-ready",
+        help="Production supervisor for launch prompts readiness and controlled terminal repair planning.",
+    )
+    yt_prompts_run_until_ready.add_argument("--youtube-run-id", required=True)
+    yt_prompts_run_until_ready.add_argument("--workers", type=int, default=1)
+    yt_prompts_run_until_ready.add_argument("--max-iterations", type=int, default=3)
+    yt_prompts_run_until_ready.add_argument("--only-healthy-workers", action="store_true")
+    yt_prompts_run_until_ready.add_argument("--live-gemini", action="store_true")
+    yt_prompts_run_until_ready.add_argument("--execute", action="store_true")
 
     yt_path_repair = yt_sub.add_parser(
         "production-path-repair",
@@ -4499,6 +4552,56 @@ def main() -> int:
             print(f"note={result.get('note')}")
             return 0
 
+        if sub_cmd == "frames-backfill-missing":
+            result = run_youtube_frames_backfill(
+                config=cfg,
+                options=YoutubeFramesBackfillOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    story_ids=list(getattr(args, "story_id", []) or []),
+                    runpod_url=str(getattr(args, "runpod_url", "") or "").strip(),
+                    workflow=str(getattr(args, "workflow", "") or "").strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            print("YOUTUBE_FRAMES_BACKFILL")
+            print(f"launch_id={result.get('launch_id')}")
+            print(f"execute={str(bool(result.get('execute'))).lower()}")
+            summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+            for key in (
+                "stories_total",
+                "active_stories",
+                "stories_frames_ready",
+                "stories_frames_failed",
+                "stories_frames_pending",
+                "frame_files_expected_total",
+                "frame_files_ready_total",
+                "frame_files_missing_total",
+                "frame_files_failed_retryable_total",
+                "frame_files_failed_terminal_total",
+                "stage_attempts_total",
+                "selected_for_backfill",
+                "skipped_ready",
+                "next_stage_allowed",
+            ):
+                print(f"{key}={summary.get(key)}")
+            for row in result.get("stories", []) or []:
+                if row.get("status") == "ready" and not row.get("selected_by_filter"):
+                    continue
+                print(
+                    f"story={json.dumps(row.get('story'), ensure_ascii=False)} "
+                    f"status={row.get('status')} expected={row.get('expected_frames')} "
+                    f"actual={row.get('actual_frames')} missing={row.get('missing_frame_indexes')} "
+                    f"retryable={row.get('retryable_frame_indexes')} "
+                    f"terminal={row.get('terminal_failed_frame_indexes')} "
+                    f"reason_code={row.get('detected_reason_code') or 'READY'}"
+                )
+            reports = result.get("reports") if isinstance(result.get("reports"), dict) else {}
+            print(f"json_report={reports.get('json')}")
+            print(f"md_report={reports.get('md')}")
+            if result.get("message"):
+                print(f"message={result.get('message')}")
+            return 0 if result.get("ok", False) else 2
+
         if sub_cmd == "visuals-run":
             result = run_youtube_visuals_run(
                 config=cfg,
@@ -4779,10 +4882,21 @@ def main() -> int:
                     for key in ("done", "partial", "failed", "pending", "in_progress", "ready_for_runpod"):
                         print(f"  {key}: {prompts_summary.get(key, 0)}")
                 print(f"images ready: {summary.get('images_ready', 0)}")
+                print(f"stories_frames_ready: {summary.get('stories_frames_ready', 0)}")
+                print(f"stories_frames_failed: {summary.get('stories_frames_failed', 0)}")
+                print(f"stories_frames_pending: {summary.get('stories_frames_pending', 0)}")
+                print(f"frame_files_expected_total: {summary.get('frame_files_expected_total', 0)}")
+                print(f"frame_files_ready_total: {summary.get('frame_files_ready_total', 0)}")
+                print(f"frame_files_missing_total: {summary.get('frame_files_missing_total', 0)}")
+                print(f"frame_files_failed_retryable_total: {summary.get('frame_files_failed_retryable_total', 0)}")
+                print(f"frame_files_failed_terminal_total: {summary.get('frame_files_failed_terminal_total', 0)}")
+                print(f"stage_attempts_total: {summary.get('stage_attempts_total', 0)}")
                 print(f"blocked: {summary.get('blocked', 0)}")
                 print(f"pending: {summary.get('pending', 0)}")
                 print(f"ready_for_frames: {summary.get('ready_for_frames', 0)}")
                 print(f"known promo issues accepted: {str(bool(summary.get('known_promo_issues_accepted'))).lower()}")
+                print(f"prompts_next_stage_allowed: {str(bool(summary.get('prompts_next_stage_allowed'))).lower()}")
+                print(f"next_stage_allowed: {str(bool(summary.get('next_stage_allowed'))).lower()}")
                 print("stories:")
                 print("story_id | title | characters | prompts_status | expected | actual | validation | blocker | next_action")
                 for row in result.get("stories", []) or []:
@@ -4890,6 +5004,7 @@ def main() -> int:
                 options=YoutubePromptsTempImportRepairOptions(
                     youtube_run_id=str(args.youtube_run_id).strip(),
                     run_session_id=str(getattr(args, "run_session_id", "") or "").strip(),
+                    normalize_blocked_ages=bool(getattr(args, "normalize_blocked_ages", False)),
                     execute=bool(getattr(args, "execute", False)),
                 ),
             )
@@ -4946,6 +5061,91 @@ def main() -> int:
                 f"ready_for_runpod={final_readiness.get('ready_for_runpod', 0)} "
                 f"next_stage_allowed={str(bool(final_readiness.get('next_stage_allowed'))).lower()}"
             )
+            return 0 if result.get("ok", False) else 1
+
+        if sub_cmd == "prompts-pipeline-forensic":
+            result = run_youtube_prompts_pipeline_forensic(
+                config=cfg,
+                options=YoutubePromptsPipelineForensicOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    accept_known_promo_issues=bool(getattr(args, "accept_known_promo_issues", False)),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            if not result.get("ok", False) and result.get("message"):
+                print(result.get("message", "prompts pipeline forensic failed"))
+                return 2
+            print("PROMPTS_PIPELINE_FORENSIC")
+            print(f"json_report={result.get('reports', {}).get('json')}")
+            print(f"md_report={result.get('reports', {}).get('md')}")
+            summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+            print(
+                f"ready={summary.get('ready', 0)} "
+                f"incomplete={summary.get('incomplete', 0)} "
+                f"failed={summary.get('failed', 0)} "
+                f"next_stage_allowed={str(bool(summary.get('next_stage_allowed'))).lower()}"
+            )
+            print("root_causes=" + ",".join(summary.get("root_cause_categories") or []))
+            print("confirmed_bugs=" + ",".join(summary.get("confirmed_bugs") or []))
+            return 0 if result.get("ok", False) else 1
+
+        if sub_cmd == "prompts-pipeline-acceptance":
+            result = run_youtube_prompts_pipeline_acceptance(
+                config=cfg,
+                options=YoutubePromptsPipelineAcceptanceOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            if not result.get("ok", False) and result.get("message"):
+                print(result.get("message", "prompts pipeline acceptance failed"))
+                return 2
+            print("PROMPTS_PIPELINE_ACCEPTANCE")
+            print(f"json_report={result.get('reports', {}).get('json')}")
+            print(f"md_report={result.get('reports', {}).get('md')}")
+            print(
+                f"passed={result.get('passed_count', 0)}/{result.get('scenario_count', 0)} "
+                f"failed={result.get('failed_count', 0)} "
+                f"browserless={str(bool(result.get('browserless'))).lower()} "
+                f"generation_started={str(bool(result.get('generation_started'))).lower()} "
+                f"runpod_started={str(bool(result.get('runpod_started'))).lower()}"
+            )
+            for row in result.get("scenarios", []) or []:
+                print(
+                    f"- {row.get('scenario')}: pass={str(bool(row.get('pass'))).lower()} "
+                    f"reason={row.get('reason_code')} verdict={row.get('state_machine_verdict')}"
+                )
+            return 0 if result.get("ok", False) else 1
+
+        if sub_cmd == "prompts-run-until-ready":
+            result = run_youtube_prompts_run_until_ready(
+                config=cfg,
+                options=YoutubePromptsRunUntilReadyOptions(
+                    youtube_run_id=str(args.youtube_run_id).strip(),
+                    workers=max(1, int(getattr(args, "workers", 1) or 1)),
+                    max_iterations=max(1, int(getattr(args, "max_iterations", 3) or 3)),
+                    only_healthy_workers=bool(getattr(args, "only_healthy_workers", False)),
+                    live_gemini=bool(getattr(args, "live_gemini", False)),
+                    execute=bool(getattr(args, "execute", False)),
+                ),
+            )
+            if not result.get("ok", False) and result.get("message"):
+                print(result.get("message", "prompts run until ready failed"))
+                return 2
+            print("PROMPTS_RUN_UNTIL_READY")
+            print(f"total_selected={result.get('total_selected', 0)}")
+            print(f"ready_before={result.get('ready_before', 0)}")
+            print(f"ready_after={result.get('ready_after', 0)}")
+            print(f"repaired_by_resume={result.get('repaired_by_resume', 0)}")
+            print(f"repaired_by_count_fix={result.get('repaired_by_count_fix', 0)}")
+            print(f"rerun_clean={result.get('rerun_clean', 0)}")
+            print(f"unresolved_terminal={result.get('unresolved_terminal', 0)}")
+            print(f"next_stage_allowed={str(bool(result.get('next_stage_allowed'))).lower()}")
+            print(f"browser_generation_started={str(bool(result.get('browser_generation_started'))).lower()}")
+            print(f"runpod_started={str(bool(result.get('runpod_started'))).lower()}")
+            print(f"json_report={result.get('reports', {}).get('json')}")
+            print(f"md_report={result.get('reports', {}).get('md')}")
+            print("snapshot_reports=" + ",".join(result.get("snapshot_paths") or []))
             return 0 if result.get("ok", False) else 1
 
         if sub_cmd == "prompts-resume-audit":

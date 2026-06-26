@@ -8,6 +8,10 @@ from typing import Any
 
 from orchestrator.config import OrchestratorConfig
 from orchestrator.human_launch_layout import D10_LEGACY, D10_TEMP
+from orchestrator.isolated_io import is_active_isolated, write_json as isolated_write_json
+from orchestrator.isolated_launch_context import get_active_config, isolated_launch_context, resolve_status_file
+from orchestrator.isolated_launch_mode import is_isolated_launch
+from orchestrator.isolated_runtime_paths import resolve_phase_b_launch_anchor, is_isolated_launch_dir
 from orchestrator.status import StatusStore
 
 
@@ -29,7 +33,11 @@ class PhaseBOptions:
     launch_dir: Path | None = None
 
 
-def _write_json(path: Path, payload: Any) -> None:
+def _write_json(path: Path, payload: Any, *, config: OrchestratorConfig | None = None) -> None:
+    cfg = config or get_active_config()
+    if cfg is not None and is_active_isolated(cfg):
+        isolated_write_json(cfg, path, payload, module="orchestrator.phase_b", function="_write_json")
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -177,10 +185,34 @@ def _apply_promo(text: str, ad_point: dict[str, Any], intro: str, mid: str, outr
     return "\n\n".join(x for x in out if x.strip())
 
 
+def _resolve_phase_b_run_root(
+    config: OrchestratorConfig,
+    deferred_manifest: Path,
+    story_id: str,
+    reports_subdir: str,
+) -> Path:
+    base = _phase_a_runs_root_from_deferred(deferred_manifest)
+    if base is not None:
+        return base / "_phase_b"
+    from orchestrator.isolated_launch_context import resolve_reports_dir
+
+    reports_dir = resolve_reports_dir(config)
+    folder_name = reports_subdir.strip() or f"phase_b_{story_id}"
+    return reports_dir / folder_name
+
+
 def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str, Any]:
+    launch_dir = options.launch_dir
+    if launch_dir is not None and is_isolated_launch(config, launch_id=launch_dir.name, launch_root=launch_dir):
+        with isolated_launch_context(config, launch_dir.name, launch_root=launch_dir):
+            return _run_phase_b_body(config, options)
+    return _run_phase_b_body(config, options)
+
+
+def _run_phase_b_body(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str, Any]:
     pipeline = "phase-b"
     stage = "phase_b"
-    status = StatusStore(config.status_file)
+    status = StatusStore(resolve_status_file(config))
     status.append(
         story_id=options.story_id,
         pipeline=pipeline,
@@ -203,14 +235,25 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         return {"ok": False, "message": msg}
 
     if options.launch_dir is not None:
-        anchor = (options.launch_dir.resolve() / D10_TEMP / D10_LEGACY).resolve()
+        anchor = resolve_phase_b_launch_anchor(config, options.launch_dir)
+        if anchor is None:
+            anchor = (options.launch_dir.resolve() / D10_TEMP / D10_LEGACY).resolve()
         dm = options.deferred_manifest.resolve()
-        try:
-            dm.relative_to(anchor)
-        except ValueError:
-            msg = f"GLOBAL_PATH_WRITE_BLOCKED: deferred_manifest {dm} is not under launch legacy {anchor}"
-            status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
-            return {"ok": False, "message": msg}
+        if is_isolated_launch_dir(config, options.launch_dir):
+            launch_root = options.launch_dir.resolve()
+            try:
+                dm.relative_to(launch_root)
+            except ValueError:
+                msg = f"WRITE_OUTSIDE_LAUNCH_ROOT_BLOCKED: deferred_manifest {dm} is not under launch {launch_root}"
+                status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
+                return {"ok": False, "message": msg}
+        else:
+            try:
+                dm.relative_to(anchor)
+            except ValueError:
+                msg = f"GLOBAL_PATH_WRITE_BLOCKED: deferred_manifest {dm} is not under launch legacy {anchor}"
+                status.append(story_id=options.story_id, pipeline=pipeline, stage=stage, state="failed", message=msg)
+                return {"ok": False, "message": msg}
 
     branch = str(options.branch or "all").strip().lower()
     site_only = branch == "site"
@@ -221,7 +264,9 @@ def run_phase_b(config: OrchestratorConfig, options: PhaseBOptions) -> dict[str,
         options.story_id,
         options.reports_subdir,
     )
-    run_root.mkdir(parents=True, exist_ok=True)
+    isolated_layout = options.launch_dir is not None and is_isolated_launch_dir(config, options.launch_dir)
+    if not isolated_layout:
+        run_root.mkdir(parents=True, exist_ok=True)
     print(f"[PHASE B] started: story_id={options.story_id}", flush=True)
     print(f"[PHASE B] reports: {run_root}", flush=True)
     print(f"[PHASE B] branch={'site_only' if site_only else 'all'}", flush=True)

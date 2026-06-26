@@ -84,6 +84,70 @@ def ffmpeg_preset() -> str:
     return str(os.environ.get("CONTENT_FACTORY_FFMPEG_PRESET", "") or PRESET).strip() or PRESET
 
 
+_VIDEO_EFFECTS_MODES = frozenset({"fast", "full", "off"})
+_NVENC_AVAILABLE: bool | None = None
+
+
+def resolve_video_effects_mode(job: dict[str, Any] | None = None) -> str:
+    job = job if isinstance(job, dict) else {}
+    explicit = str(job.get("effects_mode") or "").strip().lower()
+    if explicit in _VIDEO_EFFECTS_MODES:
+        base = explicit
+    else:
+        env_mode = str(os.environ.get("CONTENT_FACTORY_VIDEO_EFFECTS_MODE", "") or "").strip().lower()
+        if env_mode in _VIDEO_EFFECTS_MODES:
+            base = env_mode
+        elif env_bool("CONTENT_FACTORY_SKIP_EFFECTS", False):
+            base = "off"
+        else:
+            base = "full"
+    fail_count = int(job.get("effects_fail_count") or 0)
+    if fail_count >= 3:
+        return "off"
+    if fail_count >= 2:
+        return "fast"
+    return base
+
+
+def ffmpeg_nvenc_available() -> bool:
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is not None:
+        return _NVENC_AVAILABLE
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        _NVENC_AVAILABLE = "h264_nvenc" in (proc.stdout or "")
+    except OSError:
+        _NVENC_AVAILABLE = False
+    return _NVENC_AVAILABLE
+
+
+def effects_encoding_args(mode: str) -> list[str]:
+    normalized = str(mode or "full").strip().lower()
+    if normalized == "fast" and ffmpeg_nvenc_available():
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", str(CRF)]
+    preset = "veryfast" if normalized == "fast" else ffmpeg_preset()
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(CRF)]
+
+
+def effects_grain_strength(mode: str) -> int:
+    normalized = str(mode or "full").strip().lower()
+    if normalized in {"fast", "off"}:
+        return 0
+    return GRAIN_STRENGTH
+
+
+def update_stage_tracker(stage_tracker: dict[str, Any] | None, **fields: Any) -> None:
+    if stage_tracker is None:
+        return
+    stage_tracker.update({key: value for key, value in fields.items() if value is not None})
+
+
 def format_duration(seconds: float | None) -> str:
     if seconds is None:
         return ""
@@ -129,6 +193,19 @@ def print_stage(stage: str, message: str, **fields: Any) -> None:
     print(f"[{stage}] {message}{suffix}", flush=True)
 
 
+def cf_boot(stage: str, **fields: Any) -> None:
+    details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    suffix = f" {details}" if details else ""
+    print(f"[CF_BOOT] {stage}{suffix}", flush=True)
+
+
+def cf_boot_error(stage: str, error: BaseException) -> None:
+    tb = traceback.format_exc()
+    print(f"[CF_BOOT_ERROR] stage={stage}", flush=True)
+    print(f"[CF_BOOT_ERROR] exception={error!r}", flush=True)
+    print(f"[CF_BOOT_ERROR] traceback={tb}", flush=True)
+
+
 def _mount_colab_drive_if_available() -> None:
     if Path("/content/drive").exists():
         return
@@ -136,7 +213,9 @@ def _mount_colab_drive_if_available() -> None:
         from google.colab import drive  # type: ignore
     except Exception:
         return
+    cf_boot("drive_mount_start")
     drive.mount("/content/drive")
+    cf_boot("drive_mount_ok")
 
 
 def _create_shortcut_from_folder_id(folder_id: str, shortcut_name: str = DEFAULT_ROOT_NAME) -> Path:
@@ -403,6 +482,49 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def boot_status_path(root: Path, account: str = "") -> Path:
+    safe = safe_email(account) if account else "unknown"
+    return root / "logs" / f"colab_boot_status_{safe}.json"
+
+
+def update_boot_status(root: Path, *, account: str, stage: str, ok: bool = False, **updates: Any) -> Path:
+    path = boot_status_path(root, account)
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+    payload = {
+        "account": account,
+        "started_at": existing.get("started_at") or utc_now(),
+        "last_stage": stage,
+        "last_stage_at": utc_now(),
+        "ok": bool(ok),
+        "error_stage": existing.get("error_stage"),
+        "error": existing.get("error"),
+        "traceback": existing.get("traceback"),
+        "heartbeat_path": existing.get("heartbeat_path") or "",
+        "heartbeat_written_once": bool(existing.get("heartbeat_written_once")),
+        "worker_main_loop_started": bool(existing.get("worker_main_loop_started")),
+    }
+    payload.update({key: value for key, value in updates.items() if value is not None})
+    write_json(path, payload)
+    return path
+
+
+def update_boot_error(root: Path, *, account: str, stage: str, error: BaseException) -> None:
+    update_boot_status(
+        root,
+        account=account,
+        stage=f"{stage}_error",
+        ok=False,
+        error_stage=stage,
+        error=repr(error),
+        traceback=traceback.format_exc(),
+    )
+
+
 def run_cmd(
     cmd: list[str],
     log_path: Path,
@@ -417,6 +539,7 @@ def run_cmd(
     expected_duration: float | None = None,
     clip_index: int = 0,
     clip_total: int = 0,
+    stage_tracker: dict[str, Any] | None = None,
 ) -> None:
     started_at = utc_now()
     stage_started = time.time()
@@ -443,6 +566,15 @@ def run_cmd(
             elapsed_seconds=0,
         )
         logger.log("RENDER", "ffmpeg command", segment_id=segment_id, stage_name=stage_name, command=" ".join(cmd), log_path=log_path)
+    update_stage_tracker(
+        stage_tracker,
+        stage_name=stage_name,
+        stage_percent="",
+        stage_elapsed_sec=0,
+        stage_eta_sec="",
+        stage_speed="",
+        last_log_line="",
+    )
     log_path.parent.mkdir(parents=True, exist_ok=True)
     progress_cmd = inject_ffmpeg_progress(cmd)
     proc = subprocess.Popen(progress_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -511,6 +643,15 @@ def run_cmd(
                 output_size_mb=mb(current_size),
                 last_log_line_tail=tail_text(last_line, 240).replace("\n", "\\n"),
                 running=True,
+            )
+            update_stage_tracker(
+                stage_tracker,
+                stage_name=stage_name,
+                stage_percent=f"{percent:.1f}" if percent is not None else "",
+                stage_elapsed_sec=int(elapsed),
+                stage_eta_sec=int(eta) if eta is not None else "",
+                stage_speed=speed or "",
+                last_log_line=tail_text(last_line, 240),
             )
             if overrun_seconds is not None and not overrun_warning_logged:
                 logger.log(
@@ -790,7 +931,7 @@ def update_status(job_root: Path, worker_email: str, **payload: Any) -> None:
     write_json(job_root / "status" / "workers" / f"{safe_email(worker_email)}.json", status)
 
 
-def update_processing_heartbeat(processing_job: Path, worker_email: str, current_job: str) -> None:
+def update_processing_heartbeat(processing_job: Path, worker_email: str, current_job: str, **extra: Any) -> None:
     payload = read_json(processing_job)
     payload.update(
         {
@@ -799,6 +940,7 @@ def update_processing_heartbeat(processing_job: Path, worker_email: str, current
             "current_job": current_job,
             "heartbeat_at": utc_now(),
             "updated_at": utc_now(),
+            **extra,
         }
     )
     write_json(processing_job, payload)
@@ -1167,6 +1309,7 @@ def render_clip(
     segment_id: str,
     clip_index: int,
     clip_total: int,
+    stage_tracker: dict[str, Any] | None = None,
 ) -> None:
     frames = max(2, int(math.ceil(duration * FPS)))
     denom = max(1, frames - 1)
@@ -1213,6 +1356,7 @@ def render_clip(
         expected_duration=duration,
         clip_index=clip_index,
         clip_total=clip_total,
+        stage_tracker=stage_tracker,
     )
     if not valid_video(partial, duration):
         raise RuntimeError(f"clip failed validation: {partial}")
@@ -1220,7 +1364,16 @@ def render_clip(
     logger.log("FFMPEG RESULT", "clip validation ok", output=output, size=output.stat().st_size, ffprobe=ffprobe_summary(output))
 
 
-def concat_videos(parts: list[Path], output: Path, log_path: Path, heartbeat: Callable[[], None], logger: WorkerLogger, segment_id: str, expected_duration: float | None) -> None:
+def concat_videos(
+    parts: list[Path],
+    output: Path,
+    log_path: Path,
+    heartbeat: Callable[[], None],
+    logger: WorkerLogger,
+    segment_id: str,
+    expected_duration: float | None,
+    stage_tracker: dict[str, Any] | None = None,
+) -> None:
     if not parts:
         raise RuntimeError("No clip parts to concat")
     if len(parts) == 1:
@@ -1243,6 +1396,7 @@ def concat_videos(parts: list[Path], output: Path, log_path: Path, heartbeat: Ca
         stage_total=STAGE_TOTAL,
         input_path=list_path,
         expected_duration=expected_duration,
+        stage_tracker=stage_tracker,
     )
     partial.replace(output)
     logger.log("FFMPEG RESULT", "concat validation", output=output, size=output.stat().st_size, ffprobe=ffprobe_summary(output))
@@ -1257,14 +1411,17 @@ def apply_optional_effects(
     logger: WorkerLogger,
     segment_id: str,
     expected_duration: float | None,
-    skip_effects: bool,
+    effects_mode: str = "full",
+    stage_tracker: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    mode = str(effects_mode or "full").strip().lower()
     film = effects_dir / "film.mp4"
     dust = effects_dir / "dust.mp4"
     has_film = film.is_file()
     has_dust = dust.is_file()
+    grain_strength = effects_grain_strength(mode)
     stage_started = time.time()
-    if skip_effects:
+    if mode == "off":
         logger.log(
             "STAGE",
             "effects",
@@ -1277,8 +1434,9 @@ def apply_optional_effects(
             expected_duration_seconds=round(float(expected_duration or 0), 3) if expected_duration else "",
             started_at=utc_now(),
             elapsed_seconds=0,
+            effects_mode=mode,
         )
-        logger.log("WARN", "effects skipped by CONTENT_FACTORY_SKIP_EFFECTS=1", segment_id=segment_id, stage_name="effects")
+        logger.log("WARN", "effects skipped (mode=off)", segment_id=segment_id, stage_name="effects", effects_mode=mode)
         shutil.copy2(video, output)
         logger.log(
             "STAGE DONE",
@@ -1288,9 +1446,10 @@ def apply_optional_effects(
             elapsed=int(time.time() - stage_started),
             output_size_mb=mb(output.stat().st_size),
             ffprobe_ok=valid_video(output, expected_duration),
+            effects_mode=mode,
         )
-        return {"film": False, "dust": False, "grain": False, "skipped": True}
-    if not has_film and not has_dust and GRAIN_STRENGTH <= 0:
+        return {"film": False, "dust": False, "grain": False, "skipped": True, "mode": mode}
+    if not has_film and not has_dust and grain_strength <= 0:
         logger.log(
             "STAGE",
             "effects",
@@ -1303,6 +1462,7 @@ def apply_optional_effects(
             expected_duration_seconds=round(float(expected_duration or 0), 3) if expected_duration else "",
             started_at=utc_now(),
             elapsed_seconds=0,
+            effects_mode=mode,
         )
         shutil.copy2(video, output)
         logger.log(
@@ -1313,8 +1473,9 @@ def apply_optional_effects(
             elapsed=int(time.time() - stage_started),
             output_size_mb=mb(output.stat().st_size),
             ffprobe_ok=valid_video(output, expected_duration),
+            effects_mode=mode,
         )
-        return {"film": False, "dust": False, "grain": False}
+        return {"film": False, "dust": False, "grain": False, "mode": mode}
 
     raw_duration = media_duration(video)
     if raw_duration <= 0:
@@ -1349,7 +1510,10 @@ def apply_optional_effects(
     if need_rgb:
         filters.append(f"[{current}]format=yuv420p[back_yuv]")
         current = "back_yuv"
-    filters.append(f"[{current}]noise=alls={GRAIN_STRENGTH}:allf=t+u[vout]" if GRAIN_STRENGTH > 0 else f"[{current}]null[vout]")
+    if grain_strength > 0:
+        filters.append(f"[{current}]noise=alls={grain_strength}:allf=t+u[vout]")
+    else:
+        filters.append(f"[{current}]null[vout]")
 
     partial = output.with_name(f"{output.stem}.partial{output.suffix}")
     cmd.extend(
@@ -1358,12 +1522,7 @@ def apply_optional_effects(
             ";".join(filters),
             "-map",
             "[vout]",
-            "-c:v",
-            "libx264",
-            "-preset",
-            ffmpeg_preset(),
-            "-crf",
-            str(CRF),
+            *effects_encoding_args(mode),
             "-pix_fmt",
             "yuv420p",
             "-an",
@@ -1371,6 +1530,22 @@ def apply_optional_effects(
             f"{raw_duration:.3f}",
             str(partial),
         ]
+    )
+    logger.log(
+        "STAGE",
+        "effects",
+        segment_id=segment_id,
+        stage_name="effects",
+        stage_index=3,
+        stage_total=STAGE_TOTAL,
+        input_path=video,
+        output_path=output,
+        expected_duration_seconds=round(raw_duration, 3),
+        started_at=utc_now(),
+        elapsed_seconds=0,
+        effects_mode=mode,
+        nvenc=ffmpeg_nvenc_available(),
+        grain_strength=grain_strength,
     )
     run_cmd(
         cmd,
@@ -1384,11 +1559,19 @@ def apply_optional_effects(
         stage_total=STAGE_TOTAL,
         input_path=video,
         expected_duration=raw_duration,
+        stage_tracker=stage_tracker,
     )
     validate_effects_duration(partial, raw_duration, logger, segment_id)
     partial.replace(output)
     logger.log("FFMPEG RESULT", "effects validation", output=output, size=output.stat().st_size, ffprobe=ffprobe_summary(output))
-    return {"film": has_film, "dust": has_dust, "grain": GRAIN_STRENGTH > 0}
+    return {
+        "film": has_film,
+        "dust": has_dust,
+        "grain": grain_strength > 0,
+        "mode": mode,
+        "nvenc": ffmpeg_nvenc_available() and mode == "fast",
+        "grain_strength": grain_strength,
+    }
 
 
 def checkpoint_root(job_root: Path, segment_id: str) -> Path:
@@ -1610,8 +1793,9 @@ def render_segment(job_root: Path, worker_email: str, processing_job: Path, job:
     clips_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
     skip_effects = env_bool("CONTENT_FACTORY_SKIP_EFFECTS", False)
+    effects_mode = resolve_video_effects_mode(job)
     effects_found = sorted([p.name for p in effects_dir.glob("*") if p.is_file()])
-    effects_enabled = (not skip_effects) and (bool(effects_found) or GRAIN_STRENGTH > 0)
+    effects_enabled = effects_mode != "off" and (bool(effects_found) or effects_grain_strength(effects_mode) > 0)
 
     cp_paths = checkpoint_paths(job_root, segment_id)
     cp_paths["root"].mkdir(parents=True, exist_ok=True)
@@ -1642,25 +1826,46 @@ def render_segment(job_root: Path, worker_email: str, processing_job: Path, job:
         stages="clip_render,concat,effects,final_validate,move_to_done",
         expected_raw_duration=round(expected_duration, 3) if expected_duration else "",
         effects_enabled=effects_enabled,
-        skip_effects=skip_effects,
+        effects_mode=effects_mode,
+        skip_effects=skip_effects or effects_mode == "off",
+        effects_fail_count=int(job.get("effects_fail_count") or 0),
         ffmpeg_preset=ffmpeg_preset(),
+        nvenc_available=ffmpeg_nvenc_available(),
         progress_interval_seconds=env_int("CONTENT_FACTORY_FFMPEG_PROGRESS_INTERVAL_SECONDS", DEFAULT_FFMPEG_PROGRESS_INTERVAL_SECONDS),
         stall_timeout_seconds=env_int("CONTENT_FACTORY_FFMPEG_STALL_TIMEOUT_SECONDS", DEFAULT_FFMPEG_STALL_TIMEOUT_SECONDS),
         checkpoints_enabled=use_checkpoints,
         checkpoint_root=cp_paths["root"],
     )
 
+    stage_tracker: dict[str, Any] = {
+        "stage_name": "clip_render",
+        "stage_percent": "",
+        "stage_elapsed_sec": 0,
+        "stage_eta_sec": "",
+        "stage_speed": "",
+        "last_log_line": "",
+    }
+
     def heartbeat() -> None:
-        update_processing_heartbeat(processing_job, worker_email, segment_id)
+        stage_fields = {
+            "stage_name": stage_tracker.get("stage_name") or "",
+            "stage_percent": stage_tracker.get("stage_percent") or "",
+            "stage_elapsed_sec": stage_tracker.get("stage_elapsed_sec") or 0,
+            "stage_eta_sec": stage_tracker.get("stage_eta_sec") or "",
+            "stage_speed": stage_tracker.get("stage_speed") or "",
+            "last_log_line": stage_tracker.get("last_log_line") or "",
+        }
+        update_processing_heartbeat(processing_job, worker_email, segment_id, **stage_fields)
         update_status(
             job_root,
             worker_email,
             status="processing",
             current_segment_id=segment_id,
             assigned_queue=str(assigned_dirs(job_root, worker_email)["pending"]),
-            last_message="ffmpeg heartbeat",
+            last_message="FFMPEG_HEARTBEAT",
+            **stage_fields,
         )
-        logger.log("RENDER", "heartbeat", segment_id=segment_id)
+        logger.log("RENDER", "heartbeat", segment_id=segment_id, **stage_fields)
 
     logger.log(
         "RENDER",
@@ -1688,87 +1893,13 @@ def render_segment(job_root: Path, worker_email: str, processing_job: Path, job:
     parts: list[Path] = []
     clips_total = len(local_frames)
     clips_reused = 0
-    for idx, frame in enumerate(local_frames, start=1):
-        duration = float(frame.get("duration_sec") or 0)
-        if duration <= 0:
-            continue
-        clip = clips_dir / f"{segment_id}_clip_{idx:04d}.mp4"
-        cp_clip = cp_paths["clips"] / f"clip_{idx:04d}.mp4"
-        clip_log = cp_paths["logs"] / f"clip_{idx:04d}.ffmpeg.log"
-        clip_log_alias = logs_dir / f"clip_{idx:04d}.ffmpeg.log"
-        reused = False
-        if use_checkpoints and load_stage_artifact_if_valid(
-            cp_clip,
-            clip,
-            expected_duration=duration,
-            stage_name="clip_render",
-            segment_id=segment_id,
-            logger=logger,
-        ):
-            reused = True
-            clips_reused += 1
-        if not reused:
-            render_clip(
-                Path(str(frame["local_path"])),
-                clip,
-                duration,
-                bool(frame.get("zoom_in", True)),
-                clip_log_alias,
-                heartbeat,
-                logger,
-                segment_id,
-                idx,
-                clips_total,
-            )
-            if use_checkpoints:
-                try:
-                    if clip_log_alias.is_file():
-                        shutil.copy2(clip_log_alias, clip_log)
-                except OSError:
-                    pass
-                save_stage_artifact(
-                    clip,
-                    cp_clip,
-                    expected_duration=duration,
-                    stage_name="clip_render",
-                    segment_id=segment_id,
-                    logger=logger,
-                    extra_marker={"clip_index": idx, "clip_total": clips_total, "duration_sec": duration},
-                )
-        parts.append(clip)
-        logger.log(
-            "SEGMENT PROGRESS",
-            "clip completed",
-            segment_id=segment_id,
-            clips_done=len(parts),
-            clips_total=clips_total,
-            stage_name="clip_render",
-            percent=f"{(len(parts) / max(1, clips_total)) * 100:.1f}",
-            reused_checkpoint=reused,
-        )
-        write_segment_checkpoint_status(
-            job_root,
-            segment_id,
-            stage="clip_render",
-            state="in_progress",
-            clips_done=len(parts),
-            clips_total=clips_total,
-            raw_done=False,
-            effects_done=False,
-            final_done=False,
-            worker_email=worker_email,
-            extra={"last_clip_reused": reused, "clips_reused": clips_reused},
-        )
-    if not parts:
-        raise RuntimeError(f"segment has no renderable frames: {segment_id}")
-
     raw_segment = work_dir / f"{segment_id}.raw.mp4"
     final_local = work_dir / f"{segment_id}.mp4"
-
     cp_raw = cp_paths["raw"] / f"{segment_id}.raw.mp4"
     raw_concat_log = cp_paths["logs"] / "concat.ffmpeg.log"
     raw_concat_log_alias = logs_dir / "concat.ffmpeg.log"
     raw_reused = False
+
     if use_checkpoints and load_stage_artifact_if_valid(
         cp_raw,
         raw_segment,
@@ -1778,8 +1909,107 @@ def render_segment(job_root: Path, worker_email: str, processing_job: Path, job:
         logger=logger,
     ):
         raw_reused = True
-    if not raw_reused:
-        concat_videos(parts, raw_segment, raw_concat_log_alias, heartbeat, logger, segment_id, expected_duration if expected_duration > 0 else None)
+        marker_path = cp_raw.with_suffix(cp_raw.suffix + ".done.json")
+        try:
+            raw_marker = read_json(marker_path)
+            clips_total = int(raw_marker.get("clip_total") or clips_total)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        logger.log(
+            "CHECKPOINT",
+            "raw checkpoint reused; skipping clip_render and concat",
+            segment_id=segment_id,
+            clips_total=clips_total,
+            checkpoint_path=str(cp_raw),
+        )
+        update_stage_tracker(stage_tracker, stage_name="concat_raw", stage_percent="100")
+    else:
+        for idx, frame in enumerate(local_frames, start=1):
+            duration = float(frame.get("duration_sec") or 0)
+            if duration <= 0:
+                continue
+            clip = clips_dir / f"{segment_id}_clip_{idx:04d}.mp4"
+            cp_clip = cp_paths["clips"] / f"clip_{idx:04d}.mp4"
+            clip_log = cp_paths["logs"] / f"clip_{idx:04d}.ffmpeg.log"
+            clip_log_alias = logs_dir / f"clip_{idx:04d}.ffmpeg.log"
+            reused = False
+            if use_checkpoints and load_stage_artifact_if_valid(
+                cp_clip,
+                clip,
+                expected_duration=duration,
+                stage_name="clip_render",
+                segment_id=segment_id,
+                logger=logger,
+            ):
+                reused = True
+                clips_reused += 1
+            if not reused:
+                render_clip(
+                    Path(str(frame["local_path"])),
+                    clip,
+                    duration,
+                    bool(frame.get("zoom_in", True)),
+                    clip_log_alias,
+                    heartbeat,
+                    logger,
+                    segment_id,
+                    idx,
+                    clips_total,
+                    stage_tracker=stage_tracker,
+                )
+                if use_checkpoints:
+                    try:
+                        if clip_log_alias.is_file():
+                            shutil.copy2(clip_log_alias, clip_log)
+                    except OSError:
+                        pass
+                    save_stage_artifact(
+                        clip,
+                        cp_clip,
+                        expected_duration=duration,
+                        stage_name="clip_render",
+                        segment_id=segment_id,
+                        logger=logger,
+                        extra_marker={"clip_index": idx, "clip_total": clips_total, "duration_sec": duration},
+                    )
+            parts.append(clip)
+            logger.log(
+                "SEGMENT PROGRESS",
+                "clip completed",
+                segment_id=segment_id,
+                clips_done=len(parts),
+                clips_total=clips_total,
+                stage_name="clip_render",
+                percent=f"{(len(parts) / max(1, clips_total)) * 100:.1f}",
+                reused_checkpoint=reused,
+            )
+            write_segment_checkpoint_status(
+                job_root,
+                segment_id,
+                stage="clip_render",
+                state="in_progress",
+                clips_done=len(parts),
+                clips_total=clips_total,
+                raw_done=False,
+                effects_done=False,
+                final_done=False,
+                worker_email=worker_email,
+                extra={"last_clip_reused": reused, "clips_reused": clips_reused},
+            )
+        if not parts:
+            raise RuntimeError(f"segment has no renderable frames: {segment_id}")
+
+        update_stage_tracker(stage_tracker, stage_name="concat")
+        concat_videos(
+            parts,
+            raw_segment,
+            raw_concat_log_alias,
+            heartbeat,
+            logger,
+            segment_id,
+            expected_duration if expected_duration > 0 else None,
+            stage_tracker=stage_tracker,
+        )
         if use_checkpoints:
             try:
                 if raw_concat_log_alias.is_file():
@@ -1795,19 +2025,20 @@ def render_segment(job_root: Path, worker_email: str, processing_job: Path, job:
                 logger=logger,
                 extra_marker={"clip_total": clips_total},
             )
+
     raw_duration = media_duration(raw_segment)
     write_segment_checkpoint_status(
         job_root,
         segment_id,
         stage="concat_raw",
         state="completed",
-        clips_done=len(parts),
+        clips_done=len(parts) if parts else clips_total,
         clips_total=clips_total,
         raw_done=True,
         effects_done=False,
         final_done=False,
         worker_email=worker_email,
-        extra={"raw_duration_sec": round(raw_duration, 3), "raw_reused": raw_reused},
+        extra={"raw_duration_sec": round(raw_duration, 3), "raw_reused": raw_reused, "clips_reused": clips_reused},
     )
 
     cp_effects = cp_paths["effects"] / f"{segment_id}.effects.mp4"
@@ -1834,7 +2065,44 @@ def render_segment(job_root: Path, worker_email: str, processing_job: Path, job:
         if not effects:
             effects = {"reused_checkpoint": True}
     if not effects_reused:
-        effects = apply_optional_effects(raw_segment, final_local, effects_dir, effects_log_alias, heartbeat, logger, segment_id, raw_duration, skip_effects)
+        try:
+            update_stage_tracker(stage_tracker, stage_name="effects", stage_percent="0")
+            effects = apply_optional_effects(
+                raw_segment,
+                final_local,
+                effects_dir,
+                effects_log_alias,
+                heartbeat,
+                logger,
+                segment_id,
+                raw_duration,
+                effects_mode=effects_mode,
+                stage_tracker=stage_tracker,
+            )
+        except Exception as exc:
+            fail_count = int(job.get("effects_fail_count") or 0) + 1
+            try:
+                proc_payload = read_json(processing_job)
+                proc_payload["effects_fail_count"] = fail_count
+                proc_payload["last_failed_stage"] = "effects"
+                proc_payload["last_failed_at"] = utc_now()
+                write_json(processing_job, proc_payload)
+            except OSError:
+                pass
+            write_segment_checkpoint_status(
+                job_root,
+                segment_id,
+                stage="effects",
+                state="failed",
+                clips_done=len(parts) if parts else clips_total,
+                clips_total=clips_total,
+                raw_done=True,
+                effects_done=False,
+                final_done=False,
+                worker_email=worker_email,
+                extra={"effects_fail_count": fail_count, "effects_error": repr(exc), "effects_mode": effects_mode},
+            )
+            raise
         if use_checkpoints:
             try:
                 if effects_log_alias.is_file():
@@ -2023,6 +2291,9 @@ def mark_failed(
 
 def main() -> int:
     started_at = time.time()
+    cf_boot("worker_import_ok")
+    cf_boot("python_version", python=sys.version.replace("\n", " "))
+    cf_boot("cwd", cwd=Path.cwd())
     parser = argparse.ArgumentParser()
     parser.add_argument("--drive-root", default=str(DEFAULT_ROOT))
     parser.add_argument("--story-slug", default="")
@@ -2038,23 +2309,35 @@ def main() -> int:
     worker_email = os.environ.get("CONTENT_FACTORY_WORKER_EMAIL", "").strip()
     content_factory_env = {key: value for key, value in sorted(os.environ.items()) if key.startswith("CONTENT_FACTORY_")}
     root = resolve_youtube_root(args.drive_root)
-    candidates = sorted((root / "video_jobs").glob("*/VIDEO_JOB_READY.json"), key=lambda p: p.stat().st_mtime, reverse=True) if (root / "video_jobs").is_dir() else []
-    print_stage(
-        "BOOT",
-        "worker starting",
-        started_at=utc_now(),
-        python=sys.version.replace("\n", " "),
-        cwd=Path.cwd(),
-        WORKER_EMAIL=worker_email or "MISSING",
-        ROOT=root,
-        ROOT_exists=root.exists(),
-        env=json.dumps(content_factory_env, ensure_ascii=False),
-        active_job_candidates=json.dumps([str(path) for path in candidates], ensure_ascii=False),
-    )
-    if not worker_email:
-        raise RuntimeError("CONTENT_FACTORY_WORKER_EMAIL is required; this worker only reads its assigned queue.")
-    job_root = find_active_job(root, args.story_slug.strip() or None)
-    logger = WorkerLogger(job_root / "logs" / "workers" / f"{safe_email(worker_email)}.log")
+    try:
+        cf_boot("project_root_detected", root=root, root_exists=root.exists())
+        update_boot_status(root, account=worker_email, stage="worker_import_ok")
+        cf_boot("env_loaded", account=worker_email)
+        update_boot_status(root, account=worker_email, stage="env_loaded")
+        candidates = sorted((root / "video_jobs").glob("*/VIDEO_JOB_READY.json"), key=lambda p: p.stat().st_mtime, reverse=True) if (root / "video_jobs").is_dir() else []
+        print_stage(
+            "BOOT",
+            "worker starting",
+            started_at=utc_now(),
+            python=sys.version.replace("\n", " "),
+            cwd=Path.cwd(),
+            WORKER_EMAIL=worker_email or "MISSING",
+            ROOT=root,
+            ROOT_exists=root.exists(),
+            env=json.dumps(content_factory_env, ensure_ascii=False),
+            active_job_candidates=json.dumps([str(path) for path in candidates], ensure_ascii=False),
+        )
+        if not worker_email:
+            raise RuntimeError("CONTENT_FACTORY_WORKER_EMAIL is required; this worker only reads its assigned queue.")
+        job_root = find_active_job(root, args.story_slug.strip() or None)
+        logger = WorkerLogger(job_root / "logs" / "workers" / f"{safe_email(worker_email)}.log")
+    except Exception as exc:
+        cf_boot_error("env_or_path", exc)
+        try:
+            update_boot_error(root, account=worker_email, stage="env_or_path", error=exc)
+        except Exception:
+            pass
+        raise
     logger.log(
         "BOOT",
         "worker reached root script",
@@ -2093,7 +2376,24 @@ def main() -> int:
         done_count=counts["done"],
         failed_count=counts["failed"],
     )
-    update_status(job_root, worker_email, status="booting", current_segment_id="", assigned_queue=str(dirs["pending"]), last_message="worker booted")
+    heartbeat_path = job_root / "status" / "workers" / f"{safe_email(worker_email)}.json"
+    cf_boot("heartbeat_path_resolved", heartbeat_path=heartbeat_path)
+    update_boot_status(root, account=worker_email, stage="heartbeat_path_resolved", heartbeat_path=str(heartbeat_path))
+    cf_boot("heartbeat_writer_start")
+    try:
+        update_status(job_root, worker_email, status="booting", current_segment_id="", assigned_queue=str(dirs["pending"]), last_message="WORKER_STARTED")
+    except Exception as exc:
+        cf_boot_error("heartbeat_write", exc)
+        update_boot_error(root, account=worker_email, stage="heartbeat_write", error=exc)
+        raise
+    cf_boot("heartbeat_written_once")
+    update_boot_status(
+        root,
+        account=worker_email,
+        stage="heartbeat_written_once",
+        heartbeat_path=str(heartbeat_path),
+        heartbeat_written_once=True,
+    )
 
     self_reclaim_stale_minutes = env_int("CONTENT_FACTORY_SELF_RECLAIM_STALE_MINUTES", 10)
     self_reclaim_max_attempts = env_int("CONTENT_FACTORY_SELF_RECLAIM_MAX_ATTEMPTS", 3)
@@ -2119,6 +2419,9 @@ def main() -> int:
     max_jobs_env = os.environ.get("CONTENT_FACTORY_MAX_JOBS_PER_RUN", "").strip()
     max_segments = max(0, int(max_jobs_env or args.max_segments))
     logger.log("LOOP", "loop configured", poll_seconds=poll_seconds, idle_timeout_seconds=idle_timeout, max_segments=max_segments)
+    cf_boot("worker_main_loop_start")
+    update_boot_status(root, account=worker_email, stage="worker_main_loop_start", worker_main_loop_started=True)
+    update_status(job_root, worker_email, status="idle", current_segment_id="", processed_count=0, failed_count=0, last_message="WORKER_STARTED")
 
     def reset_idle_timer(reason: str, segment_id: str = "") -> None:
         nonlocal idle_started
@@ -2126,6 +2429,8 @@ def main() -> int:
         logger.log("LOOP", "idle timer reset", reason=reason, segment_id=segment_id or None)
 
     while True:
+        cf_boot("worker_main_loop_alive")
+        update_boot_status(root, account=worker_email, stage="worker_main_loop_alive", worker_main_loop_started=True)
         counts = queue_counts(dirs)
         idle_seconds = int(time.time() - idle_started)
         logger.log("LOOP", "tick", timestamp=utc_now(), pending_count=counts["pending"], idle_seconds=idle_seconds, last_message="checking assigned pending")
@@ -2139,7 +2444,7 @@ def main() -> int:
                 logger.log("EXIT", "idle timeout", reason="idle_timeout", processed_count=processed_count, failed_count=failed_count, runtime_seconds=int(time.time() - started_at))
                 update_status(job_root, worker_email, status="exited", current_segment_id="", processed_count=processed_count, failed_count=failed_count, last_message="idle timeout", last_exit_reason="idle_timeout", exited_at=utc_now(), idle_seconds=int(time.time() - idle_started))
                 return 0
-            update_status(job_root, worker_email, status="idle", current_segment_id="", processed_count=processed_count, failed_count=failed_count, assigned_queue=str(dirs["pending"]), last_message="no assigned pending job")
+            update_status(job_root, worker_email, status="idle", current_segment_id="", processed_count=processed_count, failed_count=failed_count, assigned_queue=str(dirs["pending"]), last_message="WAITING_FOR_ASSIGNMENT")
             time.sleep(poll_seconds)
             continue
         segment_id = str(payload.get("segment_id") or processing_job.stem)
@@ -2156,12 +2461,13 @@ def main() -> int:
             output_mp4=job_root / "segments" / f"{segment_id}.mp4",
         )
         try:
-            update_status(job_root, worker_email, status="processing", current_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="rendering segment")
+            update_status(job_root, worker_email, status="processing", current_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="SEGMENT_ASSIGNED")
+            update_status(job_root, worker_email, status="processing", current_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="SEGMENT_PROCESSING")
             report = render_segment(job_root, worker_email, processing_job, payload, Path(args.tmp_root), logger)
             mark_done(job_root, worker_email, processing_job, payload, report, logger)
             processed_count += 1
             reset_idle_timer("segment_completed", segment_id)
-            update_status(job_root, worker_email, status="done", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="segment done")
+            update_status(job_root, worker_email, status="done", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="SEGMENT_DONE")
         except KeyboardInterrupt as exc:
             failed_count += 1
             try:
@@ -2264,7 +2570,7 @@ def main() -> int:
                 logger.log("FAILED", "mark_failed drive write failed", error=repr(oserr))
             try:
                 reset_idle_timer("segment_failed", segment_id)
-                update_status(job_root, worker_email, status="failed", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="segment failed (io_error)", last_error=repr(exc))
+                update_status(job_root, worker_email, status="failed", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="SEGMENT_FAILED", last_error=repr(exc))
             except OSError:
                 pass
         except Exception as exc:
@@ -2275,7 +2581,7 @@ def main() -> int:
                 logger.log("FAILED", "mark_failed drive write failed", error=repr(oserr))
             try:
                 reset_idle_timer("segment_failed", segment_id)
-                update_status(job_root, worker_email, status="failed", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="segment failed", last_error=repr(exc))
+                update_status(job_root, worker_email, status="failed", current_segment_id="", last_segment_id=segment_id, processed_count=processed_count, failed_count=failed_count, last_message="SEGMENT_FAILED", last_error=repr(exc))
             except OSError:
                 pass
 

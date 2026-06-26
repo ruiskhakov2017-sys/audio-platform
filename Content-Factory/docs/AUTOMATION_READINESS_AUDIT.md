@@ -1,386 +1,224 @@
-# Content-Factory — Automation Readiness Audit
+# Automation Readiness Audit
 
-Дата: 2026-05-27. Режим: read-only аудит (никакой production-логики не трогаем).
+Дата аудита: 2026-05-28. Режим: анализ + документация, production code не изменялся.
 
-Цель — оценить, насколько проект готов к режиму «одна кнопка для Site, одна кнопка для YouTube», и зафиксировать gaps.
+Цель проекта: две production-кнопки, `SITE FULL AUTO` и `YOUTUBE FULL AUTO`, которые берут рассказы из источников, проводят весь pipeline, публикуют результат и пишут понятный финальный отчёт.
 
----
+## Executive Summary
 
-## 0. TL;DR
+Site готов примерно на 68%. В проекте уже есть рабочий isolated launch flow: `Content-Factory-Запуск.bat` -> `[2] Site full run to Zapuski folder` -> `run-site-flow`. Он создаёт `Запуски/<launch>`, запускает `phase-a`, `phase-b`, `orchestrator run --pipeline site`, синхронизирует legacy-артефакты в human launch folder и поддерживает resume через `site_flow_bat_state.json`. Главные разрывы: Telegram stage отсутствует, финальный report не вызывается автоматически, visual covers и Colab TTS всё ещё требуют человека, а site publish/asset bridge частично живёт отдельными CLI-командами.
 
-- Site pipeline частично one-button готов: `Content-Factory-Запуск.bat → [2] → [A]` запускает `launch run-site-flow`, который сам гоняет phase-a, phase-b, `run --pipeline site` и инкрементально синкает legacy → `Запуски/<имя>/`. Но **есть три критических разрыва**:
-  - публикация в Telegram отсутствует как stage (есть только пустые папки-заглушки).
-  - `site-publish prepare/collect-assets` живут отдельным шагом и не вшиты в `run-site-flow`.
-  - финальные артефакты сайта пишутся не в `Запуски/<name>/...`, а в `output/site/<story>/` и `legacy/autopublisher/To_Publish/<story>/` в корне репо.
-- YouTube pipeline сейчас **per-story state machine**, batch-режима «одна кнопка для всех» нет. Меню `[Y] YouTube Visuals` дёргает отдельные команды по `--story-id`. `[6] YouTube pipeline` в bat — это старый `phase-a → phase-b → run --pipeline youtube` через global `runs/youtube`, он рассыпан и не использует assigned-queue worker model.
-- Telegram stage отсутствует полностью. Только scaffold `05_Рассказы/<id>/04_YouTube/08_Telegram/` и счётчик `published_telegram=0`.
-- Artifact structure не «одна папка запуска = один мир»: даже при kokoro-drive профиле сайт пишет в `Запуски/<name>/10_Временные_файлы/legacy/output/site/...`, но `site-publish prepare` читает `output/site/...` в корне репо. YouTube вообще ничего не пишет в `Запуски/<name>/`.
+YouTube готов примерно на 42%. Есть сильный per-story контур для safe text, promo, visuals, segment manifests, Drive video jobs, assigned queues, watcher, import и `assemble-final`. Но это не один production flow: нет batch-команды от site-approved до `final_video.mp4`, нет YouTube upload stage, нет run-scoped YouTube launch folder, Colab/RunPod остаются ручными, а top-level BAT содержит hardcoded story в video production helpers.
 
----
+Telegram готов на 5%. Есть только scaffold/metadata placeholders в launch layout и `published_telegram=0` в status aggregation. Кода отправки, env-doctor, CLI и idempotency marker нет.
 
-## 1. Site pipeline automation audit
+## 1. BAT Menu / Top-Level Commands
 
-### 1.1 Главный entry point
+### `Content-Factory-Запуск.bat`
 
-| Уровень | Команда |
-|---|---|
-| Bat | `[2] Site full → [A]` |
-| Python | `python -m orchestrator launch run-site-flow --name <LAUNCH> --stories-dir stories/input --bat-profile kokoro-drive --limit 0 --execute` |
-| Реализация | `orchestrator/human_launch_site_flow_bat.py::run_site_flow_bat_execute` |
-
-`run-site-flow` делает:
-
-1. `set-mode site_tts_engine kokoro_colab_drive` (если профиль `kokoro-drive`).
-2. `phase-a` через `orchestrator/human_launch_phase_a_subprocess.py` с live polling каждые ~120 сек: copy legacy artifacts to `Запуски/<name>/...` and refresh status.
-3. `phase-b --branch site --allow-scaffold` (для kokoro-drive профиля).
-4. `orchestrator run --pipeline site --launch-dir <launch>` — Runner вызывает wrappers: `bulk_text_cleaner → gemini_auto → site_tts → content_combiner → autopublisher`.
-5. После каждого шага — `mirror_phase_a_progress_to_human` и `refresh_launch_status_file`.
-6. State каждого шага хранится в `Запуски/<name>/10_Временные_файлы/site_flow_bat_state.json` → resume-safe: если `returncode==0` и нужный артефакт есть, шаг скипается.
-
-### 1.2 Что реально автоматизировано
-
-| Stage | Status | Где живёт |
-|---|---|---|
-| intake / length filter | automated | `runs/site/<id>-a/_phase_a/...` mirrored в `Запуски/<name>/01_Общее/02_Фильтр_по_длине/` |
-| Gemini #1 selection | semi_automated | внутри `phase_a`. Реально жмёт кнопки в `legacy/Gemini_Auto/gemini_auto.py` через Playwright + Chrome user_data_0..4. Может упасть если ботам не хватает аккаунтов, не запущен Chrome или Gemini вернёт ошибку — нужна visual проверка. |
-| text cleaning | automated | `bulk_text_cleaner` wrapper |
-| Gemini site info | semi_automated | `gemini_auto` stage, тот же риск что и selection. Возвращает `site_info.json` + рендерит `info.en.txt`. |
-| Site visual (covers) | manual | пользователь руками кладёт обложки в `Запуски/<name>/02_Сайт/03_Визуал_для_сайта/Обложки_ЗАГРУЗИТЕ_СЮДА/`. `site-info-visual` команды только валидируют CSV и могут передёргивать Gemini за info. |
-| Site TTS (kokoro_colab_drive) | semi_automated | Wrapper `site_tts_stage` экспортирует txt в `G:\Мой диск\ContentFactory_TTS\texts\`, ждёт mp3 в `mp3/`, импортирует обратно. Реальный Colab запускается **руками** (открыть notebook, нажать Run). Manual skip / partial — через `mark-skipped` / `mark-missing-skipped`. |
-| site-publish collect-assets | manual | не вызывается `run-site-flow`. Чтобы собрать `output/site/<story>/{text,info,image,mp3}` пакеты, пользователь руками выполняет `site-publish collect-assets --execute`. |
-| site-publish prepare → To_Publish | semi_automated | Внутри Runner: `autopublisher` wrapper по умолчанию вызовет `legacy/autopublisher/publish_stories.py --headless --bridge-output-site output/site --to-publish-dir legacy/autopublisher/To_Publish/`. Но если пакеты в `output/site` не собраны (collect-assets не запускали), prepare даст `scanned=0`. |
-| site publish (Supabase + R2) | automated | через `autopublisher` wrapper, если в `output/site/<story>/` есть info+mp3+jpg+text и env-doctor пройден (.env.site_publish, SUPABASE_*, R2 keys). |
-| **Telegram send** | **missing** | Нет ни stage, ни кода, ни конфига, ни env. |
-| sync to launch folder | automated | После каждого шага копируется `cleaned_story/info.en.txt/audio.mp3/.published_ok` в `Запуски/<name>/05_Рассказы/<id>/03_Сайт/...`. |
-| final-report | semi_automated | `launch final-report --execute` пишет `06_Отчёты/ФИНАЛЬНЫЙ_ОТЧЁТ.json + cleanup_manifest.json`. В `run-site-flow` НЕ вызывается. |
-
-### 1.3 Ответы на конкретные вопросы
-
-- **«Есть ли один bat-пункт, который проводит полный site flow?»** — Почти. `[2] → [A]` = `run-site-flow` доводит до `autopublisher` включительно, но НЕ:
-  - не вызывает `site-publish collect-assets` (значит при kokoro-drive Drive mp3 могут не доехать в `output/site/<story>/`).
-  - не отправляет Telegram.
-  - не вызывает `final-report`.
-
-- **Какие этапы ручные:**
-  - запуск Colab TTS notebook (одна ссылка, но руками).
-  - подкладывание обложек в `Обложки_ЗАГРУЗИТЕ_СЮДА`.
-  - `site-publish collect-assets --execute` (если использовать Drive mp3 как источник).
-  - mark-skipped для рассказов где TTS зашёл в тупик.
-  - Telegram (целиком).
-
-- **Где Gemini / браузерная автоматизация:** `legacy/Gemini_Auto`, `legacy/youtube_selection`, `legacy/youtube_tts/gemini_auto.py`, `legacy/director_2_0/main.py`, `legacy/youtube_safe_text`. Все через Playwright + Chrome `user_data_0..4`.
-
-- **Resume:**
-  - `run-site-flow` resume-safe для phase-a/phase-b/site_run через `site_flow_bat_state.json` + проверка `_phase_a/phase_a_summary.json + deferred.json + .published_ok`.
-  - Per-story resume через `build_story_status_payload` (по файлам в `Запуски/<name>/05_Рассказы/<id>/03_Сайт/...`).
-  - **Опасные сценарии:**
-    - `phase-a` может дублировать рассказ при resume, если staging recovery_queue_map отсутствует и юзер передёргивает `stories-dir` (см. `_materialize_recovery_selection_staging`).
-    - `site-publish prepare` без force перетирает старую папку `To_Publish/<story>/` при `dst.exists()` → `shutil.rmtree` (`prepare.py:262`). Это **destructive**, но dst — это staging, не финал.
-    - `collect-assets` retries copy через subprocess, имеет `COPY_ABORT_STREAK=10` (после 10 подряд copy_failed — abort). Это защита от Drive throttling.
-
-- **Dry-run / execute:**
-  - Все шаги поддерживают dry-run через отсутствие `--execute`. Это базовая safety rule из `.cursor/rules/content-factory-safety.mdc`.
-  - `run-site-flow` без `--execute` печатает `phase_a_cmd / phase_b_cmd / site_run_cmd` и не запускает.
-
-- **Финальные vs временные артефакты:**
-  - Финальные сейчас:
-    - `output/site/<story>/{<story>.mp3, info.txt, *.jpg, *_M/F/U.txt}` (для legacy autopublisher).
-    - `legacy/autopublisher/To_Publish/<story>/...` (staging для R2/Supabase).
-    - На сайте: запись в Supabase + аудио в R2 (вне репозитория).
-  - Полу-финальные в `Запуски/<name>/05_Рассказы/<id>/03_Сайт/...` — зеркала.
-  - Всё остальное (logs, raw responses, validation, staging txt) — временное в `10_Временные_файлы/legacy/...`.
-
-- **Что нужно для публикации:** `info.txt + <story>.mp3 + <story>.jpg + <story>__[MFU].txt` в `output/site/<story>/`.
-  - `prepare.py:_check_story` проверяет наличие.
-  - `publish.py + env_doctor` проверяет `.env.site_publish` (SUPABASE_URL, SUPABASE_SECRET_KEY/SERVICE_ROLE_KEY, R2_*).
-  - `autopublisher` wrapper дополнительно проверяет, что mp3 не равен stub `orchestrator/site_tts/_silent_stub.mp3`.
-
-- **Что будет если часть MP3 отсутствует:**
-  - Если рассказ есть в `output/site/<story>/` без mp3 — `prepare` ставит `skipped_missing_audio`. Если есть terminal маркер (`manual_skipped.json` или `COLAB_DONE.txt+file_status=failed`) — `skipped_tts_<status>`. Публикация продолжается для остальных.
-  - С `--allow-partial-tts` это считается ожидаемым.
-
-- **Что будет если часть картинок:** `skipped_missing_image`. Без них рассказ не публикуется.
-
-- **Что будет если часть metadata/info отсутствует:** `skipped_missing_info`. Не публикуется.
-
-### 1.4 Site pipeline — таблица stages
-
-См. `docs/PIPELINE_AUTOMATION_MATRIX.csv` секция `site`.
-
----
-
-## 2. YouTube pipeline automation audit
-
-### 2.1 Главный entry point
-
-**Нет одной кнопки.** В bat есть два пути:
-
-| Bat пункт | Что делает | Состояние |
-|---|---|---|
-| `[6] YouTube full pipeline` | Запускает `phase-a → phase-b → orchestrator run --pipeline youtube` через **global** `runs/youtube/`. Wrappers: `bulk_text_cleaner, gemini_auto, youtube_selection, youtube_safe_text, director20, youtube_tts, autovideo`. | **legacy / depricated**: рассыпан, не использует assigned queues, не использует `output/youtube/<story>/00_source...09_publish`, по факту с момента visuals-run перестал быть рабочим путём. |
-| `[7] YouTube stages` | Стаб с надписью «not wired». | reserved / not implemented |
-| `[Y] YouTube Visuals` | Per-story state machine для одного рассказа. Кнопки `[1..9]` — отдельные команды (visuals-run, frames-runpod, prepare-segments, export-job, drive-status, import-results, assemble-final, full-drive-flow, visuals-clean) под `--story-id`. | **рабочее**, но: только один рассказ за раз, нет batch-режима, нет общего «открой и нажми». |
-
-### 2.2 Источник рассказов
-
-Текущая реализация YouTube:
-
-- `youtube prefilter-from-site --site-run-id <id>` читает `runs/site/<id>-a/_phase_a/ready_queues/deferred.json` и `output/site/<canonical>/cleaned_story.txt` → строит `runs/youtube/<youtube-run-id>/_selection/...`.
-- `youtube selection-from-site` / `youtube selection-batch-from-site` запускают Gemini #1 для отбора подходящих рассказов.
-- `youtube prepare-safe-input` / `youtube continue-after-selection` готовят safe-версии (Gemini #2).
-
-Источник = **site-approved/cleaned**: YouTube _не_ запускает свой intake. Берёт уже отобранные и очищенные сайтом рассказы. Это правильно архитектурно.
-
-### 2.3 Что автоматизировано
-
-| Stage | Status |
-|---|---|
-| YouTube prefilter (длина) | automated |
-| Gemini #1 selection (YES/NO) | semi_automated (через batch-runner; запускает Playwright Gemini, multi-account). |
-| Gemini #2 safe rewrite | semi_automated (`safe-english-run` запускает Playwright Gemini). |
-| Promo intro/mid/outro insertion | semi_automated (`promo-run` Gemini). |
-| Gemini characters / director prompts | semi_automated (`visuals-run` запускает legacy director_2_0). |
-| Frames RunPod | semi_automated (нужна RunPod URL; запускается через `frames-runpod --execute`). |
-| YouTube TTS Kokoro Colab | semi_automated (`tts-kokoro-colab export/verify/import`; реально запускает Colab notebook — руки). |
-| Video prepare-segments | automated |
-| Video export-job to Drive | automated |
-| **Colab worker render** | manual (5 Colab notebooks нужно открыть и нажать Run; bootstrap script делает root resolver и assigned queues) |
-| dispatch-segments / reclaim-stale-segments / queue-status / inspect-segment | automated (по команде) |
-| Video import-results | automated |
-| Video assemble-final | automated |
-| **YouTube upload to YouTube** | **missing** (нет команды; AutoVideo legacy stub, youtube_publish mode в runtime_modes стоит manual). |
-| Telegram | missing |
-
-### 2.4 Где живут артефакты
-
-- `runs/youtube/<youtube-run-id>/_selection/...` — selection
-- `runs/youtube/<youtube-run-id>/_gemini_selection/...` — Gemini #1 in/out
-- `runs/youtube/<youtube-run-id>/_gemini_safe/...` — Gemini #2 in/out
-- `output/youtube/<story>/00_source/01_selection/02_safe_story/03_promo/04_audio/05_characters/06_director/06_prompts/07_frames/08_video/logs/` — финальные артефакты одного рассказа
-- `output/youtube/<story>/youtube_story_manifest.json` — story manifest
-- `G:\Мой диск\ContentFactory_YouTube\video_jobs\<story_slug>\queue\{global_pending,assigned/<worker>/{pending,processing,done,failed}}` — Drive video render queue
-- `G:\Мой диск\ContentFactory_YouTube\<youtube_run_id>/texts/, mp3/` — Kokoro Colab TTS Drive
-- Финальное видео: `output/youtube/<story>/08_video/final_video.mp4`
-
-**Ничего из YouTube не попадает в `Запуски/<name>/03_YouTube/...` (там пустые папки-заглушки).**
-
-### 2.5 Что объективно останется ручным
-
-- старт Colab Kokoro TTS workers (нужен ручной запуск notebooks с аккаунтов, тк нужны разные Google-account для разных Colab лимитов GPU).
-- старт 5 Colab video workers (то же самое).
-- ввод RunPod URL для frames-runpod (потому что RunPod pod иногда выключается, URL меняется).
-- подкладывание обложек / финальное превью YouTube видео (если нужно).
-- Подача `--story-id` сейчас руками — может быть закрыта batch-командой.
-
-### 2.6 Что можно закрыть bat-меню / orchestrator-ом
-
-- batch wrapper `youtube run-flow --youtube-run-id ... --execute`: prefilter → selection-batch → wait Gemini → continue → safe-english-run → promo-run → visuals-run → tts-export → wait → tts-import → video prepare-segments → export-job → wait workers → import-results → assemble-final.
-- watcher loop, который раз в N минут пуллит `queue-status` и `reclaim-stale-segments`.
-- статус-команда `youtube launch-status --launch-name <X>`, которая зеркалит результаты в `Запуски/<name>/03_YouTube/...`.
-
-### 2.7 YouTube pipeline — таблица stages
-
-См. `docs/PIPELINE_AUTOMATION_MATRIX.csv` секция `youtube`.
-
----
-
-## 3. Telegram publishing gap
-
-### 3.1 Что есть сейчас
-
-- `orchestrator/human_launch_layout.py`:
-  - `D04_TELEGRAM = "04_Telegram"` — константа, **не используется** в `top_level_dirs()` → папка `Запуски/<name>/04_Telegram/` НЕ создаётся.
-  - `S04_08_TELEGRAM = "08_Telegram"` под `05_Рассказы/<id>/04_YouTube/08_Telegram/` — это per-story scaffold.
-- `orchestrator/human_launch_legacy_sync.py::ensure_telegram_story_scaffold` создаёт пустые подпапки `01_Текст / 02_Информация / 03_Озвучка / 04_Визуал / 05_Пост / 06_Публикация`.
-- `write_telegram_snapshot_metadata` пишет `metadata.json` с относительными путями к cleaned story и audio dir.
-- `aggregate_launch_status` имеет поля `published_telegram=0`, `telegram = {snapshot:pending, post:pending, publish:pending}` — всё hardcoded `pending`.
-- НЕТ:
-  - bot token / channel id в `.env*` или `configs/`.
-  - Telegram CLI команды.
-  - Telegram wrapper в `orchestrator/wrappers/`.
-  - Telegram pipeline stage в `Runner`.
-  - идемпотентного маркера отправки.
-
-### 3.2 Нужная логика (по запросу пользователя)
-
-- После `autopublisher` (или параллельно ему) — отправлять каждый опубликованный рассказ в Telegram.
-- В Telegram уходит:
-  - **сырой / неочищенный** текст рассказа: брать `Запуски/<name>/05_Рассказы/<id>/01_Общее/source.txt` (это та самая исходная .txt) ИЛИ `output/site/<story>/<story>__[MFU].txt` (post-cleaner) — нужно решить, что считать «raw».
-  - **текст поста / описание**: либо отрендерить шаблон из `info.en.txt`, либо отдельное поле `telegram_post.txt` от Gemini.
-  - **картинка**: `output/site/<story>/<story>.jpg`.
-  - **ссылка на сайт**: после publish autopublisher знает Supabase slug; нужно прокинуть URL в результат (сейчас в `site_publish_results.jsonl` хранится stdout, надо парсить).
-  - title / genre / tags из `site_info.json`.
-- Для YouTube используется safe-версия (она уже в `output/youtube/<story>/02_safe_story/safe_story.txt`). **Не путать с raw для Telegram.**
-
-### 3.3 Спека Telegram stage
-
-См. `docs/TELEGRAM_STAGE_SPEC.md`.
-
-Кратко:
-
-- `telegram_prepare` — single-story dry-run: проверить наличие raw text + post + image + published URL, ничего не отправлять.
-- `telegram_send` — отправить (по `bot_token` + `channel_id`), записать idempotency marker.
-- `telegram_report` — агрегировать `Запуски/<name>/04_Telegram/` (включить эту папку в `top_level_dirs()`).
-- `telegram_sent.json` — per-story marker `{message_id, sent_at, channel_id, published_url}`; resume не отправляет повторно.
-
-### 3.4 Где должен стоять stage
-
-После `autopublisher` finalize. Если site publish не дошёл — можно отправлять Telegram отдельно (decoupled), но тогда без url. Рекомендую: **post-publish hook внутри `autopublisher` wrapper или отдельным wrapper-этапом в `SITE_STAGES`**.
-
-### 3.5 Готовность
-
-**0%.** Только пустой scaffold.
-
----
-
-## 4. Artifact / output structure audit
-
-### 4.1 Что куда пишется сейчас (фактическое состояние)
-
-| Путь | Источник | Назначение | Должен быть source of truth? |
+| Menu item | Реальная команда | Статус | Комментарий |
 |---|---|---|---|
-| `stories/input/*.txt` | пользователь / `sample-library` | raw intake | да, как inbox; но конкретный запуск должен иметь свой snapshot |
-| `runs/site/<id>-a/_phase_a/...` | legacy `phase_a` (без launch-dir) | legacy artifacts | нет; должны быть только в `Запуски/<name>/10_Временные_файлы/legacy/runs/site/...` |
-| `runs/site/<id>-a/_phase_b/...` | `phase_b` | legacy artifacts | то же |
-| `runs/youtube/<id>/...` | youtube prefilter/selection/safe | YouTube run state | то же, должен переехать в `Запуски/<name>/10_Временные_файлы/legacy/runs/youtube/...` или в `Запуски/<name>/03_YouTube/_pipeline_state/` |
-| `output/site/<story>/{info.txt, *.mp3, *.jpg, *__[MFU].txt}` | `site-publish collect-assets` + `site_tts` import | site story package для autopublisher | **проблема**: лежит вне launch folder. Сейчас 836 рассказов из разных запусков смешаны. |
-| `output/youtube/<story>/00..09_*` | youtube_visuals_run / video_drive | YouTube story tree | **проблема**: вне launch folder, не привязан к запуску |
-| `output/youtube/<story>/_visuals_clean_quarantine_*` | visuals-clean | quarantine | временное |
-| `legacy/autopublisher/To_Publish/<story>/` | `site-publish prepare` | staging для R2/Supabase | временное; должен быть в `Запуски/<name>/10_Временные_файлы/legacy/autopublisher_To_Publish/` или `Запуски/<name>/02_Сайт/05_Публикация_на_сайт/_To_Publish/<story>/` |
-| `.orchestrator/events.jsonl, status.jsonl, reports/, logs/` | EventLogger / Runner / wrappers | global service log | global, но содержит данные всех запусков — должно зеркалироваться в `Запуски/<name>/07_Логи/` |
-| `.orchestrator/site_publish_*.json` | `site_publish/prepare.py + collect_assets.py + publish.py` | reports | то же |
-| `reports/site_publish_*.json` | `site_publish/prepare.py` | TTS availability + skip report | то же |
-| `Запуски/<name>/01..10/...` | `human_launch_*` + `mirror_*` | human-readable mirror | да, должен стать source of truth |
-| `Запуски/<name>/10_Временные_файлы/legacy/runs/site/...` | phase-a/b с `--launch-dir` | isolated legacy | да, технический legacy |
-| `Запуски/<name>/10_Временные_файлы/legacy/output/site/<story>/` | site Runner с `--launch-dir` | isolated site outputs | да; **но** `site-publish prepare` сейчас читает `output/site/` в корне, не из launch |
-| `G:\Мой диск\ContentFactory_TTS\{texts, mp3, job, scripts, cache, logs}` | site_tts kokoro-drive | Drive TTS handoff | external; нельзя положить в launch, но launch должен ссылаться |
-| `G:\Мой диск\ContentFactory_YouTube\video_jobs\<story>\queue\assigned\<worker>\` | youtube_video_drive | Drive video render handoff | external |
-| `G:\Мой диск\ContentFactory_YouTube\<run>/texts, mp3` | youtube_tts_kokoro_bridge | Drive YT TTS handoff | external |
-| `Запуски/<name>/08_Карантин/_visuals_clean_quarantine_*` | visuals-clean | quarantine | временное |
-| `archive/stories_input/<timestamp>` | `archive-input` | архив исходников | временное |
-| `models/fish_audio/...` | ML weights | NOT artifact | global, не трогать |
-| `legacy/...` | весь legacy code | code, не artifact | global, не трогать |
+| `[1] [LEGACY / DANGEROUS] Site partial run` | `phase-a -> phase-b -> orchestrator run --pipeline site` без isolated launch | Не production | Пишет в global `runs/site` и `output/site`. Помечено dangerous, но всё ещё в top-level меню. |
+| `[2] Site full run to Zapuski folder` | `python -m orchestrator launch run-site-flow --name SITE_FULL_<ts> --stories-dir stories/input --bat-profile kokoro-drive --limit 0 --execute` | Основной Site entrypoint | Реально isolated, resume-aware, но не закрывает Telegram/final-report и зависит от ручных visual/Colab действий. |
+| `[3] Site: continue isolated launch (resume)` | pick launch -> `launch run-site-flow --execute` | Работает | Resume выбирается вручную, не latest-by-mtime. |
+| `[4] Site: technical stages` | `filter-length`, `phase-b`, `site-info-visual validate/retry/full` | Dev/repair | Это отдельные repair tools, не production full auto. |
+| `[5] Site: TTS -> MP3` | `site-tts kokoro-colab export/import/verify/full-cycle-drive/setup-drive` | Работает частично | TTS-only menu для prepared `output/site`; Colab execution ручной. |
+| `[6] YouTube: full pipeline` | legacy `phase-a -> phase-b -> orchestrator run --pipeline youtube` | Не production | Не использует новый `output/youtube/<story>` state machine, Drive assigned queues и video watcher. |
+| `[7] YouTube: stages` | stub message `not wired` | Не реализовано | Пункт зарезервирован. |
+| `[8] Checks, reports, logs` | preflight/open reports/open logs/show modes | Работает | Service tools. |
+| `[9] Service / runtime / cleanup` | set modes, cleanup, scaffold, redirect to Site full | Работает как maintenance | Не production flow. |
+| `[Y] YouTube Visuals` | per-story commands: `visuals-run`, `frames-runpod`, `video prepare-segments`, `export-job`, `import-results`, `assemble-final`, `full-drive-flow` | Работает per-story | Требует `story_id` руками. |
+| `[V] YouTube video production / 10 Colab` | watcher/launchers/status/validate/cleanup | Частично production | `queue-status`, `validate-job-assets`, `cleanup-partial-checkpoints` hardcoded на `Becoming A Slut Wife Alma`. |
+| `[Q] Sample library -> stories/input` | `sample-library --per-folder N` | Работает | Может взять N файлов из каждого genre folder, но MOVE по умолчанию. |
 
-### 4.2 Главные проблемы
+### `START_*.bat`
 
-1. **`output/site/` и `output/youtube/` в корне репо** — не привязаны к launch, нельзя «удалил папку запуска — всё локально пропало».
-2. **`runs/site/` и `runs/youtube/` в корне репо** — то же самое; есть параллельный `Запуски/<name>/10_Временные_файлы/legacy/runs/...`, но не все этапы пишут именно туда.
-3. **`legacy/autopublisher/To_Publish/`** — общая папка staging, не isolated.
-4. **`.orchestrator/`** — global service dir со status / events / reports / logs от всех запусков. Не зеркалируется в `Запуски/<name>/`.
-5. **`Запуски/<name>/03_YouTube/` пустой scaffold** — никаких YouTube артефактов не сохраняется в launch folder.
-6. **`Запуски/<name>/04_Telegram/`** — даже не создаётся.
-7. **836 stories в `output/site/`** vs `Запуски/<name>/05_Рассказы/` ~ показывает, что куча данных из старых запусков всё ещё в корне.
-
-### 4.3 Целевая структура
-
-См. `docs/ARTIFACT_STRUCTURE_TARGET.md`.
-
-### 4.4 Готовность
-
-**~45%.** Каркас launch folder есть, mirror работает, но финальные артефакты (site/youtube) живут вне launch.
-
----
-
-## 5. Bat menu audit
-
-См. `docs/BAT_MENU_TARGET.md`.
-
-### 5.1 Что есть сейчас
-
-`Content-Factory-Запуск.bat` — ~1400 строк, главное меню:
-
-| Item | Назначение | Статус |
+| File | Что делает | Статус |
 |---|---|---|
-| [1] Site partial run (LEGACY) | `RUN_SITE_PIPELINE` → global `runs/site` + `output/site` | dangerous; помечен как legacy |
-| [2] Site full to Zapuski | `run-site-flow` (recommended path) | **production-ready** |
-| [3] Site resume | `run-site-flow --execute` для существующего launch | production-ready |
-| [4] Site technical stages | filter-length, phase-b, site-info-visual | dev tools |
-| [5] Site TTS Kokoro Colab/Drive | export/import/verify/wait/setup-drive | production-ready, но требует ручной старт Colab |
-| [6] YouTube full pipeline | `RUN_YOUTUBE_PIPELINE` → global `runs/youtube` | **deprecated**, не использует visuals-run / assigned queues |
-| [7] YouTube stages | stub «not wired» | dead |
-| [8] Checks/reports/logs | preflight, open `.orchestrator/reports`, show-modes | dev tools |
-| [9] Service/runtime/cleanup | set-mode, cleanup-scan, cleanup-move, cleanup-run, phase-b scaffold | dev tools |
-| [Y] YouTube Visuals | per-story: visuals-run, frames-runpod, prepare-segments, export-job, drive-status, import-results, assemble-final, full-drive-flow, visuals-clean | **production per-story**; batch-режим отсутствует |
-| [Q] Sample library | sample-library MOVE из библиотеки в stories/input | production-ready |
-| [0] Exit | | |
+| `START_YOUTUBE_VIDEO_PRODUCTION_10COLAB.bat` | Запускает watcher в PowerShell и открывает Yandex 5 + Chrome 5 prepared Colab notebooks | Частично production | Hardcoded story id. Открывает/auto-run tabs, но не гарантирует Colab auth/T4/run success. |
+| `START_YOUTUBE_VIDEO_WATCHER.bat` | `youtube video watch-queue --story-id "Becoming A Slut Wife Alma" --execute ...` | Работает для одного hardcoded story | Нужно параметризовать. |
+| `START_COLAB_ALL.bat` | Открывает Yandex group, ждёт 300 sec, открывает Chrome group | Работает как launcher | Не валидирует, что worker реально выполняется. |
+| `START_COLAB_YANDEX.bat`, `START_COLAB_CHROME.bat` | Открывают prepared notebook tabs по группе | Работает как launcher | Зависит от logged-in profiles. |
 
-### 5.2 Проблемы
+### CLI readiness
 
-- Опасные пункты ([1], [6]) и production ([2]) лежат рядом → пользователь может нажать не туда.
-- [6] и [7] — оба «YouTube», один deprecated, второй stub.
-- Нет одной кнопки для **полного** site flow (включая Telegram + collect-assets + final-report).
-- Нет одной кнопки для **полного** youtube flow (нет batch-режима).
-- Smoke / test команды (smoke-site-cycle, init-bridge-fixture, phase-b --allow-scaffold) перемешаны с production.
-- Нет явного разделения Production / Smoke / Maintenance.
-
-### 5.3 Готовность production-меню
-
-**~50%.** Site one-button есть (но без collect-assets/Telegram/final-report); YouTube one-button нет.
-
----
-
-## 6. Full automation readiness score
-
-| Pipeline | Score | Почему не 100% |
+| Production need | Current CLI | Status |
 |---|---|---|
-| Site pipeline | **65%** | run-site-flow доводит до publish, но: (1) collect-assets не вшит, (2) Telegram отсутствует, (3) final-report не запускается автоматом, (4) Gemini может упасть и нужен ручной retry через site-info-visual retry. |
-| YouTube pipeline | **35%** | Per-story работает, но: (1) нет batch-команды над всеми selected, (2) 5 Colab workers стартуют руками (объективно), (3) YouTube upload отсутствует, (4) нет live статуса в launch folder, (5) `[6]` deprecated. |
-| Telegram stage | **0%** | Stage не существует. |
-| Artifact structure | **45%** | Launch folder есть, mirror работает, но финальные артефакты сайта/YouTube не isolated в launch. |
-| Bat menu production readiness | **50%** | Нет разделения Production/Smoke. Опасный legacy рядом с production. Нет one-button YouTube. |
+| Site full auto | `orchestrator launch run-site-flow` | Есть, но не полный business flow |
+| Site resume | `orchestrator launch resume-plan`, `launch resume`, `launch run-site-flow` on existing launch | Есть |
+| Site publish | `orchestrator site-publish collect-assets/prepare/publish` + `autopublisher` wrapper | Есть, но bridge не полностью встроен в one-button |
+| YouTube full auto | Нет единой команды | Missing |
+| YouTube resume | Per-story commands/status exist; no launch-level resume | Partial |
+| YouTube video render | `youtube video export-job/watch-queue/import-results/assemble-final` | Есть per-story |
+| Queue status | `youtube video queue-status`, `site-tts kokoro-colab queue-status` | Есть |
+| Cleanup/retry | `cleanup-scan/move/run`, `youtube video reclaim-stale-segments`, `cleanup-partial-checkpoints`, `visuals-clean` | Есть кусками |
 
----
+Финальные production-команды должны стать:
 
-## 7. Failure points / risk register
+- `python -m orchestrator site full-auto --launch-name <name> --source library --per-genre 5 --execute`
+- `python -m orchestrator site resume --launch-name <name> --execute`
+- `python -m orchestrator site publish --launch-name <name> --execute`
+- `python -m orchestrator youtube full-auto --launch-name <name> --from-site-launch <site_launch> --workers 10 --execute`
+- `python -m orchestrator youtube resume --launch-name <name> --execute`
+- `python -m orchestrator youtube video render --story-id <id> --workers 10 --execute`
+- `python -m orchestrator queue status --launch-name <name>`
+- `python -m orchestrator launch cleanup --name <name> --execute`
 
-См. также `docs/AUTOMATION_READINESS_BACKLOG.md` приоритеты.
+## 2. Site Pipeline Audit
 
-| Risk | Pipeline | Severity | Где в коде | Симптом | Текущая защита | Что нужно |
-|---|---|---|---|---|---|---|
-| Gemini Playwright crash (Chrome user_data) | site / youtube | high | `legacy/Gemini_Auto/gemini_auto.py`, `phase_a_gemini_supervisor.py` | phase-a останавливается, остаются stale `.cf_worker.lock` | `--repair-stale-locks --repair-locks-execute --older-than-minutes 60`; `gemini-progress`; supervised pool с cooldown | автоматический retry на «зависших» рассказах |
-| Duplicate stories on resume | site | medium | `_materialize_recovery_selection_staging` | при отсутствии `recovery_queue_map.json` повторно отправляется весь stories/input | `recovery_queue_resume_counters` + gate | гарантия `recovery_queue_map.json` для каждого launch |
-| Missing TTS files | site | medium | `site_tts/colab_batch.py` + `site_publish/prepare.py` | часть mp3 не приехала с Colab | `mark-skipped`, `mark-missing-skipped`, `--allow-partial-tts`, terminal status `manual_skipped/terminal_failed` | автоматическая mark-missing-skipped после max_wait_hours |
-| Missing covers | site | medium | `prepare.py:_find_image` | story `skipped_missing_image` | bat сообщает где класть | автоматическое уведомление пользователю + параллельный stage cover-prepare-Gemini |
-| Missing info.txt | site | medium | `prepare.py:_find_info` | story `skipped_missing_info` | Gemini site_info_builder + render_info_en_txt | автоматический retry через site-info-visual retry |
-| Partial publish | site | low | `prepare.py` | другие рассказы продолжают публиковаться | implemented in prepare/publish | OK |
-| Telegram resend | telegram | high (future) | n/a | повторная отправка при resume | n/a | `telegram_sent.json` marker (см. spec) |
-| Colab worker no access to Drive | youtube video | high | `colab/youtube_video_bootstrap_colab.py` | `ROOT exists: False` | `CONTENT_FACTORY_YOUTUBE_FOLDER_ID` + shortcut create | OK, но требует ручного ввода folder_id |
-| Stale processing video segments | youtube video | medium | `youtube_video_drive.run_youtube_video_reclaim_stale_segments` | сегмент висит processing >180min | `reclaim-stale-segments --stale-minutes 180 --execute` | watcher loop, который запускает reclaim каждые 30 мин |
-| Failed video segments | youtube video | medium | `assigned/<worker>/failed/` | стопит assemble-final | bat показывает в `queue-status` | автоматический requeue в global_pending |
-| Scattered outputs (output/site, output/youtube вне launch) | site / youtube | high | `output/site`, `output/youtube` | удаление launch не чистит финальные артефакты | none | переезд `output/...` под `Запуски/<name>/05_Рассказы/<id>/...` или `Запуски/<name>/02_Сайт/05_Публикация_на_сайт/<story>/` |
-| Bat ambiguity (legacy vs production) | bat | high | `[1] vs [2] vs [6]` | пользователь нажмёт wrong button | warnings в bat | разделить меню Production / Smoke / Maintenance, скрыть legacy за дополнительной кнопкой |
-| Old worker scripts on Drive | youtube video | medium | `setup-colab-workers` | старая версия script вызывает старый формат queue | hash compare в setup-colab-workers report | OK, но каждый раз перед run надо setup |
-| Drive cache delay | site / youtube | medium | Google Drive sync | mp3 не появляется хотя Colab завершил | wait loop `--max-wait-hours 1000` | OK, нужна доп. диагностика «Drive не виден» |
-| Manual movement of failed/pending json | youtube video | medium | пользователь раньше двигал руками | duplicate processing / lost segments | inspect-segment + reclaim | OK |
-| Output folder ↔ launch folder divergence | both | high | разные источники истины | `prepare scanned=0` несмотря на готовый launch | сейчас лечится через `site-publish collect-assets` | вшить collect-assets в run-site-flow |
-| Gemini bot URLs / accounts drift | both | medium | `configs/gemini_bots_registry.yaml` | wrong URL → отбор работает не туда | resolver + preflight syncs | держать registry единственным source of truth (уже сделано) |
-| Telegram bot token leak в логе | telegram | high (future) | n/a | secrets в `.orchestrator/events.jsonl` | safety rule «не логировать секреты» | при подключении Telegram — env-doctor + redact |
-| RunPod URL expired | youtube | medium | `frames-runpod` | RunPod pod выключен | bat спрашивает URL руками | при batch — попросить URL один раз и переиспользовать |
+| Stage | Command | Inputs | Outputs | Writes where | Resume support | Skip support | Manual actions | Status |
+|---|---|---|---|---|---|---|---|---|
+| Library sampler | `orchestrator sample-library --source-dir <library> --target-dir stories/input --per-folder N --execute` | Top-level genre folders with `.txt` | Selected `.txt`, `_batch_manifest.json`, `.orchestrator/manifests/library_sample_*.json` | `stories/input`, `.orchestrator/manifests`, `.orchestrator/reports` | No launch resume, but collision-safe | Skips basename collisions/reserved `_series` | Choose N and source | Automated command, not wired into site full auto |
+| Launch init | `launch run-site-flow --name <name> --stories-dir stories/input` | `stories/input/*.txt` | `manifest.json`, `status.json`, launch tree | `Запуски/<name>` | Yes | Existing launch reused | Pick or create launch | Automated |
+| Phase A intake/selection/clean/site info/visual prompts | `phase-a --run-branch site --resume --execute --launch-dir <launch>` | launch input snapshot or `stories/input` | `phase_a_summary.json`, `ready_queues/deferred.json`, selection/site info artifacts | `Запуски/<name>/10_Временные_файлы/legacy/runs/site/<id>-a/_phase_a` mirrored to `05_Рассказы` | Yes via phase-a resume + `site_flow_bat_state.json` | Failed/deferred rows tracked | Gemini browser/accounts can need attention | Mostly automated |
+| Phase B | `phase-b --deferred-manifest ... --branch site --allow-scaffold --launch-dir <launch>` | Phase A `deferred.json` | Phase B artifacts | launch legacy `runs/site/<id>-a/_phase_b` | Yes if returncode 0 and deferred exists | No business skip, only stage skip | None normally | Automated |
+| Runtime site run | `orchestrator run --pipeline site --story-id <id>-site --launch-dir <launch> --execute` | Phase artifacts + `stories_dir` | Runner manifest/reports and wrapper outputs | `.orchestrator/reports`, launch legacy `output/site` | Partial via wrapper state and file markers | Stage-level | External services | Automated shell, mixed internals |
+| Text cleaning | Runner `bulk_text_cleaner` wrapper | raw/phase data | cleaned text | launch legacy `output/site`, mirrored to `05_Рассказы/*/03_Сайт/01_Очистка_текста` | File-based | No | None | Automated |
+| Site metadata/info | Runner `gemini_auto` + site info rendering | cleaned text | `site_info.json`, `info.en.txt`/`info.txt` | launch folders + legacy output | File-based | Failed validation can be retried by `site-info-visual retry` | Gemini accounts | Semi-automated |
+| Visual prompts/images | `content_combiner` export/process/distribute-images; `site-info-visual validate/retry/full` | info visual fields and uploaded covers | `stories_export.csv/xlsx`, copied image into story package | launch visual upload folder, output site package | No true image resume, file overwrite checks | Missing image skips publish | User places images in `Обложки_ЗАГРУЗИТЕ_СЮДА` | Manual/semi |
+| TTS export to Drive | `site_tts_stage` -> `export_drive_texts` or `site-tts kokoro-colab export` | prepared site text + voice label | Drive job/texts/expected files | `G:\Мой диск\ContentFactory_TTS\texts`, `job` | Detects pending Drive job | Existing mp3 skipped | Start Colab separately | Semi |
+| TTS wait/import | `wait_drive_mp3_and_import` / `site-tts kokoro-colab import/verify` | Drive mp3 | `audio.mp3`/story mp3 | launch story TTS + legacy output + `output/site` depending mode | Yes, pending job detection | `manual_skipped`, `failed_terminal`, `mark-missing-skipped` | Colab run/OAuth | Semi |
+| Collect assets | `site-publish collect-assets --launch-name <name> --execute` | text/info/mp3/images + TTS expected files | publish-ready story package + `story_manifest.json` | run-scoped publish root if `--launch-name`; legacy `output/site` fallback | Re-run safe with force/size checks | `skipped_tts_manual`, incomplete packages | Usually should not be manual | Exists, not reliably in one-button |
+| Prepare package | `site-publish prepare --launch-name <name> --allow-partial-tts --execute` | complete story packages | `_to_publish/<story>` | run-scoped To_Publish or legacy autopublisher To_Publish | Re-run guarded by existing dest/force | Missing audio/image/info/text skipped | None after assets ready | Automated command |
+| Publish to site | `site-publish publish --launch-name <name> --execute` or `autopublisher` wrapper | To_Publish/output site packages + env | Supabase/R2 result JSONL/report | external site + `.orchestrator/logs/site_publish_results.jsonl` + run manifest | Partial; idempotency not fully proven | Publishes ready only, skips incomplete earlier | Site env/secrets | Semi-production |
+| Reports | `launch verify-runtime`, `resume-plan`, `final-report --execute`, status sync | launch files | final report, cleanup manifest, status | `Запуски/<name>/06_Отчёты`, `status.json` | Yes | N/A | final-report command currently separate | Partial |
 
-См. полный risk register в `docs/AUTOMATION_READINESS_BACKLOG.md`.
+Specific answers:
 
----
+- 5/10 stories per genre: yes via `sample-library --per-folder 5` or `--per-folder 10`, where "genre" currently means top-level library folder under `source-dir`, not metadata genre from `info.txt`. BAT `[Q]` has dry-run, move 50, custom N.
+- Configuration: BAT `PER_N` or CLI `--per-folder`; source defaults from `LIBRARY_SOURCE_DIR`.
+- Selected stories: `stories/input/*.txt`; manifest: `.orchestrator/manifests/library_sample_<batch>.json` and `stories/input/_batch_manifest.json` on execute.
+- Run manifest: `Запуски/<launch>/manifest.json`; phase manifest: `_phase_a/phase_a_summary.json`, `_phase_a/ready_queues/deferred.json`; site flow state: `10_Временные_файлы/site_flow_bat_state.json`.
+- Publishing only ready packages: yes at prepare level; missing `audio/image/info/text` are skipped and reported.
+- Continue after crash: yes for site launch through `run-site-flow` state + file markers; not perfect for external Colab/visual/manual steps.
 
-## 8. Required implementation backlog
+## 3. YouTube Pipeline Audit
 
-См. `docs/AUTOMATION_READINESS_BACKLOG.md`.
+| Stage | Command | Inputs | Outputs | Writes where | Resume support | Skip support | Manual actions | Status |
+|---|---|---|---|---|---|---|---|---|
+| Selection source | `youtube prefilter-from-site` / `selection-from-site` | site `deferred.json`, cleaned story paths | size filter yes/no, Gemini selection input | `runs/youtube/<id>/_selection`, `_gemini_selection` | Re-run with force control | Too short/long/missing cleaned -> no | Need site run id | Automated prefilter, Gemini handoff manual/semi |
+| Gemini selection parse | `youtube continue-after-selection` | Gemini raw/output files | `youtube_selected_yes/no.json` | `runs/youtube/<id>/_selection` | Yes by files | Missing output -> no | Gemini output generation | Semi |
+| Safe text | `youtube prepare-safe-input`, `safe-english-run`, `youtube_safe_bridge` | selected yes cleaned text | `02_safe_story/safe_story.txt` | `output/youtube/<story>` | Per-story manifest/status | Missing output tracked | Gemini browser | Semi |
+| Promo insertion | `youtube promo-run --story-id <id> --execute` | safe story | `03_promo/text_ready_for_audio.txt`, report | `output/youtube/<story>/03_promo` | Status command exists | No | Gemini/browser if legacy anchor used | Semi |
+| YouTube audio/TTS | `youtube tts-kokoro-colab export/import/verify` | promo text | `04_audio/narration.mp3` | `output/youtube/<story>/04_audio`, Drive | Partial | Existing/missing reports | Colab run/OAuth | Semi |
+| Characters/director prompts | `youtube visuals-run --auto-gemini --story-id <id>` | safe/promo/audio | characters, prompts | `output/youtube/<story>/05_characters`, `06_prompts` | Per-story file status | Validation/audit tools | Gemini/browser | Semi |
+| Visual frames | `youtube frames-runpod --story-id <id> --runpod-url <url> --execute` | prompts | frames | `output/youtube/<story>/07_frames` | File/status based | Failed/pending frames status | RunPod URL/pod | Semi |
+| Segment manifests | `youtube video prepare-segments --story-id <id> --execute` | narration + frames | `video_timeline.json`, `segment_jobs.json` | `output/youtube/<story>/08_video/manifests` | Re-run with force | Blocked if missing assets | None | Automated |
+| Drive video job | `youtube video export-job --story-id <id> --execute` | audio, frames, segment jobs | Drive job with `global_pending` queue | `G:\Мой диск\ContentFactory_YouTube\video_jobs\<story>` | Replaces previous job with backup | Missing assets blocks export | Drive availability | Automated export |
+| Workers setup/launch | `setup-colab-workers`; `START_COLAB_ALL.bat` | worker config | notebooks/scripts/status | Drive + browser profiles | Not launch-level | No | Colab login/OAuth/run | Launcher only |
+| Watcher/queue | `youtube video watch-queue --execute` | Drive assigned queue | dispatch/reclaim/status/import reports | local `08_video/reports` + Drive reports | Loop can resume | stale reclaim, max attempts, failed bucket | Start watcher command | Automated per-story |
+| Import rendered segments | `youtube video import-results --execute` | Drive `segments/segment_*.mp4` | local segment mp4 files | `output/youtube/<story>/08_video/segments` | Re-run copies | partial import status | None | Automated |
+| Assemble final video | `youtube video assemble-final --execute` | all local segments + narration | `final_video.mp4`, report | `output/youtube/<story>/08_video/final_video.mp4` | Re-run if inputs exist | Blocks on missing segment | ffmpeg installed | Automated |
+| YouTube upload/publish | none found | final mp4 | YouTube video | N/A | N/A | N/A | Manual | Missing |
 
----
+Honest answers:
 
-## 9. Reports
+- What works: per-story YouTube artifact tree, safe/promo/visuals commands, segment preparation, Drive job export, assigned queue dispatch/reclaim/status/watch, import, final assembly.
+- What is only prepared: top-level `[6] YouTube full pipeline` is a legacy wrapper chain, not the new YouTube production pipeline. `[7]` is not wired. Launch-level YouTube folder is scaffold-only.
+- Missing production bridge: no `youtube full-auto`, no batch over selected stories, no launch-level resume/status, no YouTube upload, no Telegram.
+- One command to final mp4: no. `youtube video full-drive-flow` exports Drive job and explicitly says workers must be started manually; watcher auto-imports but does not assemble final.
+- One command to start 10 workers: `START_COLAB_ALL.bat` / `START_YOUTUBE_VIDEO_PRODUCTION_10COLAB.bat` open 10 prepared notebook tabs, but cannot guarantee Colab auth, runtime allocation, Drive mount, or actual run completion. `configs/youtube_video_render.yaml` still lists 5 default render workers; 10 browser workers are described in `configs/youtube_video_colab_workers.yaml`.
+- Failed/stale segments: `reclaim-stale-segments` returns stale processing to `global_pending` until `max_attempts`, then moves to failed. `cleanup-partial-checkpoints` removes partial files. `queue-status` reports failed/stale/partial/checkpoint counts.
+- Final video path: `output/youtube/<story>/08_video/final_video.mp4`.
+- Upload/publish to YouTube: no production CLI/module was found. Current backlog target is a future `youtube upload`/`youtube_upload` stage.
 
-| Файл | Содержит |
-|---|---|
-| `docs/AUTOMATION_READINESS_AUDIT.md` | этот документ |
-| `docs/AUTOMATION_READINESS_BACKLOG.md` | P0/P1/P2 задачи |
-| `docs/ARTIFACT_STRUCTURE_TARGET.md` | текущие vs целевые пути, новая структура launch |
-| `docs/BAT_MENU_TARGET.md` | предложение нового меню |
-| `docs/TELEGRAM_STAGE_SPEC.md` | спека Telegram stage |
-| `docs/PIPELINE_AUTOMATION_MATRIX.csv` | CSV таблица всех stages |
+## 4. Telegram Stage Audit
 
----
+Current state:
 
-## 10. Не сделано
+- `human_launch_layout.py` defines Telegram-related constants and story paths.
+- `human_launch_legacy_sync.py` has `ensure_telegram_story_scaffold` and `write_telegram_snapshot_metadata`.
+- `human_launch_lifecycle.py` includes `published_telegram=0` and pending telegram substatuses.
+- No Telegram sender, no CLI, no wrapper, no env/config, no report, no idempotency marker.
 
-- Не запускались `queue-status` / `verify-runtime` / `resume-plan` команды (даже read-only) — нет блокирующих вопросов, всё видно из кода и filesystem.
-- Не открывались `manifest.json` отдельного запуска `SITE_FULL_20260513_1309` (read-only можно при необходимости в follow-up задаче).
+Required addition:
+
+- New CLI: `orchestrator telegram prepare/send/status --launch-name <name>`.
+- Env/config: `.env.telegram` with `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` or `TELEGRAM_CHANNEL_ID`, optional `TELEGRAM_PARSE_MODE`, `TELEGRAM_DISABLE_NOTIFICATION`.
+- Stage position: after successful site publish, preferably after published URL is written per story.
+- Inputs: title/site url/description from publish result and site info, cover image from story package, optional audio preview.
+- Outputs: `Запуски/<launch>/04_Telegram/<story>/post.txt`, `telegram_sent.json`, `telegram_publish_report.json`.
+- Error handling: never fail the already completed site publish because Telegram failed; mark story as `telegram_failed`, retry on resume, never resend if `telegram_sent.json` exists unless `--force`.
+
+## 5. Artifact Structure Audit
+
+Full artifact map is in `docs/ARTIFACT_STRUCTURE_AUDIT.md`.
+
+Main answer: no, after a run finishes you cannot currently delete only `Запуски/<launch>` and be certain that all temporary files for that run are gone. Blockers:
+
+- root `output/site` and `output/youtube` can contain run artifacts;
+- root `runs/site` and `runs/youtube` still exist for legacy/manual paths;
+- `.orchestrator` logs/reports/status are global;
+- Drive folders under `G:\Мой диск\ContentFactory_TTS` and `G:\Мой диск\ContentFactory_YouTube` are external and not tied to launch cleanup;
+- `legacy/autopublisher/To_Publish` or run-scoped `_to_publish` may contain staging data;
+- browser profiles and Colab notebooks live outside launch;
+- YouTube artifacts are not mirrored to `Запуски/<launch>/03_YouTube`.
+
+## 6. Resume / Status / Reports Audit
+
+Source of truth today is split:
+
+- Site launch: `Запуски/<launch>/manifest.json`, `status.json`, per-story `status.json`, `10_Временные_файлы/site_flow_bat_state.json`.
+- Recovery launch: `10_Временные_файлы/recovery_queue_map.json` or `manifest.recovery_execute.queue_map` is stronger source of truth than filesystem scan.
+- Site phase data: launch legacy `_phase_a/phase_a_summary.json`, `_phase_a/ready_queues/deferred.json`, `_phase_b`.
+- Runner: `.orchestrator/status.jsonl`, `.orchestrator/events.jsonl`, `.orchestrator/reports/run_manifest_*.json`.
+- TTS: Drive `job` status, `manual_skipped.json`, local reports.
+- Publish: `.orchestrator/site_publish_*.json`, `.orchestrator/logs/site_publish_results.jsonl`, run-scoped `site_publish_manifest.json`.
+- YouTube: `runs/youtube/<id>/youtube_status.jsonl`, `output/youtube/<story>/youtube_story_manifest.json`, `08_video/reports/*.json`, Drive queue reports.
+
+How to tell:
+
+- Launch completed: `Запуски/<launch>/status.json.status == completed` and no pending/failed stories by `verify-runtime`.
+- Can publish site: `site-publish collect-assets` reports `packages_ready > 0`; `prepare` reports ready/prepared and missing assets; env-doctor has no blockers.
+- Partial success: `status.json.status == partially_completed` or publish/TTS reports contain skipped/manual_failed but some ready/published stories.
+- Continue after crash: use BAT `[3]` or `launch run-site-flow` on same launch; for YouTube use per-story status/queue commands.
+- Desync risk: `output/site`, `output/youtube`, Drive and `.orchestrator` can disagree with `Запуски/<launch>`.
+- Observed launch example from readonly audit: `Запуски/SITE_FULL_20260513_1309/status.json` reports `failed`, `current_stage=02_Сайт/03_Визуал_для_сайта`, `can_resume=true`; trace reports `site_flow_site_run_failed` with exit `2`.
+
+## 7. Manual Actions List
+
+| Manual action | Can automate | Should automate | Safe fallback |
+|---|---:|---:|---|
+| Choose library N/per genre | Yes | Yes | Keep `[Q]` custom N dry-run |
+| Start Google Drive sync / shortcut | Partial | Yes preflight | Print exact Drive root and folder id |
+| Colab Drive mount/OAuth | No reliable full automation | No | Prepared notebooks + profile diagnostics |
+| Colab Run for Site TTS | Partial launcher | Keep semi-manual | `mark-missing-skipped` and partial publish |
+| Colab Run for YouTube video workers | Partial launcher | Keep semi-manual | watcher + reclaim + queue status |
+| RunPod URL/pod for frames | Partial | Ask once per batch | Stop at `READY_FOR_RUNPOD` |
+| Upload/provide site covers | Yes with image generator | Yes later | Missing image skips story |
+| Telegram token/channel config | Yes env-doctor | Yes | Telegram stage skipped, site publish still success |
+| Site publish env/secrets | Partial env-doctor | Yes | Block publish with clear report |
+| GitHub push for Colab notebooks | No in local pipeline | Maybe docs-only | Prepared notebook URLs must be checked |
+| Manual skipped TTS files | Yes timeout policy | Yes | Manual `mark-skipped` command |
+| Failed/stale video segments | Yes watcher | Yes | `reclaim-stale-segments`, inspect, cleanup partial |
+| YouTube upload | Yes via API | Yes Phase 4/5 | Manual upload with generated metadata |
+
+## 8. Final Completion Criteria
+
+See `docs/FINAL_PRODUCTION_CRITERIA.md`.
+
+Minimum completion means:
+
+- Site full auto completes N stories without manual shell commands.
+- Resume is idempotent after crash.
+- Skipped TTS/image/info stories do not block publishing ready stories.
+- Published site report shows success/partial with exact skipped reasons.
+- Final artifacts and reports are under the launch folder or explicitly external-bound.
+- Telegram stage is integrated and idempotent.
+- YouTube full auto can take at least one site-approved story to `final_video.mp4`.
+- Colab/RunPod render has retry/resume/status.
+- BAT menu exposes only clear production paths by default.
+
+## 9. Backlog
+
+See `docs/AUTOMATION_READINESS_BACKLOG.md`.
+
+## 10. Reconciliation Notes From Subagents
+
+- BAT/CLI: `site full`, `site resume`, `site-publish`, YouTube video queue/render/status commands exist; complete `youtube resume` and named `cleanup-retry` commands do not exist. Closest commands are `phase-a --resume`, `youtube video reclaim-stale-segments`, `cleanup-partial-checkpoints`, and `watch-queue`.
+- Site: sampler is per top-level source folder, not metadata genre. Full Site launch is `launch run-site-flow`; `launch smoke-site-cycle` is only a smoke/diagnostic route and is not a substitute.
+- Site publish readiness: complete package means `info.txt + audio + image + text`; missing packages are skipped and reported. Legacy direct publish bridge may have weaker text assumptions, so production should use `site-publish collect-assets/prepare`.
+- YouTube: actual new production path is per-story under `output/youtube/<story>` plus Drive queue. Legacy `[6] YouTube full pipeline` is not the same path.
+- Artifacts: source of truth is split-brain. Site is partially run-scoped; YouTube and Telegram are not. `status.json` is a snapshot inferred from files, not an append-only truth.
+- Drive cleanup: Site TTS may clean Drive `texts/mp3` after successful import when configured, but Drive `job/cache/logs` and YouTube `video_jobs/<story>` remain external leftovers unless a future explicit cleanup handles them.
+

@@ -36,6 +36,14 @@ PROMPTS_PRIMARY_DIRNAME = "06_prompts"
 PROMPTS_LEGACY_DIRNAME = "06_director"
 FRAME_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 MIN_FRAME_SIZE_BYTES = 4 * 1024
+PROXY_DOWN = "PROXY_DOWN"
+PROXY_CONNECTION_FAILED = "PROXY_CONNECTION_FAILED"
+RUNPOD_REQUEST_FAILED = "RUNPOD_REQUEST_FAILED"
+RUNPOD_RESPONSE_EMPTY = "RUNPOD_RESPONSE_EMPTY"
+RUNPOD_FRAME_GENERATION_FAILED = "RUNPOD_FRAME_GENERATION_FAILED"
+FRAME_OUTPUT_MISSING = "FRAME_OUTPUT_MISSING"
+FRAME_FILE_INVALID = "FRAME_FILE_INVALID"
+UNKNOWN_RUNTIME_ERROR_WITH_LOG = "UNKNOWN_RUNTIME_ERROR_WITH_LOG"
 COMFYUI_HTTP_TIMEOUT_SEC = 120
 COMFYUI_MAX_WAIT_SEC = 900
 COMFYUI_POLL_INTERVAL_SEC = 2
@@ -88,6 +96,44 @@ class YoutubeFramesRunpodBridgeOptions:
     execute: bool = False
     prepare_only: bool = False
     workflow: str = ""
+
+
+def classify_runpod_frame_error(error: str) -> tuple[str, bool]:
+    text = str(error or "").strip()
+    lowered = text.casefold()
+    if not text:
+        return UNKNOWN_RUNTIME_ERROR_WITH_LOG, True
+    if "proxyerror" in lowered or "proxy connection" in lowered:
+        return PROXY_CONNECTION_FAILED, True
+    if "proxy.runpod.net" in lowered and (
+        "read timed out" in lowered
+        or "connect timeout" in lowered
+        or "connection aborted" in lowered
+        or "remote end closed" in lowered
+        or "http 404" in lowered
+        or "http 502" in lowered
+        or "http 503" in lowered
+        or "http 504" in lowered
+    ):
+        return PROXY_DOWN, True
+    if (
+        "connection refused" in lowered
+        or "failed to establish a new connection" in lowered
+        or "name resolution" in lowered
+        or "max retries exceeded" in lowered
+    ):
+        return PROXY_CONNECTION_FAILED, True
+    if "returned no images" in lowered or "response has no prompt_id" in lowered:
+        return RUNPOD_RESPONSE_EMPTY, True
+    if "downloaded image failed validation" in lowered or "image_probe_failed" in lowered:
+        return FRAME_FILE_INVALID, True
+    if "comfyui /prompt failed" in lowered or "client error" in lowered:
+        return RUNPOD_REQUEST_FAILED, False
+    if "did not finish within" in lowered or "disappeared from /queue" in lowered:
+        return RUNPOD_FRAME_GENERATION_FAILED, True
+    if "timed out" in lowered or "connection" in lowered:
+        return RUNPOD_REQUEST_FAILED, True
+    return UNKNOWN_RUNTIME_ERROR_WITH_LOG, True
 
 
 @dataclass
@@ -149,6 +195,11 @@ def _append_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", errors="replace") as fh:
         fh.write(text)
+
+
+def _console_safe_text(text: str) -> str:
+    encoding = sys.stdout.encoding or "utf-8"
+    return str(text).encode(encoding, errors="backslashreplace").decode(encoding, errors="replace")
 
 
 def _read_json(path: Path) -> Any:
@@ -1037,7 +1088,7 @@ def _run_streamed_subprocess(
             output_lines.append(line)
             last_output = time.monotonic()
             terminal_line = line.rstrip("\n")
-            print(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line, flush=True)
+            print(_console_safe_text(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line), flush=True)
             _append_text(log_path, line)
             continue
         now = time.monotonic()
@@ -1057,7 +1108,7 @@ def _run_streamed_subprocess(
         if line:
             output_lines.append(line)
             terminal_line = line.rstrip("\n")
-            print(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line, flush=True)
+            print(_console_safe_text(f"{output_prefix}{terminal_line}" if output_prefix else terminal_line), flush=True)
             _append_text(log_path, line)
     returncode = proc.wait()
     if killed_reason:
@@ -2227,8 +2278,12 @@ def run_youtube_director_prompts_batch_auto_gemini(
         "GEMINI_POST_RESPONSE_PAUSE_SEC": "0",
         "GEMINI_MAX_TRANSIENT_ROUNDS": "3",
         "GEMINI_MAX_ATTACH_FAIL_RETRIES": "2",
-        "GEMINI_WAIT_TIMEOUT_MS": "90000",
-        "GEMINI_TIMEOUTS_BEFORE_ROTATE": "2",
+        "GEMINI_WAIT_TIMEOUT_MS": "180000",
+        "GEMINI_BOOTSTRAP_WAIT_TIMEOUT_MS": "300000",
+        "GEMINI_BOOTSTRAP_RELOAD_ON_TIMEOUT": "0",
+        "GEMINI_TIMEOUTS_BEFORE_ROTATE": "0",
+        "GEMINI_ROTATE_ON_LIMIT": "0",
+        "GEMINI_FAIL_FAST_ON_LIMIT": "1",
     }
     if options.user_data_dir:
         env_overrides["GEMINI_USER_DATA_DIR"] = str(options.user_data_dir)
@@ -2404,7 +2459,51 @@ def run_youtube_frames_runpod_bridge(
     if not options.execute:
         return result
 
-    api_url = _resolve_comfyui_api_url(options.runpod_url)
+    try:
+        api_url = _resolve_comfyui_api_url(options.runpod_url)
+    except Exception as exc:
+        error_text = str(exc) or repr(exc)
+        reason_code, retryable = classify_runpod_frame_error(error_text)
+        failed_records = []
+        for job in frame_jobs:
+            frame_path = Path(str(job["output_frame_path"]))
+            valid, details = _probe_image(frame_path)
+            if valid:
+                job["status"] = "done"
+                job["validation"] = details
+                continue
+            job.update(
+                {
+                    "status": "retryable" if retryable else "failed_terminal",
+                    "failed_at": _now_iso(),
+                    "error": error_text,
+                    "reason_code": reason_code,
+                    "retryable": retryable,
+                }
+            )
+            failed_records.append(
+                {
+                    "prompt_index": job["prompt_index"],
+                    "path": str(frame_path),
+                    "error": error_text,
+                    "reason_code": reason_code,
+                    "retryable": retryable,
+                }
+            )
+        result.update(
+            {
+                "ok": False,
+                "status": "retryable" if retryable else "failed",
+                "reason_code": reason_code,
+                "next_action": "retry missing frames when RunPod proxy is healthy" if retryable else "inspect RunPod request/workflow log",
+                "error": error_text,
+                "failed_frames": len(failed_records),
+                "retryable_frames": len(failed_records) if retryable else 0,
+                "terminal_failed_frames": 0 if retryable else len(failed_records),
+            }
+        )
+        write_jobs_and_report(result["status"], failed_records)
+        return result
     workflow_template = _load_workflow(workflow_path)
     text_node = str(workflow["text_node_id"])
     seed_node = str(workflow["seed_node_id"])
@@ -2443,18 +2542,27 @@ def run_youtube_frames_runpod_bridge(
             print(f"[frames-runpod] frame {job['prompt_index']} done", flush=True)
         else:
             error_text = str(render_result.get("error", "unknown error"))
-            job["status"] = "failed"
+            reason_code, retryable = classify_runpod_frame_error(error_text)
+            job["status"] = "retryable" if retryable else "failed_terminal"
             job["failed_at"] = _now_iso()
             job["error"] = error_text
+            job["reason_code"] = reason_code
+            job["retryable"] = retryable
             failed_records.append(
                 {
                     "prompt_index": job["prompt_index"],
                     "path": str(frame_path),
                     "error": job["error"],
+                    "reason_code": reason_code,
+                    "retryable": retryable,
                     "elapsed_sec": render_result.get("elapsed_sec"),
                 }
             )
-            print(f"[frames-runpod] frame {job['prompt_index']} failed: {error_text}", flush=True)
+            print(
+                f"[frames-runpod] frame {job['prompt_index']} "
+                f"{'retryable' if retryable else 'failed'} reason_code={reason_code}: {error_text}",
+                flush=True,
+            )
             if (
                 "ComfyUI /prompt failed HTTP 400" in error_text
                 or "400 Client Error" in error_text
@@ -2474,7 +2582,13 @@ def run_youtube_frames_runpod_bridge(
             break
 
     final_status = _frame_status(frames_dir, prompts)
-    final_state = "done" if final_status["not_done"] == 0 else ("failed" if failed_records else "partial")
+    retryable_failed = sum(1 for row in failed_records if row.get("retryable"))
+    terminal_failed = sum(1 for row in failed_records if not row.get("retryable"))
+    final_state = (
+        "done"
+        if final_status["not_done"] == 0
+        else ("failed" if terminal_failed else ("retryable" if retryable_failed else "partial"))
+    )
     if result.get("fatal_error"):
         final_state = "failed"
     result.update(
@@ -2486,12 +2600,23 @@ def run_youtube_frames_runpod_bridge(
             "generated_frames": final_status["generated"],
             "pending_frames": final_status["pending"],
             "failed_frames": len(failed_records),
+            "retryable_frames": sum(1 for row in failed_records if row.get("retryable")),
+            "terminal_failed_frames": sum(1 for row in failed_records if not row.get("retryable")),
             "first_10_pending": final_status["first_10_pending"],
             "first_10_failed": failed_records[:10],
             "frames_generated": len(generated_records),
             "duration_sec": round(time.time() - started_at, 3),
         }
     )
+    if failed_records:
+        reason_codes = sorted({str(row.get("reason_code") or UNKNOWN_RUNTIME_ERROR_WITH_LOG) for row in failed_records})
+        result["reason_code"] = reason_codes[0] if len(reason_codes) == 1 else "MULTIPLE_FRAME_FAILURES"
+        result["reason_codes"] = reason_codes
+        result["next_action"] = (
+            "retry only missing/retryable frames"
+            if result["retryable_frames"] > 0 and result["terminal_failed_frames"] == 0
+            else "inspect terminal frame failures before retry"
+        )
     write_jobs_and_report(final_state, failed_records)
     if final_state == "done":
         manifest_path = _update_story_manifest(
